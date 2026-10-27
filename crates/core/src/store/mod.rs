@@ -324,6 +324,34 @@ impl Store {
         Ok(report)
     }
 
+    pub fn list_reports(&self, status: Option<ReportStatus>) -> Result<Vec<ReportSummary>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT r.id, r.patient_id, p.first_name || ' ' || p.last_name, p.chiffre, e.method, a.kind, a.seq,
+                    r.status, r.updated_at
+             FROM report r
+             JOIN patient p ON p.id = r.patient_id
+             LEFT JOIN episode e ON e.id = r.episode_id
+             LEFT JOIN application a ON a.id = r.application_id
+             WHERE (?1 IS NULL OR r.status = ?1)
+             ORDER BY r.updated_at DESC",
+        )?;
+        let rows = stmt.query_map([status.map(|s| s.as_str())], |r| {
+            let opt = |i: usize| r.get::<_, Option<String>>(i);
+            Ok(ReportSummary {
+                id: r.get(0)?,
+                patient_id: r.get(1)?,
+                patient_name: r.get(2)?,
+                chiffre: r.get(3)?,
+                method: opt(4)?.and_then(|s| s.parse().ok()),
+                kind: opt(5)?.and_then(|s| s.parse().ok()),
+                seq: r.get(6)?,
+                status: parse_col(r, 7)?,
+                updated_at: r.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     pub fn save_section(&self, report_id: &str, key: &str, body: &str) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         let status: String = tx.query_row("SELECT status FROM report WHERE id = ?1", [report_id], |r| r.get(0))?;
@@ -513,6 +541,9 @@ mod tests {
         let f2 = store.create_application(&ep.id, ApplicationKind::Fortfuehrung).unwrap();
         assert_eq!((f1.seq, f2.seq), (1, 2));
         assert_eq!(store.report(f2.report_id.as_deref().unwrap()).unwrap().sections.len(), 3);
+        let all = store.list_reports(Some(ReportStatus::Draft)).unwrap();
+        assert_eq!(all.len(), 4);
+        assert!(all.iter().any(|r| r.kind == Some(ApplicationKind::Fortfuehrung) && r.seq == Some(2)));
     }
 
     #[test]

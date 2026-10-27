@@ -118,3 +118,23 @@ The LLM adapter (OpenAI-compatible, EU default, US-intermediary warning) and the
 - `npm run build` + `npm run test` (Vitest) in `ui/`.
 - `cargo tauri dev`: create patient → episode (VT, adult) → open Erstantrag Bericht. Sections 1–6 show VT hints only; switching to Umwandlung adds §7. Fill, sign and export the PDF; open the PDF and check the Chiffre header, no name, and ≈2 pages. The audit view shows a chained event list.
 - Inspect the `.db` file with plain `sqlite3`: it must fail to read (encrypted).
+
+---
+
+## 8. Build status (2026-10-27)
+
+**Slice 1 done** (steps 1–9 of §6), verified end-to-end in the running app via CDP-driven WebView2 test:
+patient (Chiffre auto-suggested) → VT episode → Erstantrag (6 sections, VT hints only) → TipTap editing with autosave →
+name leak blocks signing → fix → sign (read-only) → PDF + DOCX export → audit chain intact.
+`cargo test -p thera-core`: 43 tests; `ui`: typecheck clean, Vitest green.
+
+**Deviations from §6 (deliberate):**
+- Migrations: tiny `user_version` runner instead of `refinery` (avoids a second `libsqlite3-sys` link; same versioned-SQL model).
+- TS types: `ts-rs` (generated on `cargo test`) instead of `tauri-specta` (rc versions pinned to specific tauri releases).
+- Tauri pinned to 2.x stable (crates.io latest is a 3.0 alpha).
+- `plain-sqlite` cargo feature = dev-only unencrypted fallback; production default stays `sqlcipher`.
+
+**Blocked on the machine:** the encrypted build needs Strawberry Perl (OpenSSL's Configure rejects Git-Bash perl).
+Whisper (increment b) will need LLVM/clang.
+
+**Next:** increment (a) pseudonymizer `core::pseudo` + `Pseudonymized<T>`, then (b) consent flag + dictation + whisper-rs.

@@ -1,0 +1,88 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Calm, clinical palette: warm neutrals with a muted teal accent. */
+:root {
+  --radius: 0.6rem;
+  --background: oklch(0.985 0.003 90);
+  --foreground: oklch(0.22 0.01 250);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.22 0.01 250);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.22 0.01 250);
+  --primary: oklch(0.47 0.07 195);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.955 0.006 90);
+  --secondary-foreground: oklch(0.25 0.01 250);
+  --muted: oklch(0.955 0.006 90);
+  --muted-foreground: oklch(0.5 0.01 250);
+  --accent: oklch(0.94 0.02 195);
+  --accent-foreground: oklch(0.3 0.05 195);
+  --destructive: oklch(0.55 0.2 27);
+  --success: oklch(0.55 0.12 150);
+  --warning: oklch(0.7 0.14 75);
+  --border: oklch(0.91 0.006 90);
+  --input: oklch(0.89 0.006 90);
+  --ring: oklch(0.6 0.07 195);
+  --sidebar: oklch(0.965 0.006 90);
+  --sidebar-foreground: oklch(0.3 0.01 250);
+}
+
+@theme inline {
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-serif: "Libertinus Serif", Georgia, "Times New Roman", serif;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+}
+
+/* TipTap editor content */
+.prose-editor .ProseMirror {
+  min-height: 5.5rem;
+  outline: none;
+  line-height: 1.55;
+}
+.prose-editor .ProseMirror p { margin: 0.25rem 0; }
+.prose-editor .ProseMirror ul { list-style: disc; padding-left: 1.25rem; }
+.prose-editor .ProseMirror ol { list-style: decimal; padding-left: 1.25rem; }
+.prose-editor .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--muted-foreground);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}

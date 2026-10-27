@@ -1,0 +1,30 @@
+[package]
+name = "thera-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "thera_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = ["sqlcipher"]
+sqlcipher = ["thera-core/sqlcipher"]
+# Dev-only: unencrypted database, for machines without the OpenSSL build toolchain.
+plain-sqlite = ["thera-core/plain-sqlite"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+thera-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+keyring = "4"
+sha2 = "0.10"
+hex = "0.4"

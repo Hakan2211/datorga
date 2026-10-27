@@ -190,3 +190,18 @@ pub fn now() -> String {
         .format(&time::format_description::well_known::Rfc3339)
         .expect("rfc3339 formatting cannot fail")
 }
+
+/// Row in the reports queue (dashboard, /reports). Name is shown locally only, never exported.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReportSummary {
+    pub id: String,
+    pub patient_id: String,
+    pub patient_name: String,
+    pub chiffre: Option<String>,
+    pub method: Option<Method>,
+    pub kind: Option<ApplicationKind>,
+    pub seq: Option<i64>,
+    pub status: ReportStatus,
+    pub updated_at: String,
+}
