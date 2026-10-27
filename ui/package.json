@@ -9,7 +9,9 @@
     "test": "vitest run",
     "app": "cd ../crates/app && tauri dev",
     "app:plain": "cd ../crates/app && tauri dev -- --no-default-features --features plain-sqlite",
-    "app:build": "cd ../crates/app && tauri build"
+    "app:build": "cd ../crates/app && tauri build",
+    "app:build:plain": "cd ../crates/app && tauri build --no-bundle -- --no-default-features --features plain-sqlite",
+    "shortcut": "powershell -ExecutionPolicy Bypass -File ../scripts/create-desktop-shortcut.ps1"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.105.0",
