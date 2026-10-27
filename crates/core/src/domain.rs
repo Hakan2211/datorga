@@ -49,6 +49,11 @@ str_enum!(
     /// What a consent covers. `cloud_processing` follows with the Phase 2 LLM adapter.
     ConsentKind { Recording => "recording" }
 );
+str_enum!(
+    /// `session_audio` records the patient and needs consent; `dictation` is the therapist alone.
+    SourceKind { SessionAudio => "session_audio", Dictation => "dictation" }
+);
+str_enum!(SourceStatus { Recording => "recording", Recorded => "recorded", Interrupted => "interrupted" });
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -138,6 +143,24 @@ pub struct Session {
     pub duration_s: Option<i64>,
     pub modality: Option<String>,
     pub status: String,
+}
+
+/// One capture within a session, with its audio metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SessionSource {
+    pub id: String,
+    pub session_id: String,
+    pub kind: SourceKind,
+    pub consent_id: Option<String>,
+    pub status: SourceStatus,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub end_reason: Option<String>,
+    /// JSON number; ms durations stay far below 2^53.
+    #[ts(type = "number | null")]
+    pub duration_ms: Option<i64>,
+    pub audio_deleted_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

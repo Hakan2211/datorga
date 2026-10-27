@@ -29,7 +29,7 @@ Start a new session with: *"Read docs/HANDOFF.md and continue with the next step
 ## Current limitations
 
 - ~~Database is unencrypted~~ Encrypted SQLCipher build is live (2026-10-27): Strawberry Perl, LLVM, CMake installed, `LIBCLANG_PATH` set. Old plain DB backed up to `%APPDATA%\de.datorga.thera.plain-backup-20261027` (delete once not needed). Still: fake patients only until the recovery-kit PDF exists.
-- No recording, dictation, transcription or AI drafting yet.
+- Recording/dictation works (encrypted). No transcription or AI drafting yet.
 - Vorlagen upload is a placeholder card.
 
 ## Next steps (in order)
@@ -37,8 +37,8 @@ Start a new session with: *"Read docs/HANDOFF.md and continue with the next step
 0. ~~**Install tools + encrypted build**~~ **done**.
 1. ~~**Pseudonymizer** `core::pseudo`~~ **done**: patient record + confirmed dictionary + rules (dates with day, `Frau/Herr X`, `GmbH/AG/e.V.`, `Firma X`, PLZ+Ort, street+number) become `[PERSON_n]`/`[ORT_n]`/`[ARBEITGEBER_n]`/`[DATUM_n]`, exact round-trip restore, stable tokens across texts, fail-closed residual check. `Pseudonymized<T>` has a private constructor (compile-fail doctest). `detect()` returns char-offset spans for the future redaction review. Not wired into the UI yet: the first consumer is the Phase 2 LLM adapter / Vorlagen redaction.
 2. **Consent + dictation**:
-   - consent records and `consent_recording` flag gating Record vs. "Zusammenfassung diktieren"
-   - cpal recording (crash-safe chunks)
+   - ~~consent records and `consent_recording` flag gating Record vs. "Zusammenfassung diktieren"~~ **done**: versioned text in `templates/consent/` (draft, needs legal review), hash stored per grant, patient consent card, revoke stops a running recording.
+   - ~~cpal recording (crash-safe chunks)~~ **done**: `crates/capture` (cpal → mono 16 kHz, 5 s chunks), `core::audio` (AES-GCM per chunk, per-recording key in the DB, fsync+rename), migration V2 (`session_source`, `audio_asset`), session page with timer/level meter/device picker, crash recovery marks sources `interrupted`, erasure removes audio. Not yet: disk-space guard, keep-awake.
    - local transcription via a whisper.cpp **sidecar** (Tauri `externalBin`, separate process), not in-process whisper-rs
    - transcript viewer
    - audio auto-delete after the transcript is confirmed

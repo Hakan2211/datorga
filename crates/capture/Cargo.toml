@@ -1,0 +1,11 @@
+[package]
+name = "thera-capture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Microphone capture: cpal input, mono 16 kHz PCM, fixed-size chunks. No storage, no Tauri."
+
+[dependencies]
+cpal = "0.18.2"
+thiserror.workspace = true
+serde.workspace = true

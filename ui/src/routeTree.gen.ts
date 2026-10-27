@@ -17,6 +17,7 @@ import { Route as PatientsPatientIdRouteImport } from './routes/patients/$patien
 import { Route as ReportsIndexRouteImport } from './routes/reports/index'
 import { Route as ReportsReportIdRouteImport } from './routes/reports/$reportId'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
+import { Route as SessionsSessionIdRouteImport } from './routes/sessions/$sessionId'
 import { Route as TemplatesIndexRouteImport } from './routes/templates/index'
 
 const IndexRoute = IndexRouteImport.update({
@@ -59,6 +60,11 @@ const SessionsIndexRoute = SessionsIndexRouteImport.update({
   path: '/sessions/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SessionsSessionIdRoute = SessionsSessionIdRouteImport.update({
+  id: '/sessions/$sessionId',
+  path: '/sessions/$sessionId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const TemplatesIndexRoute = TemplatesIndexRouteImport.update({
   id: '/templates/',
   path: '/templates/',
@@ -71,6 +77,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRoute
   '/patients/$patientId': typeof PatientsPatientIdRoute
   '/reports/$reportId': typeof ReportsReportIdRoute
+  '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/patients/': typeof PatientsIndexRoute
   '/reports/': typeof ReportsIndexRoute
   '/sessions/': typeof SessionsIndexRoute
@@ -82,6 +89,7 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsRoute
   '/patients/$patientId': typeof PatientsPatientIdRoute
   '/reports/$reportId': typeof ReportsReportIdRoute
+  '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/patients': typeof PatientsIndexRoute
   '/reports': typeof ReportsIndexRoute
   '/sessions': typeof SessionsIndexRoute
@@ -94,6 +102,7 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRoute
   '/patients/$patientId': typeof PatientsPatientIdRoute
   '/reports/$reportId': typeof ReportsReportIdRoute
+  '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/patients/': typeof PatientsIndexRoute
   '/reports/': typeof ReportsIndexRoute
   '/sessions/': typeof SessionsIndexRoute
@@ -107,6 +116,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/patients/$patientId'
     | '/reports/$reportId'
+    | '/sessions/$sessionId'
     | '/patients/'
     | '/reports/'
     | '/sessions/'
@@ -118,6 +128,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/patients/$patientId'
     | '/reports/$reportId'
+    | '/sessions/$sessionId'
     | '/patients'
     | '/reports'
     | '/sessions'
@@ -129,6 +140,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/patients/$patientId'
     | '/reports/$reportId'
+    | '/sessions/$sessionId'
     | '/patients/'
     | '/reports/'
     | '/sessions/'
@@ -141,6 +153,7 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRoute
   PatientsPatientIdRoute: typeof PatientsPatientIdRoute
   ReportsReportIdRoute: typeof ReportsReportIdRoute
+  SessionsSessionIdRoute: typeof SessionsSessionIdRoute
   PatientsIndexRoute: typeof PatientsIndexRoute
   ReportsIndexRoute: typeof ReportsIndexRoute
   SessionsIndexRoute: typeof SessionsIndexRoute
@@ -205,6 +218,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SessionsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/sessions/$sessionId': {
+      id: '/sessions/$sessionId'
+      path: '/sessions/$sessionId'
+      fullPath: '/sessions/$sessionId'
+      preLoaderRoute: typeof SessionsSessionIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/templates/': {
       id: '/templates/'
       path: '/templates'
@@ -221,6 +241,7 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRoute,
   PatientsPatientIdRoute: PatientsPatientIdRoute,
   ReportsReportIdRoute: ReportsReportIdRoute,
+  SessionsSessionIdRoute: SessionsSessionIdRoute,
   PatientsIndexRoute: PatientsIndexRoute,
   ReportsIndexRoute: ReportsIndexRoute,
   SessionsIndexRoute: SessionsIndexRoute,

@@ -1,11 +1,13 @@
 //! Tauri shell: thin command wrappers over `thera_core`. No business logic lives here.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::{Manager, State};
+use thera_capture::{InputDevice, Recorder};
+use thera_core::audio::{self, ChunkWriter};
 use thera_core::consent::{self, ConsentText};
 use thera_core::crypto::{self, KeyStore, MasterKey, Unlock};
 use thera_core::domain::*;
@@ -63,6 +65,17 @@ fn kr(e: keyring::Error) -> thera_core::Error {
 struct AppState {
     data_dir: PathBuf,
     store: Mutex<Option<Store>>,
+    recording: Mutex<Option<ActiveRecording>>,
+}
+
+/// The one recording that may run at a time.
+struct ActiveRecording {
+    source_id: String,
+    session_id: String,
+    patient_id: String,
+    kind: SourceKind,
+    recorder: Recorder,
+    writer: Arc<Mutex<ChunkWriter>>,
 }
 
 impl AppState {
@@ -71,6 +84,16 @@ impl AppState {
     }
     fn wrapped_path(&self) -> PathBuf {
         self.data_dir.join("master.wrapped")
+    }
+    fn audio_root(&self) -> PathBuf {
+        self.data_dir.join("audio")
+    }
+    /// Opens the store and closes sources a previous crash left in `recording`.
+    fn open_store(&self, key: &MasterKey) -> CmdResult<()> {
+        let store = Store::open(&self.db_path(), key)?;
+        store.recover_interrupted_sources()?;
+        *self.store.lock().map_err(|_| CmdError::Other("state poisoned".into()))? = Some(store);
+        Ok(())
     }
     fn with<T>(&self, f: impl FnOnce(&Store) -> thera_core::Result<T>) -> CmdResult<T> {
         let guard = self.store.lock().map_err(|_| CmdError::Other("state poisoned".into()))?;
@@ -101,17 +124,14 @@ fn app_init(state: State<'_, AppState>) -> CmdResult<InitResult> {
         }
         Err(e) => return Err(e.into()),
     };
-    let store = Store::open(&state.db_path(), &key)?;
-    *state.store.lock().map_err(|_| CmdError::Other("state poisoned".into()))? = Some(store);
+    state.open_store(&key)?;
     Ok(InitResult { status: "ready", recovery_key, encrypted: Store::is_encrypted() })
 }
 
 #[tauri::command]
 fn app_recover(state: State<'_, AppState>, recovery_key: String) -> CmdResult<()> {
     let key = crypto::recover(&OsKeyStore, &state.wrapped_path(), &recovery_key)?;
-    let store = Store::open(&state.db_path(), &key)?;
-    *state.store.lock().map_err(|_| CmdError::Other("state poisoned".into()))? = Some(store);
-    Ok(())
+    state.open_store(&key)
 }
 
 // ---------- patients ----------
@@ -160,7 +180,110 @@ fn consent_grant(state: State<'_, AppState>, patient_id: String, kind: ConsentKi
 
 #[tauri::command]
 fn consent_revoke(state: State<'_, AppState>, id: String) -> CmdResult<Consent> {
+    // Revocation ends a running session recording of this patient at once (the cut point).
+    let patient_id = state.with(|s| s.consent(&id))?.patient_id;
+    let affected = state.recording.lock().map_err(|_| CmdError::Other("state poisoned".into()))?.as_ref().is_some_and(|r| {
+        r.kind == SourceKind::SessionAudio && r.patient_id == patient_id
+    });
+    if affected {
+        stop_recording(&state, "consent_revoked")?;
+    }
     state.with(|s| s.revoke_consent(&id))
+}
+
+// ---------- capture ----------
+
+#[tauri::command]
+fn audio_devices() -> CmdResult<Vec<InputDevice>> {
+    thera_capture::input_devices().map_err(|e| CmdError::Other(e.to_string()))
+}
+
+#[tauri::command]
+fn recording_start(
+    state: State<'_, AppState>,
+    session_id: String,
+    kind: SourceKind,
+    device_id: Option<String>,
+) -> CmdResult<SessionSource> {
+    let mut slot = state.recording.lock().map_err(|_| CmdError::Other("state poisoned".into()))?;
+    if slot.is_some() {
+        return Err(CmdError::Other("Es läuft bereits eine Aufnahme".into()));
+    }
+    let patient_id = state.with(|s| s.session(&session_id))?.patient_id;
+    let (source, writer) = state.with(|s| s.start_source(&session_id, kind, &state.audio_root()))?;
+    let writer = Arc::new(Mutex::new(writer));
+    let w = writer.clone();
+    let sink = Box::new(move |pcm: &[i16]| w.lock().map_err(|_| "poisoned".to_string())?.write(pcm).map_err(|e| e.to_string()));
+    let recorder = match Recorder::start(device_id.as_deref(), audio::CHUNK_SAMPLES, sink) {
+        Ok(r) => r,
+        Err(e) => {
+            let w = writer.lock().map_err(|_| CmdError::Other("state poisoned".into()))?;
+            state.with(|s| s.finish_source(&source.id, "device_error", &w))?;
+            return Err(CmdError::Other(e.to_string()));
+        }
+    };
+    *slot = Some(ActiveRecording { source_id: source.id.clone(), session_id, patient_id, kind, recorder, writer });
+    Ok(source)
+}
+
+#[derive(Serialize)]
+struct RecordingStatus {
+    source_id: String,
+    session_id: String,
+    kind: SourceKind,
+    duration_ms: u64,
+    level: f32,
+    error: Option<String>,
+}
+
+/// Polled by the UI (~10 Hz) for the timer and level meter.
+#[tauri::command]
+fn recording_status(state: State<'_, AppState>) -> CmdResult<Option<RecordingStatus>> {
+    let slot = state.recording.lock().map_err(|_| CmdError::Other("state poisoned".into()))?;
+    Ok(slot.as_ref().map(|r| RecordingStatus {
+        source_id: r.source_id.clone(),
+        session_id: r.session_id.clone(),
+        kind: r.kind,
+        duration_ms: r.recorder.duration_ms(),
+        level: r.recorder.level(),
+        error: r.recorder.error(),
+    }))
+}
+
+#[tauri::command]
+fn recording_stop(state: State<'_, AppState>) -> CmdResult<SessionSource> {
+    stop_recording(&state, "stopped")
+}
+
+/// Stops the device, flushes the last chunk and closes the source in the database.
+fn stop_recording(state: &AppState, reason: &str) -> CmdResult<SessionSource> {
+    let active = state
+        .recording
+        .lock()
+        .map_err(|_| CmdError::Other("state poisoned".into()))?
+        .take()
+        .ok_or_else(|| CmdError::Other("Es läuft keine Aufnahme".into()))?;
+    let failed = active.recorder.error().is_some();
+    let flushed = active.recorder.stop();
+    let reason = if failed || flushed.is_err() { "device_error" } else { reason };
+    let w = active.writer.lock().map_err(|_| CmdError::Other("state poisoned".into()))?;
+    state.with(|s| s.finish_source(&active.source_id, reason, &w))
+}
+
+/// Everything the session page needs in one round-trip.
+#[derive(Serialize)]
+struct SessionView {
+    session: Session,
+    patient: Patient,
+    sources: Vec<SessionSource>,
+}
+
+#[tauri::command]
+fn session_get(state: State<'_, AppState>, id: String) -> CmdResult<SessionView> {
+    state.with(|s| {
+        let session = s.session(&id)?;
+        Ok(SessionView { patient: s.patient(&session.patient_id)?, sources: s.list_sources(&id)?, session })
+    })
 }
 
 // ---------- episodes / applications / sessions ----------
@@ -319,7 +442,7 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
-            app.manage(AppState { data_dir, store: Mutex::new(None) });
+            app.manage(AppState { data_dir, store: Mutex::new(None), recording: Mutex::new(None) });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -334,6 +457,11 @@ pub fn run() {
             consents_list,
             consent_grant,
             consent_revoke,
+            audio_devices,
+            recording_start,
+            recording_status,
+            recording_stop,
+            session_get,
             episodes_list,
             episode_create,
             applications_list,
@@ -352,6 +480,12 @@ pub fn run() {
             setting_get,
             setting_set,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Closing the window mid-recording still flushes and closes the source cleanly.
+            if let tauri::RunEvent::Exit = event {
+                let _ = stop_recording(&app.state::<AppState>(), "stopped");
+            }
+        });
 }

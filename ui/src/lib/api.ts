@@ -18,6 +18,8 @@ import type { ReportStatus } from '@/bindings/ReportStatus'
 import type { ReportSummary } from '@/bindings/ReportSummary'
 import type { Session } from '@/bindings/Session'
 import type { SessionInput } from '@/bindings/SessionInput'
+import type { SessionSource } from '@/bindings/SessionSource'
+import type { SourceKind } from '@/bindings/SourceKind'
 import type { Template } from '@/bindings/Template'
 
 export type InitResult = {
@@ -32,6 +34,23 @@ export type ReportView = {
   patient: Patient
   episode: Episode | null
   application: Application | null
+}
+
+export type SessionView = {
+  session: Session
+  patient: Patient
+  sources: SessionSource[]
+}
+
+export type InputDevice = { id: string; name: string; is_default: boolean }
+
+export type RecordingStatus = {
+  source_id: string
+  session_id: string
+  kind: SourceKind
+  duration_ms: number
+  level: number
+  error: string | null
 }
 
 export const isTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -60,6 +79,13 @@ export const api = {
 
   sessions: (patientId?: string) => invoke<Session[]>('sessions_list', { patientId: patientId ?? null }),
   createSession: (input: SessionInput) => invoke<Session>('session_create', { input }),
+  session: (id: string) => invoke<SessionView>('session_get', { id }),
+
+  audioDevices: () => invoke<InputDevice[]>('audio_devices'),
+  startRecording: (sessionId: string, kind: SourceKind, deviceId: string | null) =>
+    invoke<SessionSource>('recording_start', { sessionId, kind, deviceId }),
+  recordingStatus: () => invoke<RecordingStatus | null>('recording_status'),
+  stopRecording: () => invoke<SessionSource>('recording_stop'),
 
   templates: () => invoke<Template[]>('templates_list'),
 
@@ -92,6 +118,11 @@ export const q = {
     queryOptions({ queryKey: ['applications', episodeId], queryFn: () => api.applications(episodeId) }),
   sessions: (patientId?: string) =>
     queryOptions({ queryKey: ['sessions', patientId ?? 'all'], queryFn: () => api.sessions(patientId) }),
+  session: (id: string) => queryOptions({ queryKey: ['session', id], queryFn: () => api.session(id) }),
+  audioDevices: () => queryOptions({ queryKey: ['audioDevices'], queryFn: api.audioDevices }),
+  // Polled for the timer and level meter; cheap (no DB access).
+  recording: () =>
+    queryOptions({ queryKey: ['recording'], queryFn: api.recordingStatus, refetchInterval: 150 }),
   templates: () => queryOptions({ queryKey: ['templates'], queryFn: api.templates }),
   reports: (status?: ReportStatus) =>
     queryOptions({ queryKey: ['reports', status ?? 'all'], queryFn: () => api.reports(status) }),

@@ -281,11 +281,18 @@ function SessionsCard({ patientId, episodeId }: { patientId: string; episodeId?:
         </div>
       </CardHeader>
       <CardContent>
-        <p className="mb-2 text-xs text-muted-foreground">{t('sessions.comingSoon')}</p>
         <ul className="divide-y text-sm">
           {sessions.data?.map((s) => (
-            <li key={s.id} className="py-2">
-              {formatDate(s.scheduled_at, true)}
+            <li key={s.id} className="flex items-center justify-between py-2">
+              <span>
+                {formatDate(s.scheduled_at ?? s.started_at, true)}
+                <span className="ml-3 text-muted-foreground">{t(`sessions.status.${s.status}`, s.status)}</span>
+              </span>
+              <Button asChild size="sm" variant="ghost">
+                <Link to="/sessions/$sessionId" params={{ sessionId: s.id }}>
+                  {t('sessions.open')}
+                </Link>
+              </Button>
             </li>
           ))}
         </ul>

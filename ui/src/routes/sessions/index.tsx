@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Mic } from 'lucide-react'
 import { Page, PageHeader } from '@/components/app-shell'
 import { formatDate } from '@/components/bits'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { q } from '@/lib/api'
@@ -37,6 +38,7 @@ function Sessions() {
                     <TableHead>{t('sessions.date')}</TableHead>
                     <TableHead>{t('patients.title')}</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -48,7 +50,14 @@ function Sessions() {
                           {name(s.patient_id)}
                         </Link>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{s.status}</TableCell>
+                      <TableCell className="text-muted-foreground">{t(`sessions.status.${s.status}`, s.status)}</TableCell>
+                      <TableCell className="text-right">
+                        <Button asChild size="sm" variant="ghost">
+                          <Link to="/sessions/$sessionId" params={{ sessionId: s.id }}>
+                            {t('sessions.open')}
+                          </Link>
+                        </Button>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

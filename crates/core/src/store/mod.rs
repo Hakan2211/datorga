@@ -1,11 +1,12 @@
 //! SQLite (SQLCipher in production) persistence. Every mutation writes an audit event in the
 //! same transaction.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::json;
 
+use crate::audio::{self, AudioKey, ChunkWriter};
 use crate::audit::{self, Entry};
 use crate::consent;
 use crate::crypto::MasterKey;
@@ -16,7 +17,7 @@ use crate::{Error, Result};
 const ACTOR: &str = "therapist";
 
 /// Ordered migrations; index + 1 = schema version (stored in `PRAGMA user_version`).
-const MIGRATIONS: &[&str] = &[include_str!("migrations/V1__spine.sql")];
+const MIGRATIONS: &[&str] = &[include_str!("migrations/V1__spine.sql"), include_str!("migrations/V2__capture.sql")];
 
 pub struct Store {
     conn: Connection,
@@ -161,7 +162,14 @@ impl Store {
     }
 
     /// Art. 17 GDPR: hard delete with cascade. The audit entry keeps only the ID.
+    /// Audio directories are removed after the commit. If that fails, the leftover chunks are
+    /// unreadable anyway: their keys went with the database rows.
     pub fn erase_patient(&self, id: &str) -> Result<()> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.path FROM audio_asset a JOIN session_source src ON src.id = a.source_id
+             JOIN session s ON s.id = src.session_id WHERE s.patient_id = ?1",
+        )?;
+        let audio_dirs: Vec<String> = stmt.query_map([id], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
         let tx = self.conn.unchecked_transaction()?;
         let n = tx.execute("DELETE FROM patient WHERE id = ?1", [id])?;
         if n == 0 {
@@ -169,6 +177,9 @@ impl Store {
         }
         audit::append(&tx, Entry { actor: ACTOR, action: "patient.erase", entity_type: "patient", entity_id: Some(id), meta: json!({}) })?;
         tx.commit()?;
+        for dir in audio_dirs {
+            let _ = std::fs::remove_dir_all(dir);
+        }
         Ok(())
     }
 
@@ -355,6 +366,137 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    pub fn session(&self, id: &str) -> Result<Session> {
+        self.conn
+            .query_row(&format!("{SESSION_SELECT} WHERE id = ?1"), [id], row_to_session)
+            .optional()?
+            .ok_or_else(|| Error::NotFound(format!("session {id}")))
+    }
+
+    // ---------- capture ----------
+
+    /// Opens a new source for `session_id` and returns the encrypted chunk writer for it.
+    /// Session recordings are refused without an active recording consent (fail closed).
+    pub fn start_source(&self, session_id: &str, kind: SourceKind, audio_root: &Path) -> Result<(SessionSource, ChunkWriter)> {
+        let session = self.session(session_id)?;
+        let consent_id = match kind {
+            SourceKind::SessionAudio => Some(
+                self.active_consent(&session.patient_id, ConsentKind::Recording)?
+                    .ok_or_else(|| Error::Invalid("Keine Einwilligung zur Tonaufnahme".into()))?
+                    .id,
+            ),
+            SourceKind::Dictation => None,
+        };
+        let busy: bool = self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM session_source WHERE status = 'recording')",
+            [],
+            |r| r.get(0),
+        )?;
+        if busy {
+            return Err(Error::Invalid("Es läuft bereits eine Aufnahme".into()));
+        }
+
+        let id = new_id();
+        let dir: PathBuf = audio_root.join(&id);
+        let key = AudioKey::generate()?;
+        let writer = ChunkWriter::create(&dir, &key)?;
+        let ts = now();
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO session_source (id, session_id, kind, consent_id, started_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, session_id, kind.as_str(), consent_id, ts],
+        )?;
+        tx.execute(
+            "INSERT INTO audio_asset (id, source_id, path, codec, dek) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![new_id(), id, dir.to_string_lossy(), audio::CODEC, key.to_hex()],
+        )?;
+        tx.execute(
+            "UPDATE session SET started_at = COALESCE(started_at, ?2), status = 'in_progress',
+                consent_id = COALESCE(?3, consent_id)
+             WHERE id = ?1",
+            params![session_id, ts, consent_id],
+        )?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "capture.start", entity_type: "session_source", entity_id: Some(&id),
+            meta: json!({ "kind": kind.as_str(), "session_id": session_id, "consent_id": consent_id }),
+        })?;
+        tx.commit()?;
+        Ok((self.source(&id)?, writer))
+    }
+
+    /// Closes a source. `reason`: stopped | consent_revoked | device_error.
+    pub fn finish_source(&self, source_id: &str, reason: &str, writer: &ChunkWriter) -> Result<SessionSource> {
+        let duration_ms = (writer.samples() * 1000 / audio::SAMPLE_RATE as u64) as i64;
+        self.close_source(source_id, SourceStatus::Recorded, reason, duration_ms, Some(writer.sha256()))
+    }
+
+    /// After a crash: sources still marked `recording` keep the chunks that made it to disk.
+    pub fn recover_interrupted_sources(&self) -> Result<usize> {
+        let mut stmt = self.conn.prepare(
+            "SELECT src.id, a.path FROM session_source src JOIN audio_asset a ON a.source_id = src.id
+             WHERE src.status = 'recording'",
+        )?;
+        let stale: Vec<(String, String)> =
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<std::result::Result<_, _>>()?;
+        for (id, path) in &stale {
+            let samples = audio::samples_on_disk(Path::new(path))?;
+            self.close_source(id, SourceStatus::Interrupted, "crash", (samples * 1000 / audio::SAMPLE_RATE as u64) as i64, None)?;
+        }
+        Ok(stale.len())
+    }
+
+    fn close_source(&self, id: &str, status: SourceStatus, reason: &str, duration_ms: i64, sha256: Option<String>) -> Result<SessionSource> {
+        let ts = now();
+        let tx = self.conn.unchecked_transaction()?;
+        let n = tx.execute(
+            "UPDATE session_source SET status = ?2, ended_at = ?3, end_reason = ?4 WHERE id = ?1 AND status = 'recording'",
+            params![id, status.as_str(), ts, reason],
+        )?;
+        if n == 0 {
+            return Err(Error::Invalid("Aufnahme läuft nicht".into()));
+        }
+        tx.execute("UPDATE audio_asset SET duration_ms = ?2, sha256 = ?3 WHERE source_id = ?1", params![id, duration_ms, sha256])?;
+        tx.execute(
+            "UPDATE session SET ended_at = ?2, status = 'recorded',
+                duration_s = CAST(round((julianday(?2) - julianday(started_at)) * 86400) AS INTEGER)
+             WHERE id = (SELECT session_id FROM session_source WHERE id = ?1)",
+            params![id, ts],
+        )?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "capture.stop", entity_type: "session_source", entity_id: Some(id),
+            meta: json!({ "status": status.as_str(), "reason": reason, "duration_ms": duration_ms }),
+        })?;
+        tx.commit()?;
+        self.source(id)
+    }
+
+    pub fn source(&self, id: &str) -> Result<SessionSource> {
+        self.conn
+            .query_row(&format!("{SOURCE_SELECT} WHERE src.id = ?1"), [id], row_to_source)
+            .optional()?
+            .ok_or_else(|| Error::NotFound(format!("source {id}")))
+    }
+
+    pub fn list_sources(&self, session_id: &str) -> Result<Vec<SessionSource>> {
+        let mut stmt = self.conn.prepare(&format!("{SOURCE_SELECT} WHERE src.session_id = ?1 ORDER BY src.started_at"))?;
+        let rows = stmt.query_map([session_id], row_to_source)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Directory and key of a source's audio, for decryption (transcription).
+    pub fn audio_location(&self, source_id: &str) -> Result<(PathBuf, AudioKey)> {
+        let (path, dek): (String, String) = self
+            .conn
+            .query_row(
+                "SELECT path, dek FROM audio_asset WHERE source_id = ?1 AND deleted_at IS NULL",
+                [source_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| Error::NotFound(format!("audio for source {source_id}")))?;
+        Ok((PathBuf::from(path), AudioKey::from_hex(&dek)?))
+    }
+
     // ---------- reports ----------
 
     pub fn report(&self, id: &str) -> Result<Report> {
@@ -527,6 +669,25 @@ fn row_to_patient(r: &rusqlite::Row<'_>) -> rusqlite::Result<Patient> {
     })
 }
 
+const SOURCE_SELECT: &str = "SELECT src.id, src.session_id, src.kind, src.consent_id, src.status, src.started_at,
+    src.ended_at, src.end_reason, a.duration_ms, a.deleted_at
+    FROM session_source src LEFT JOIN audio_asset a ON a.source_id = src.id";
+
+fn row_to_source(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSource> {
+    Ok(SessionSource {
+        id: r.get(0)?,
+        session_id: r.get(1)?,
+        kind: parse_col(r, 2)?,
+        consent_id: r.get(3)?,
+        status: parse_col(r, 4)?,
+        started_at: r.get(5)?,
+        ended_at: r.get(6)?,
+        end_reason: r.get(7)?,
+        duration_ms: r.get(8)?,
+        audio_deleted_at: r.get(9)?,
+    })
+}
+
 /// `patient.consent_recording` is derived: true while an unrevoked recording consent exists.
 fn sync_consent_flag(conn: &Connection, patient_id: &str) -> Result<()> {
     conn.execute(
@@ -687,6 +848,64 @@ mod tests {
         assert_eq!(events.iter().filter(|e| e.action.starts_with("consent.")).count(), 3);
         assert!(events.iter().all(|e| !e.meta_json.contains("Papierformular")), "free-text note stays out of the audit log");
         assert_eq!(audit::verify(store.conn()).unwrap(), None);
+    }
+
+    fn session(store: &Store, p: &Patient) -> Session {
+        store
+            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: None, scheduled_at: None, modality: None })
+            .unwrap()
+    }
+
+    #[test]
+    fn session_recording_requires_consent_dictation_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let s = session(&store, &p);
+
+        let err = store.start_source(&s.id, SourceKind::SessionAudio, dir.path()).err().unwrap();
+        assert!(err.to_string().contains("Einwilligung"), "{err}");
+
+        let (src, mut w) = store.start_source(&s.id, SourceKind::Dictation, dir.path()).unwrap();
+        assert!(src.consent_id.is_none());
+        assert!(store.start_source(&s.id, SourceKind::Dictation, dir.path()).is_err(), "one recording at a time");
+        w.write(&vec![100i16; audio::CHUNK_SAMPLES]).unwrap();
+        w.write(&vec![-100i16; 8_000]).unwrap();
+        let done = store.finish_source(&src.id, "stopped", &w).unwrap();
+        assert_eq!((done.status, done.duration_ms), (SourceStatus::Recorded, Some(5_500)));
+        assert_eq!(store.session(&s.id).unwrap().status, "recorded");
+
+        let c = store.grant_consent(&p.id, ConsentKind::Recording, None).unwrap();
+        let (rec, w) = store.start_source(&s.id, SourceKind::SessionAudio, dir.path()).unwrap();
+        assert_eq!(rec.consent_id.as_deref(), Some(c.id.as_str()));
+        store.finish_source(&rec.id, "consent_revoked", &w).unwrap();
+        assert_eq!(store.list_sources(&s.id).unwrap().len(), 2);
+
+        let (path, key) = store.audio_location(&src.id).unwrap();
+        assert_eq!(audio::read_pcm(&path, &key).unwrap().len(), audio::CHUNK_SAMPLES + 8_000);
+        assert_eq!(audit::verify(store.conn()).unwrap(), None);
+    }
+
+    #[test]
+    fn crash_leaves_recoverable_interrupted_source_and_erasure_removes_audio() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let s = session(&store, &p);
+        let (src, mut w) = store.start_source(&s.id, SourceKind::Dictation, dir.path()).unwrap();
+        w.write(&vec![1i16; audio::CHUNK_SAMPLES]).unwrap();
+        drop(w); // app dies mid-recording
+
+        assert_eq!(store.recover_interrupted_sources().unwrap(), 1);
+        let src = store.source(&src.id).unwrap();
+        assert_eq!((src.status, src.end_reason.as_deref(), src.duration_ms), (SourceStatus::Interrupted, Some("crash"), Some(5_000)));
+        assert_eq!(store.recover_interrupted_sources().unwrap(), 0);
+
+        let (path, _) = store.audio_location(&src.id).unwrap();
+        assert!(path.exists());
+        store.erase_patient(&p.id).unwrap();
+        assert!(!path.exists(), "erasure removes the audio directory");
+        assert!(store.source(&src.id).is_err());
     }
 
     #[test]
