@@ -125,6 +125,8 @@ export const api = {
   saveSection: (id: string, key: string, body: string) => invoke<void>('report_save_section', { id, key, body }),
   checklist: (id: string) => invoke<CheckItem[]>('report_checklist', { id }),
   sign: (id: string, signedBy: string) => invoke<Report>('report_sign', { id, signedBy }),
+  addAddendum: (id: string, body: string, signedBy: string) =>
+    invoke<Report>('report_add_addendum', { id, body, signedBy }),
   exportReport: (id: string, format: 'pdf' | 'docx', path: string) =>
     invoke<void>('report_export', { id, format, path }),
 

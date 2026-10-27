@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Link } from '@tanstack/react-router'
+import { Link, useMatch } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import {
@@ -38,6 +38,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const encrypted = init.data?.encrypted
   // Slow poll here; the session page polls faster for its meter (react-query uses the shortest).
   const recording = useQuery({ ...q.recording(), refetchInterval: 1000, enabled: init.data?.status === 'ready' })
+  // Notes share the Bericht editor route but belong to a session, so the nav marks "Sitzungen".
+  const reportId = useMatch({ from: '/reports/$reportId', shouldThrow: false })?.params.reportId
+  const openReport = useQuery({ ...q.report(reportId ?? ''), staleTime: Infinity, enabled: !!reportId })
+  const inNote = !!reportId && openReport.data?.report.kind === 'sitzungsnotiz'
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -58,7 +62,13 @@ export function AppShell({ children }: { children: ReactNode }) {
         )}
         <nav className="flex-1 space-y-0.5 px-3">
           {modules.map((m) => (
-            <NavLink key={m.to} to={m.to} exact={m.exact} icon={<m.icon className="size-4" />}>
+            <NavLink
+              key={m.to}
+              to={m.to}
+              exact={m.exact}
+              active={inNote ? m.to === '/sessions' : undefined}
+              icon={<m.icon className="size-4" />}
+            >
               {t(m.label)}
             </NavLink>
           ))}
@@ -95,13 +105,31 @@ export function AppShell({ children }: { children: ReactNode }) {
   )
 }
 
-function NavLink({ to, exact, icon, children }: { to: string; exact?: boolean; icon: ReactNode; children: ReactNode }) {
+const ACTIVE = 'bg-white font-medium text-foreground shadow-xs hover:bg-white'
+
+/** `active` overrides the router's own match when set. */
+function NavLink({
+  to,
+  exact,
+  active,
+  icon,
+  children,
+}: {
+  to: string
+  exact?: boolean
+  active?: boolean
+  icon: ReactNode
+  children: ReactNode
+}) {
   return (
     <Link
       to={to}
       activeOptions={{ exact: !!exact }}
-      className="flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors hover:bg-black/5"
-      activeProps={{ className: 'bg-white font-medium text-foreground shadow-xs hover:bg-white' }}
+      className={cn(
+        'flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors hover:bg-black/5',
+        active && ACTIVE,
+      )}
+      activeProps={{ className: active === undefined ? ACTIVE : '' }}
     >
       {icon}
       {children}

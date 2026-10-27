@@ -260,6 +260,21 @@ pub struct Report {
     pub signed_at: Option<String>,
     pub signed_by: Option<String>,
     pub sections: Vec<ReportSection>,
+    /// Nachträge to a signed Sitzungsnotiz, oldest first.
+    pub addenda: Vec<ReportAddendum>,
+}
+
+/// A later correction or addition to a signed note. Signed when written, never changed.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReportAddendum {
+    pub id: String,
+    #[ts(type = "number")]
+    pub seq: i64,
+    /// TipTap HTML, like a prose section.
+    pub body: String,
+    pub created_at: String,
+    pub signed_by: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

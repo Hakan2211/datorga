@@ -58,3 +58,9 @@
 #grid(columns: (1fr, 1fr), gutter: 2em,
   [#line(length: 100%, stroke: 0.5pt) #text(9pt)[Datum: #d.date]],
   [#line(length: 100%, stroke: 0.5pt) #text(9pt)[Unterschrift#if d.signed_by != none [: #d.signed_by]]])
+
+// Nachträge (Sitzungsnotiz): the original above stays as signed; each addendum carries its own date and signer.
+#for a in d.addenda [
+  #block(above: 2em, below: 0.5em, sticky: true, text(weight: "bold", a.heading))
+  #blocks(a.blocks)
+]

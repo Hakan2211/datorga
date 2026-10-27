@@ -731,6 +731,12 @@ fn report_sign(state: State<'_, AppState>, id: String, signed_by: String) -> Cmd
 }
 
 /// Writes PDF or DOCX to `path` (chosen by the user in a save dialog).
+/// Nachtrag to a signed Sitzungsnotiz, signed on submit. Returns the updated note.
+#[tauri::command]
+fn report_add_addendum(state: State<'_, AppState>, id: String, body: String, signed_by: String) -> CmdResult<Report> {
+    state.with(|s| s.add_addendum(&id, &body, &signed_by))
+}
+
 #[tauri::command]
 fn report_export(state: State<'_, AppState>, id: String, format: String, path: String) -> CmdResult<()> {
     state.with(|s| {
@@ -841,6 +847,7 @@ pub fn run() {
             report_save_section,
             report_checklist,
             report_sign,
+            report_add_addendum,
             report_export,
             audit_list,
             audit_verify,

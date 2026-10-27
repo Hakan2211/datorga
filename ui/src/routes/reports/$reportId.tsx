@@ -4,10 +4,23 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { save } from '@tauri-apps/plugin-dialog'
 import { toast } from 'sonner'
-import { AlertTriangle, CheckCircle2, ChevronDown, CircleSlash, CornerDownLeft, Download, FileSignature, Plus, Trash2, XCircle } from 'lucide-react'
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
+  CircleSlash,
+  CornerDownLeft,
+  Download,
+  FileSignature,
+  Plus,
+  TextSelect,
+  Trash2,
+  XCircle,
+} from 'lucide-react'
 import type { Diagnosis } from '@/bindings/Diagnosis'
 import type { SectionDef } from '@/bindings/SectionDef'
 import type { SourceSegment } from '@/bindings/SourceSegment'
+import { Addenda } from '@/components/addenda'
 import { Page, PageHeader } from '@/components/app-shell'
 import { StatusBadge, formatDate } from '@/components/bits'
 import { RichField } from '@/components/rich-field'
@@ -163,6 +176,7 @@ function ReportEditor({ view }: { view: ReportView }) {
                 onChange={(b) => update(s.key, b)}
               />
             ))}
+            {isNote && readOnly && <Addenda reportId={report.id} addenda={report.addenda} noteSigner={report.signed_by} />}
           </div>
           <aside className="space-y-4">
             <div className="sticky top-6 space-y-4">
@@ -440,7 +454,7 @@ function ExportCard({ view }: { view: ReportView }) {
   )
 }
 
-/** Confirmed transcript of the note's session; each segment can be appended to a section. */
+/** Confirmed transcript of the note's session; a segment, or the part selected in it, can be appended to a section. */
 function TranscriptPicker({
   segments,
   sections,
@@ -457,6 +471,19 @@ function TranscriptPicker({
   const { t } = useTranslation()
   const [used, setUsed] = useState<ReadonlySet<number>>(new Set())
   const key = sections.some((s) => s.key === target) ? target : (sections[0]?.key ?? '')
+  // Text selected within a single segment (Whisper may return a long dictation as one segment).
+  const [picked, setPicked] = useState<{ index: number; text: string } | null>(null)
+  useEffect(() => {
+    const onChange = () => {
+      const sel = document.getSelection()
+      const text = sel?.toString().trim() ?? ''
+      const node = sel && sel.rangeCount > 0 ? sel.getRangeAt(0).commonAncestorContainer : null
+      const el = (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>('[data-segment]')
+      setPicked(text && el ? { index: Number(el.dataset.segment), text } : null)
+    }
+    document.addEventListener('selectionchange', onChange)
+    return () => document.removeEventListener('selectionchange', onChange)
+  }, [])
 
   return (
     <Card>
@@ -483,28 +510,37 @@ function TranscriptPicker({
                 </SelectContent>
               </Select>
             </div>
+            <p className="text-xs text-muted-foreground">{t('note.selectHint')}</p>
             <ul className="max-h-[50vh] space-y-1 overflow-y-auto text-[13px]">
-              {segments.map((seg, i) => (
+              {segments.map((seg, i) => {
+                const part = picked?.index === i ? picked.text : null
+                return (
                 <li key={`${seg.source_id}:${seg.start_ms}`} className="group flex items-start gap-2 rounded px-1.5 py-1 hover:bg-muted/60">
                   <span className="flex-1">
                     <span className="mr-1.5 text-[11px] text-muted-foreground">{t(`note.role.${seg.role}`)}</span>
-                    <span className={cn(used.has(i) && 'text-muted-foreground')}>{seg.text}</span>
+                    <span data-segment={i} className={cn(used.has(i) && 'text-muted-foreground')}>
+                      {seg.text}
+                    </span>
                   </span>
                   <Button
-                    variant="ghost"
+                    variant={part ? 'secondary' : 'ghost'}
                     size="icon"
                     className="size-6 shrink-0"
-                    title={t('note.insert')}
-                    aria-label={t('note.insert')}
+                    title={t(part ? 'note.insertSelection' : 'note.insert')}
+                    aria-label={t(part ? 'note.insertSelection' : 'note.insert')}
+                    // Keep the text selection alive until the click is handled.
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
-                      onInsert(key, seg.text)
+                      onInsert(key, part ?? seg.text)
                       setUsed((u) => new Set(u).add(i))
+                      if (part) document.getSelection()?.removeAllRanges()
                     }}
                   >
-                    <CornerDownLeft className="size-3.5" />
+                    {part ? <TextSelect className="size-3.5" /> : <CornerDownLeft className="size-3.5" />}
                   </Button>
                 </li>
-              ))}
+                )
+              })}
             </ul>
           </>
         )}

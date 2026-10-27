@@ -1,4 +1,4 @@
-# thera: session handoff (2026-10-27, after slice 4)
+# thera: session handoff (2026-10-27, after slice 4 + follow-ups)
 
 Start a new session with: *"Read docs/HANDOFF.md and continue with the next step."*
 
@@ -77,6 +77,12 @@ Start a new session with: *"Read docs/HANDOFF.md and continue with the next step
   - fresh TP note: TP hints, empty Verlauf blocks signing, idempotent create
   - note not in Berichte queue, audit chain intact
 
+**Built (slice 4 follow-ups, 2026-10-27)**
+- **Nachtrag** (§ 630f BGB): migration V5 `report_addendum` (id, report_id cascade, `seq`, body, created_at = signing time, signed_by; an UPDATE trigger makes it append-only, no DELETE trigger so erasure cascades). `Store::add_addendum` only on `sitzungsnotiz` reports that are signed/exported, empty body/signer rejected, report row untouched, audit `report.addendum` with ids only. `Report.addenda` (by seq). Command `report_add_addendum`. Export prints each Nachtrag after the original and its signature line ("Nachtrag vom 27.10.2026, 14:05 – Name", German local time via a built-in CET/CEST rule). UI `components/addenda.tsx` below a signed note: read-only list + form with confirm dialog; signer prefilled from `therapist_name`, else the note's signer. Berichte take no addenda (they go to the Gutachter once).
+- Sidebar marks "Sitzungen" while a note is open (`app-shell.tsx` reads the open report's kind; `NavLink` takes an `active` override).
+- Transcript picker: text selected inside one segment turns its button into "Markierten Text einfügen" and inserts only that part.
+- Tests: 87 core. E2E in the real app: TTS dictation came back as one long segment, partial selection inserted only the selected words, sign, two Nachträge (form clears, headings with time and signer, DB seq 1/2, audit text-free), PDF shows original + signature + both Nachträge.
+
 ## Current limitations
 
 - ~~Database is unencrypted~~ Encrypted SQLCipher build is live (2026-10-27): Strawberry Perl, LLVM, CMake installed, `LIBCLANG_PATH` set. Old plain DB backed up to `%APPDATA%\de.datorga.thera.plain-backup-20261027` (delete once not needed). Still: fake patients only until the recovery-kit PDF exists.
@@ -88,7 +94,7 @@ Start a new session with: *"Read docs/HANDOFF.md and continue with the next step
 - No printable consent form yet (the therapist notes the signed paper form in the consent note).
 - Capture lacks a disk-space guard and keep-awake (laptop sleep during long sessions).
 - Vorlagen upload is a placeholder card.
-- Sitzungsnotiz: no amendment ("Nachtrag") after signing yet. § 630f wants later corrections to be visible with the original kept, so a signed note is simply read-only for now. The sidebar highlights "Berichte" while a note is open (shared `/reports` route). Segment picker inserts whole segments (no partial selection). No AI drafting (Phase 2: fact extraction from `source_segments`).
+- Sitzungsnotiz: no AI drafting (Phase 2: fact extraction from `source_segments`). A note exported before a Nachtrag lacks it until exported again (no "newer addenda than last export" hint yet). Partial insert works within one segment only, not across segments.
 
 ## Next steps (in order)
 
@@ -102,11 +108,8 @@ Start a new session with: *"Read docs/HANDOFF.md and continue with the next step
    - ~~audio auto-delete after the transcript is confirmed~~ **done**
    - open: disk-space guard + keep-awake for capture; GPU decision; optional audio playback in the viewer; diarization for session recordings (PLAN §4.3)
 3. ~~**Sitzungsnotiz** form per session~~ **done** (slice 4).
-4. **NEXT → Sitzungsnotiz follow-ups** (gaps from slice 4):
-   - **Nachtrag** after signing (§ 630f BGB): signed original stays visible and unchanged, addenda are appended with date/time and their own signature, audited.
-   - Sidebar: highlight "Sitzungen" (not "Berichte") while a note is open, e.g. give notes their own route or set the active nav item from the document kind.
-   - Transcript panel: insert a **selected part** of a segment, not only whole segments (Whisper sometimes returns a long dictation as one segment).
-5. **Recovery-kit PDF** (printable emergency key).
+4. ~~**Sitzungsnotiz follow-ups**~~ **done**: Nachtrag, sidebar highlight, partial transcript insert.
+5. **NEXT → Recovery-kit PDF** (printable emergency key).
 6. **Vorlagen module: deferred** until the therapist hands over material. She will supply old **Sitzungen and Berichte** later, and she must be able to **upload them herself in the app** (no developer-side import):
    - upload old Berichte, old session notes and her forms (PDF/DOCX → text)
    - redaction review (pseudonymizer `detect()` spans), stored as style exemplars

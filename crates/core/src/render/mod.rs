@@ -27,6 +27,15 @@ pub struct RenderDoc {
     pub signed_by: Option<String>,
     pub practice: Option<String>,
     pub sections: Vec<RenderSection>,
+    /// Nachträge, printed after the original and its signature.
+    pub addenda: Vec<RenderAddendum>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RenderAddendum {
+    /// "Nachtrag vom 27.10.2026, 14:05 – <signer>"
+    pub heading: String,
+    pub blocks: Vec<Block>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,6 +99,14 @@ pub fn build_doc(
         signed_by: report.signed_by.clone(),
         practice,
         sections,
+        addenda: report
+            .addenda
+            .iter()
+            .map(|a| RenderAddendum {
+                heading: format!("Nachtrag vom {} – {}", german_datetime(&a.created_at), a.signed_by),
+                blocks: richtext::parse(&a.body),
+            })
+            .collect(),
     }
 }
 
@@ -127,6 +144,21 @@ pub fn docx(doc: &RenderDoc) -> Result<Vec<u8>> {
             }
             p.add_run(run)
         })
+    }
+
+    fn add_blocks(mut d: Docx, blocks: &[Block]) -> Docx {
+        for b in blocks {
+            match b {
+                Block::P { runs } => d = d.add_paragraph(runs_para(runs)),
+                Block::Ul { items } | Block::Ol { items } => {
+                    let num = if matches!(b, Block::Ul { .. }) { 1 } else { 2 };
+                    for it in items {
+                        d = d.add_paragraph(runs_para(it).numbering(NumberingId::new(num), IndentLevel::new(0)));
+                    }
+                }
+            }
+        }
+        d
     }
 
     let bullet = |id: usize, fmt: &str, text: &str| {
@@ -171,17 +203,7 @@ pub fn docx(doc: &RenderDoc) -> Result<Vec<u8>> {
             rows.extend(s.diagnoses.iter().map(|x| TableRow::new(vec![cell(&x.code, false), cell(&x.label, false), cell(&x.certainty, false)])));
             d = d.add_table(Table::new(rows));
         }
-        for b in &s.blocks {
-            match b {
-                Block::P { runs } => d = d.add_paragraph(runs_para(runs)),
-                Block::Ul { items } | Block::Ol { items } => {
-                    let num = if matches!(b, Block::Ul { .. }) { 1 } else { 2 };
-                    for it in items {
-                        d = d.add_paragraph(runs_para(it).numbering(NumberingId::new(num), IndentLevel::new(0)));
-                    }
-                }
-            }
-        }
+        d = add_blocks(d, &s.blocks);
     }
     d = d.add_paragraph(Paragraph::new()).add_paragraph(Paragraph::new().add_run(
         Run::new()
@@ -192,6 +214,12 @@ pub fn docx(doc: &RenderDoc) -> Result<Vec<u8>> {
             ))
             .size(20),
     ));
+    for a in &doc.addenda {
+        d = d.add_paragraph(Paragraph::new()).add_paragraph(
+            Paragraph::new().keep_next(true).add_run(Run::new().add_text(&a.heading).bold().size(22)),
+        );
+        d = add_blocks(d, &a.blocks);
+    }
 
     let mut buf = std::io::Cursor::new(Vec::new());
     d.build().pack(&mut buf).map_err(|e| Error::Render(format!("docx: {e}")))?;
@@ -203,6 +231,24 @@ fn german_date(rfc3339: &str) -> String {
         Some(p) if p.len() == 3 => format!("{}.{}.{}", p[2], p[1], p[0]),
         _ => rfc3339.to_string(),
     }
+}
+
+/// Wall-clock time in Germany (CET/CEST, EU switch at 01:00 UTC on the last Sundays of March
+/// and October), so a Nachtrag shows the time it was signed regardless of the machine's zone.
+fn german_datetime(rfc3339: &str) -> String {
+    use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset, Weekday};
+    let Ok(t) = OffsetDateTime::parse(rfc3339, &Rfc3339) else { return rfc3339.to_string() };
+    let t = t.to_offset(UtcOffset::UTC);
+    let switch = |m: Month| {
+        let mut d = Date::from_calendar_date(t.year(), m, 31).expect("March and October have 31 days");
+        while d.weekday() != Weekday::Sunday {
+            d = d.previous_day().expect("not the first day of the calendar");
+        }
+        PrimitiveDateTime::new(d, Time::from_hms(1, 0, 0).expect("valid time")).assume_utc()
+    };
+    let summer = t >= switch(Month::March) && t < switch(Month::October);
+    let t = t.to_offset(UtcOffset::from_hms(if summer { 2 } else { 1 }, 0, 0).expect("valid offset"));
+    format!("{:02}.{:02}.{}, {:02}:{:02}", t.day(), u8::from(t.month()), t.year(), t.hour(), t.minute())
 }
 
 #[cfg(test)]
@@ -274,6 +320,45 @@ mod tests {
         let headings: Vec<_> = doc.sections.iter().map(|s| s.heading.as_str()).collect();
         assert_eq!(headings, ["Inhalt und Verlauf der Sitzung", "Risikoeinschätzung"]);
         assert!(pdf(&doc).unwrap().starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn note_export_keeps_original_and_appends_addenda() {
+        let store = Store::open_in_memory().unwrap();
+        let p = store
+            .create_patient(PatientInput { first_name: "Anna".into(), last_name: "Beispiel".into(), ..Default::default() })
+            .unwrap();
+        let s = store
+            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: None, scheduled_at: None, modality: None })
+            .unwrap();
+        let note = store.create_session_note(&s.id).unwrap();
+        store.save_section(&note.id, "verlauf", "<p>Original</p>").unwrap();
+        store.sign_report(&note.id, "M. Muster").unwrap();
+        store.add_addendum(&note.id, "<p>Korrektur: <strong>Dienstag</strong></p>", "M. Muster").unwrap();
+        let note = store.report(&note.id).unwrap();
+        let t = store.template(&note.template_key).unwrap();
+        let doc = build_doc(&note, &t, &p, None, None, Some(&store.session(&s.id).unwrap()), None);
+
+        assert_eq!(doc.sections.len(), 1);
+        assert_eq!(doc.sections[0].blocks, richtext::parse("<p>Original</p>"), "original as signed");
+        assert_eq!(doc.signed_by.as_deref(), Some("M. Muster"));
+        assert_eq!(doc.addenda.len(), 1);
+        let h = &doc.addenda[0].heading;
+        assert!(h.starts_with("Nachtrag vom ") && h.ends_with(" – M. Muster"), "{h}");
+        assert!(serde_json::to_string(&doc.addenda).unwrap().contains("Dienstag"));
+        assert!(pdf(&doc).unwrap().starts_with(b"%PDF"));
+        assert!(docx(&doc).unwrap().starts_with(b"PK"));
+    }
+
+    #[test]
+    fn german_datetime_follows_cet_and_cest() {
+        assert_eq!(german_datetime("2026-10-27T13:05:00Z"), "27.10.2026, 14:05");
+        assert_eq!(german_datetime("2026-07-01T12:00:00Z"), "01.07.2026, 14:00");
+        // EU switches: 2026-03-29 and 2026-10-25, both at 01:00 UTC.
+        assert_eq!(german_datetime("2026-03-29T00:59:00Z"), "29.03.2026, 01:59");
+        assert_eq!(german_datetime("2026-03-29T01:00:00Z"), "29.03.2026, 03:00");
+        assert_eq!(german_datetime("2026-10-25T00:59:00Z"), "25.10.2026, 02:59");
+        assert_eq!(german_datetime("2026-10-25T01:00:00Z"), "25.10.2026, 02:00");
     }
 
     #[test]

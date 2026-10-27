@@ -23,6 +23,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V2__capture.sql"),
     include_str!("migrations/V3__transcription.sql"),
     include_str!("migrations/V4__session_note.sql"),
+    include_str!("migrations/V5__report_addendum.sql"),
 ];
 
 pub struct Store {
@@ -811,6 +812,7 @@ impl Store {
                         signed_at: r.get(11)?,
                         signed_by: r.get(12)?,
                         sections: vec![],
+                        addenda: vec![],
                     })
                 },
             )
@@ -820,6 +822,14 @@ impl Store {
         report.sections = stmt
             .query_map([id], |r| {
                 Ok(ReportSection { key: r.get(0)?, body: r.get(1)?, origin: parse_col(r, 2)?, edited_at: r.get(3)? })
+            })?
+            .collect::<std::result::Result<_, _>>()?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, seq, body, created_at, signed_by FROM report_addendum WHERE report_id = ?1 ORDER BY seq")?;
+        report.addenda = stmt
+            .query_map([id], |r| {
+                Ok(ReportAddendum { id: r.get(0)?, seq: r.get(1)?, body: r.get(2)?, created_at: r.get(3)?, signed_by: r.get(4)? })
             })?
             .collect::<std::result::Result<_, _>>()?;
         Ok(report)
@@ -888,6 +898,42 @@ impl Store {
             return Err(Error::Invalid("report is not signable".into()));
         }
         audit::append(&tx, Entry { actor: ACTOR, action: "report.sign", entity_type: "report", entity_id: Some(report_id), meta: json!({}) })?;
+        tx.commit()?;
+        self.report(report_id)
+    }
+
+    /// Nachtrag to a signed Sitzungsnotiz (§ 630f BGB): written and signed in one step, then
+    /// immutable. The original note is left untouched, so an earlier export stays what it was.
+    pub fn add_addendum(&self, report_id: &str, body: &str, signed_by: &str) -> Result<Report> {
+        let signed_by = signed_by.trim();
+        if signed_by.is_empty() {
+            return Err(Error::Invalid("Name für die Unterschrift fehlt".into()));
+        }
+        if crate::pii::plain_text(body).is_empty() {
+            return Err(Error::Invalid("Der Nachtrag ist leer".into()));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let (kind, status): (String, String) = tx
+            .query_row("SELECT kind, status FROM report WHERE id = ?1", [report_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?
+            .ok_or_else(|| Error::NotFound(format!("report {report_id}")))?;
+        if kind != "sitzungsnotiz" {
+            return Err(Error::Invalid("Nachträge gibt es nur zu Sitzungsnotizen".into()));
+        }
+        if status != ReportStatus::Signed.as_str() && status != ReportStatus::Exported.as_str() {
+            return Err(Error::Invalid("Ein Nachtrag ist erst nach dem Signieren möglich".into()));
+        }
+        let id = new_id();
+        let seq: i64 =
+            tx.query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM report_addendum WHERE report_id = ?1", [report_id], |r| r.get(0))?;
+        tx.execute(
+            "INSERT INTO report_addendum (id, report_id, seq, body, created_at, signed_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, report_id, seq, body, now(), signed_by],
+        )?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "report.addendum", entity_type: "report", entity_id: Some(report_id),
+            meta: json!({ "addendum_id": id, "seq": seq }),
+        })?;
         tx.commit()?;
         self.report(report_id)
     }
@@ -1396,6 +1442,55 @@ mod tests {
         assert_eq!(audit::verify(store.conn()).unwrap(), None);
         store.erase_patient(&p.id).unwrap();
         assert!(store.report(&note.id).is_err(), "erasure removes the note");
+    }
+
+    #[test]
+    fn addendum_only_on_signed_notes_append_only_and_erased_with_patient() {
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let s = store
+            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: None, scheduled_at: None, modality: None })
+            .unwrap();
+        let note = store.create_session_note(&s.id).unwrap();
+        store.save_section(&note.id, "verlauf", "<p>Original</p>").unwrap();
+        let invalid = |r: Result<Report>| matches!(r, Err(Error::Invalid(_)));
+        assert!(invalid(store.add_addendum(&note.id, "<p>Zu früh</p>", "M. Muster")), "draft note");
+        store.sign_report(&note.id, "M. Muster").unwrap();
+        assert!(invalid(store.add_addendum(&note.id, "<p></p>", "M. Muster")), "empty body");
+        assert!(invalid(store.add_addendum(&note.id, "<p>x</p>", "  ")), "no signer");
+
+        let r = store.add_addendum(&note.id, "<p>Korrektur: Termin war am Dienstag.</p>", " M. Muster ").unwrap();
+        store.mark_exported(&note.id, "pdf", "00").unwrap();
+        let r2 = store.add_addendum(&note.id, "<p>Zweiter Nachtrag</p>", "M. Muster").unwrap();
+        assert_eq!(r.addenda.len(), 1);
+        assert_eq!(r.addenda[0].signed_by, "M. Muster");
+        assert_eq!(r2.addenda.iter().map(|a| a.seq).collect::<Vec<_>>(), [1, 2], "exported notes take addenda too");
+        let bodies = |r: &Report| r.sections.iter().map(|s| (s.key.clone(), s.body.clone())).collect::<Vec<_>>();
+        assert_eq!(bodies(&r2), bodies(&r), "original unchanged");
+        assert_eq!((r2.status, r2.signed_at.clone()), (ReportStatus::Exported, r.signed_at.clone()));
+        assert!(store.save_section(&note.id, "verlauf", "<p>x</p>").is_err(), "note itself stays read-only");
+
+        // No update API, and the table rejects updates outright.
+        assert!(store.conn().execute("UPDATE report_addendum SET body = 'x'", []).is_err());
+
+        // Berichte take no addenda, even when signed.
+        let ep = store
+            .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Vt, age_group: AgeGroup::Adult, setting: Setting::Einzel })
+            .unwrap();
+        let bericht = store.create_application(&ep.id, ApplicationKind::Erstantrag).unwrap().report_id.unwrap();
+        store.sign_report(&bericht, "M. Muster").unwrap();
+        assert!(invalid(store.add_addendum(&bericht, "<p>x</p>", "M. Muster")));
+
+        let events = audit::list(store.conn(), 50).unwrap();
+        let added: Vec<_> = events.iter().filter(|e| e.action == "report.addendum").collect();
+        assert_eq!(added.len(), 2);
+        assert!(events.iter().all(|e| !e.meta_json.contains("Korrektur") && !e.meta_json.contains("Muster")), "no text in the audit log");
+        assert_eq!(audit::verify(store.conn()).unwrap(), None);
+
+        store.erase_patient(&p.id).unwrap();
+        let left: i64 = store.conn().query_row("SELECT COUNT(*) FROM report_addendum", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0, "erasure removes addenda");
+        assert_eq!(audit::verify(store.conn()).unwrap(), None);
     }
 
     #[test]
