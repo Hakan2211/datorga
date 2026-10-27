@@ -6,6 +6,7 @@ pub mod audit;
 pub mod consent;
 pub mod crypto;
 pub mod domain;
+pub mod llm;
 pub mod pii;
 pub mod pseudo;
 pub mod render;
@@ -36,6 +37,8 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("{0}")]
     Stt(String),
+    #[error("{0}")]
+    Llm(String),
     #[error("Abgebrochen")]
     Cancelled,
 }

@@ -1,8 +1,8 @@
-# thera: session handoff (2026-10-27, Phase 1 done; Phase 2 next)
+# thera: session handoff (2026-10-27, Phase 2 started: slice 11 done)
 
 Start a new session with: *"Read docs/HANDOFF.md and continue with the next step."*
 
-**State at end of session (2026-10-27):** slices 5–10 (Notfall-Kit, backup + restore, capture guards, Nachtrag export hint, consent form, backup reminder) are done, tested, committed and pushed to `main`. The release app (desktop shortcut) and installers were rebuilt from it. The user asked to work through the remaining steps one by one until Phase 2; that point is reached (the Vorlagen module stays deferred until the therapist hands over material). Next step: **Phase 2**, which needs decisions from the user first (see Next steps 12).
+**State at end of session (2026-10-27):** Phase 1 is done (slices 1–10). Phase 2 has started. The user decided (PLAN-AMENDMENTS §9): OpenRouter/Requesty + own endpoint, chosen model, the therapist's own key, only pseudonymized text leaves the machine, local models with hardware-based recommendation; ChatGPT/OpenCode subscription deferred. **Slice 11 (LLM provider layer) is done** and verified in the real app against a mock endpoint. It isn't tested against a real OpenRouter/Requesty key yet (none on the dev box). Next step: **slice 12, local models** (see Next steps 12).
 
 On the next start of the dev-box app you'll see **"Notfall-Kit fehlt"**: the DB predates the kit, so it was never confirmed. Create a new key there and save/print the kit.
 
@@ -197,10 +197,41 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
   - backup 8 days old → "8 Tage alt"; "Später" hides it across pages
   - reminder off → gone
 
+**Built (slice 11, 2026-10-27): LLM provider layer (Phase 2)**
+- `core::llm` (ureq, blocking):
+  - `ProviderId` `openrouter` | `requesty` | `custom`
+  - `providers()` with default base URL, key link and `us_intermediary`
+  - `LlmConfig` (setting `llm_config`: active provider + per-provider model/base URL)
+  - `Endpoint` (Debug hides the key)
+  - `list_models` (`GET /models`)
+  - `chat(ep, model, &[(Role, &Pseudonymized<String>)], opts)`: the egress gate, since raw text doesn't type-check
+  - `ping` (fixed prompt through the pseudonymizer)
+  - The URL must be https (http only for localhost/127.0.0.1/[::1]). OpenRouter bodies carry `provider: {zdr: true, data_collection: "deny"}`. API errors become short German messages (401/402/404/429/5xx + provider message, 200-with-error too), never echoing the request.
+- Store: `llm_config`/`set_llm_config`, `log_llm_call(action, provider, model, Ok(&Completion)|Err)` → audit `llm.*` with provider/model/ok/tokens/latency only.
+- App:
+  - API key in the OS keychain (`llm-<provider>`; debug `THERA_KEYRING_USER=x` → `x-llm-<provider>`)
+  - commands `llm_overview` (config + providers + `has_key`), `llm_config_set`, `llm_key_set` (empty = delete), async `llm_models`, async `llm_test` (audit `llm.test`)
+  - The store lock isn't held during HTTP.
+- UI: `components/llm-settings.tsx` (`LlmCard`, Settings → "KI-Entwürfe"):
+  - provider select (Aus / OpenRouter / Requesty / Eigener Endpunkt), the pseudonymization note, and a US-intermediary warning per provider
+  - key field (password, "hinterlegt" badge, Entfernen, "Schlüssel beim Anbieter erstellen" via `@tauri-apps/plugin-opener`, newly added npm dep)
+  - endpoint override, model input with a `<datalist>` filled by "Modellliste laden", "Verbindung testen"
+- Tests: 109 core unit (+5 llm) and `tests/llm_http.rs` (4, one-shot local HTTP server): the body holds `[PERSON_1]` and not the name, answer restored, Bearer header, models sorted, 401 and 200-with-error mapped, unreachable endpoint.
+- E2E in the real debug app (isolated data dir + keychain user `e2e-llm`, removed afterwards), against a Node mock at 127.0.0.1:8765:
+  - `http://example.com` refused before any request
+  - bad key → "API-Schlüssel ungültig … (HTTP 401): Invalid API key"
+  - good key → "2 Modelle geladen", model saved → "Verbindung steht"
+  - config survives reload; audit `llm.test` without text, chain intact
+  - key not in the DB file, removing the key → `has_key` false
+  - The mock log shows only the fixed test prompt.
+- E2E harness note: sonner toasts are read with a MutationObserver that records every added `[data-sonner-toast]` (also inside newly mounted lists); reading the last visible toast picks up stale ones.
+- Not done: no drafting yet (no consumer of `chat` besides the test), no streaming, no real-provider test (needs the therapist's key).
+
 ## Current limitations
 
 - ~~Database is unencrypted~~ Encrypted SQLCipher build is live (2026-10-27): Strawberry Perl, LLVM, CMake installed, `LIBCLANG_PATH` set. Old plain DB backed up to `%APPDATA%\de.datorga.thera.plain-backup-20261027` (delete once not needed). A10's technical gates (encryption, recovery kit, verified backup) are done. Before real patients: legal review of the consent text and a restore test on the therapist's own machine.
-- Recording/dictation and local transcription work. No diarization (session recordings are one speaker stream, role `unknown`) and no AI drafting yet.
+- Recording/dictation and local transcription work. No diarization (session recordings are one speaker stream, role `unknown`). AI providers can be configured and tested, but nothing drafts with them yet.
+- The OpenRouter/Requesty paths are tested only against a mock. Before real use: one test with a real key, and check that the chosen model has a ZDR endpoint (OpenRouter) / an EU region with logging off (Requesty).
 - Transcription is **CPU only**. A 50-min session on a laptop CPU may take ~25–50 min (unmeasured on laptop hardware). The CUDA build is 285 MB+ and NVIDIA-only; Vulkan has no prebuilt Windows release (would need our own build). Decide once the therapist's laptop specs are known.
 - The sidecar reads a **plaintext WAV** from `stt-tmp` while it runs (deleted afterwards, wiped on next unlock after a crash). Possible hardening: whisper-cli `-f -` (stdin) + parsing stdout, or a Windows Job Object so a crashed app can't leave the sidecar running.
 - There is no audio playback in the transcript viewer, so the therapist reviews text without hearing it.
@@ -248,13 +279,23 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
    - upload old Berichte, old session notes and her forms (PDF/DOCX → text)
    - redaction review (pseudonymizer `detect()` spans), stored as style exemplars
    - the "Vorlagen" placeholder card stays until then
-12. **NEXT → Phase 2.** Decisions needed from the user before coding: which LLM provider/endpoint (EU-hosted default per plan, OpenAI-compatible API), who holds the API key (therapist's own key in Settings vs. a practice account), and whether drafts may leave the machine at all for the pilot (pseudonymized via `core::pseudo`, fail-closed). Then: LLM adapter (OpenAI-compatible, EU default, US-intermediary warning), per-session fact extraction with citations, Bericht drafting from facts + style exemplars, eval set.
-
+12. **Phase 2** (decisions and slices: PLAN-AMENDMENTS §9):
+   - ~~slice 11, LLM provider layer~~ **done**
+   - **NEXT → slice 12, local models:**
+     - hardware probe (total RAM via `GlobalMemoryStatusEx`, GPU name + VRAM via DXGI, CPU cores)
+     - a GGUF catalog (e.g. Qwen3 14B / Mistral Small 24B Q4_K_M for ≥32 GB, a 7–8B model as "experimental" at 16 GB; pin HF URLs + SHA-256 like `stt::MODELS`)
+     - a recommendation in Settings, with download/import reusing `start_transfer`
+     - a llama.cpp `llama-server` sidecar (fetch script with pinned hash like `fetch-whisper.ps1`, resource folder) started on 127.0.0.1 with a random port and stopped on exit
+     - provider `local` in `LlmConfig`, using the same `llm::chat`
+   - slice 13: fact extraction per session with segment citations + redaction preview → Sitzungsnotiz draft
+   - slice 14: Bericht drafting per section; store model/provider/prompt hash
+   - slice 15: eval set
+   - deferred: using a ChatGPT/OpenCode subscription (reasons in PLAN-AMENDMENTS §9). An endpoint with an API key already works as "Eigener Endpunkt".
 ## Open questions for the therapist
 
 - Exact **Chiffre** format (app suggests surname initial + DDMMYY).
 - 5–10 anonymized old Berichte and old Sitzungen + her style preferences (she brings them later and uploads them herself) (Phase 0 eval + first style exemplars).
-- Laptop specs (CPU, RAM, GPU) for local models: decides turbo-q5_0 vs. small and CPU vs. GPU build. Which report kinds matter most.
+- Laptop specs (CPU, RAM, GPU) for local models (slice 12 will detect them in the app): decides turbo-q5_0 vs. small and CPU vs. GPU build. Which report kinds matter most.
 
 ## Handy commands
 

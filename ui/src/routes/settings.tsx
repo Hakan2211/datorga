@@ -8,6 +8,7 @@ import { AlertTriangle, CheckCircle2, DatabaseBackup, Download, FolderOpen, KeyR
 import { Page, PageHeader } from '@/components/app-shell'
 import { RecoveryKitPanel } from '@/components/recovery-kit'
 import { RestoreBackup } from '@/components/backup-restore'
+import { LlmCard } from '@/components/llm-settings'
 import { formatDate } from '@/components/bits'
 import { DEFAULT_REMINDER_DAYS } from '@/lib/backup'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -51,6 +52,7 @@ function Settings() {
           </CardContent>
         </Card>
         <SttCard />
+        <LlmCard />
         <BackupCard />
         <Card className="max-w-2xl">
           <CardHeader>

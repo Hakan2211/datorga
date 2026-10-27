@@ -139,6 +139,35 @@ impl Store {
         })
     }
 
+    // ---------- llm ----------
+
+    pub fn llm_config(&self) -> Result<crate::llm::LlmConfig> {
+        Ok(self.setting(crate::llm::CONFIG_SETTING)?.map(serde_json::from_value).transpose()?.unwrap_or_default())
+    }
+
+    pub fn set_llm_config(&self, c: &crate::llm::LlmConfig) -> Result<()> {
+        self.set_setting(crate::llm::CONFIG_SETTING, &serde_json::to_value(c)?)
+    }
+
+    /// One outbound model call (`llm.test`, later `llm.draft`…): provider, model, size and
+    /// outcome only, never prompt or answer text.
+    pub fn log_llm_call(
+        &self,
+        action: &str,
+        provider: crate::llm::ProviderId,
+        model: &str,
+        outcome: std::result::Result<&crate::llm::Completion, &str>,
+    ) -> Result<()> {
+        let meta = match outcome {
+            Ok(c) => json!({
+                "provider": provider, "model": c.model, "ok": true,
+                "prompt_tokens": c.prompt_tokens, "completion_tokens": c.completion_tokens, "latency_ms": c.latency_ms,
+            }),
+            Err(_) => json!({ "provider": provider, "model": model, "ok": false }),
+        };
+        audit::append(&self.conn, Entry { actor: ACTOR, action, entity_type: "llm", entity_id: None, meta })
+    }
+
     // ---------- recovery key ----------
 
     /// "Neuen Notfall-Schlüssel erstellen": re-wraps `key` under a fresh recovery key. The audit

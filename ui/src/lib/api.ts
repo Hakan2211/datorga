@@ -25,6 +25,10 @@ import type { SourceSegment } from '@/bindings/SourceSegment'
 import type { Template } from '@/bindings/Template'
 import type { Transcript } from '@/bindings/Transcript'
 import type { BackupSummary } from '@/bindings/BackupSummary'
+import type { LlmConfig } from '@/bindings/LlmConfig'
+import type { ProviderId } from '@/bindings/ProviderId'
+import type { ProviderInfo } from '@/bindings/ProviderInfo'
+import type { RemoteModel } from '@/bindings/RemoteModel'
 
 export type InitResult = {
   status: 'ready' | 'recovery_required' | 'new'
@@ -65,6 +69,9 @@ export type SttOverview = {
   active: string
   models: { id: string; file: string; bytes: number; installed: boolean; transfer: Transfer | null }[]
 }
+
+export type LlmOverview = { config: LlmConfig; providers: (ProviderInfo & { has_key: boolean })[] }
+export type LlmTestResult = { model: string; latency_ms: number; answer: string }
 
 export const jobActive = (job: Job | null | undefined) => job?.status === 'queued' || job?.status === 'running'
 
@@ -138,6 +145,12 @@ export const api = {
   downloadModel: (id: string) => invoke<void>('stt_model_download', { id }),
   importModel: (id: string, path: string) => invoke<void>('stt_model_import', { id, path }),
 
+  llm: () => invoke<LlmOverview>('llm_overview'),
+  setLlmConfig: (config: LlmConfig) => invoke<void>('llm_config_set', { config }),
+  setLlmKey: (provider: ProviderId, key: string | null) => invoke<void>('llm_key_set', { provider, key }),
+  llmModels: (provider: ProviderId) => invoke<RemoteModel[]>('llm_models', { provider }),
+  testLlm: (provider: ProviderId) => invoke<LlmTestResult>('llm_test', { provider }),
+
   templates: () => invoke<Template[]>('templates_list'),
 
   reports: (status?: ReportStatus) => invoke<ReportSummary[]>('reports_list', { status: status ?? null }),
@@ -185,6 +198,7 @@ export const q = {
       refetchInterval: (query) =>
         query.state.data?.models.some((m) => m.transfer && !m.transfer.error) ? 500 : false,
     }),
+  llm: () => queryOptions({ queryKey: ['llm'], queryFn: api.llm }),
   audioDevices: () => queryOptions({ queryKey: ['audioDevices'], queryFn: api.audioDevices }),
   // Polled for the timer and level meter; cheap (no DB access).
   recording: () =>

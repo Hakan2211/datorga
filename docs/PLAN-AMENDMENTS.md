@@ -138,3 +138,24 @@ name leak blocks signing → fix → sign (read-only) → PDF + DOCX export → 
 Whisper (increment b) will need LLVM/clang.
 
 **Next:** increment (a) pseudonymizer `core::pseudo` + `Pseudonymized<T>`, then (b) consent flag + dictation + whisper-rs.
+
+---
+
+## 9. Phase 2 decisions (user, 2026-10-27)
+
+| # | Decision | Consequence |
+|---|---|---|
+| P1 | **Providers: OpenRouter and/or Requesty**, with the therapist choosing the model, plus any OpenAI-compatible endpoint ("Eigener Endpunkt": Mistral, a gateway, a local server). | Both are US intermediaries, so Settings shows a warning (A6). OpenRouter requests always send `provider: {zdr: true, data_collection: "deny"}`: a model without a zero-retention endpoint fails instead of falling back. Requesty defaults to its Frankfurt endpoint `router.eu.requesty.ai/v1`. Inference only stays in the EU with an EU-region model, and per-key logging must be switched off on Requesty's side (self-serve default: logged up to 30 days). |
+| P2 | **The therapist's own API key**, kept in the OS keychain (`de.datorga.thera` / `llm-<provider>`), never in the DB or backups. | She is the provider's direct customer (her own DPA). No server for us in the pilot. After a restore on a new machine she enters the key again. |
+| P3 | **Text may leave the machine only pseudonymized**, fail-closed (`llm::chat` takes only `Pseudonymized<String>`). Every call is audited with provider, model, token counts and latency, never text. | A redaction preview before drafting is part of the drafting slice. |
+| P4 | **Local models**: the app detects RAM/GPU, recommends a model and offers a hash-checked download (like whisper). | A llama.cpp `llama-server` sidecar on 127.0.0.1 behind the same OpenAI-compatible client. A5 still applies (≥32 GB RAM recommended, 16 GB experimental). |
+| P5 | **Using an existing ChatGPT/OpenCode subscription**: wanted by the user, **deferred** (see below). | Only if an official route appears. Anything that offers an API key + OpenAI-compatible endpoint already works via "Eigener Endpunkt". |
+
+**Why P5 is deferred:** OpenAI offers no official way for a third-party app to bill against a ChatGPT Plus/Pro subscription. The working tricks reuse the Codex CLI's sign-in token. That is unofficial, can break with any update, and puts the user's account at risk. Consumer subscriptions also run under consumer terms without an AVV/DPA, which isn't acceptable for Art. 9 health data, even pseudonymized. An OpenCode plan that comes with an API key and an OpenAI-compatible URL can be entered as "Eigener Endpunkt" today, after checking its data-processing terms.
+
+**Phase 2 slices:**
+- 11 LLM provider layer (done 2026-10-27).
+- 12 Local models: hardware probe, GGUF catalog + recommendation, download/import with SHA-256, `llama-server` sidecar, provider `local`.
+- 13 Per-session fact extraction with citations to transcript segments, plus a redaction preview, producing a Sitzungsnotiz draft.
+- 14 Bericht drafting per section from confirmed facts (later plus style exemplars). Each report stores model/provider/prompt version/hash (PLAN §5).
+- 15 Eval set (synthetic German sessions → expected facts), `cargo run -p eval`.

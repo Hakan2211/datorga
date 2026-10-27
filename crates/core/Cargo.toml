@@ -38,6 +38,7 @@ typst = "0.15"
 typst-pdf = "0.15"
 docx-rs = "0.4"
 regex = "1"
+ureq = "3"
 
 [dev-dependencies]
 tempfile = "3"

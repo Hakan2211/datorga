@@ -309,6 +309,35 @@ export const de = {
     practice: 'Praxis-Briefkopf (rechts oben im Bericht)',
     therapist: 'Ihr Name für Unterschriften',
     security: 'Sicherheit',
+    llm: {
+      title: 'KI-Entwürfe',
+      intro:
+        'Nur pseudonymisierte Texte verlassen diesen Rechner: Namen, Orte, Arbeitgeber und Daten werden vorher durch Platzhalter ersetzt und in der Antwort wieder eingesetzt. Jede Anfrage wird im Protokoll vermerkt (ohne Text).',
+      provider: 'Anbieter',
+      off: 'Aus (keine KI)',
+      key: 'API-Schlüssel',
+      keyStored: 'hinterlegt',
+      keyRemove: 'Entfernen',
+      keySaved: 'API-Schlüssel im Schlüsselbund gespeichert',
+      keyRemoved: 'API-Schlüssel entfernt',
+      keyHint: 'Wird im Schlüsselbund des Betriebssystems gespeichert, nicht in der Datenbank oder Datensicherung.',
+      keyCreate: 'Schlüssel beim Anbieter erstellen',
+      baseUrl: 'Endpunkt',
+      baseUrlHint: 'Leer lassen für die Voreinstellung.',
+      model: 'Modell',
+      modelPlaceholder: 'z. B. mistralai/mistral-medium-3',
+      loadModels: 'Modellliste laden',
+      modelsLoaded: '{{count}} Modelle geladen',
+      test: 'Verbindung testen',
+      testing: 'Teste…',
+      testOk: 'Verbindung steht: {{model}} ({{ms}} ms)',
+      warning: {
+        openrouter:
+          'OpenRouter ist ein US-Unternehmen. thera fordert bei jeder Anfrage nur Anbieter ohne Datenspeicherung an (Zero Data Retention); gibt es für das Modell keinen, schlägt die Anfrage fehl. Den EU-Endpunkt (eu.openrouter.ai) gibt es nur in Business-Tarifen.',
+        requesty:
+          'Requesty ist ein US-Unternehmen; der voreingestellte EU-Endpunkt verarbeitet in Frankfurt. Schalten Sie für den Schlüssel das Protokollieren von Anfragen ab und wählen Sie ein Modell mit EU-Region, sonst wird außerhalb der EU gerechnet.',
+      },
+    },
     stt: {
       title: 'Transkription (lokal)',
       intro:

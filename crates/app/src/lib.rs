@@ -15,6 +15,7 @@ use thera_core::backup::{self, BackupSummary, Unlocked};
 use thera_core::consent::{self, ConsentText};
 use thera_core::crypto::{self, KeyStore, MasterKey, Unlock};
 use thera_core::domain::*;
+use thera_core::llm::{self, Endpoint, LlmConfig, ProviderId, ProviderInfo, RemoteModel};
 use thera_core::pii::{self, CheckItem};
 use thera_core::render;
 use thera_core::store::Store;
@@ -1097,6 +1098,108 @@ fn setting_set(state: State<'_, AppState>, key: String, value: serde_json::Value
     state.with(|s| s.set_setting(&key, &value))
 }
 
+// ---------- llm (Phase 2) ----------
+
+/// Keychain entry for a provider's API key. Debug runs with `THERA_KEYRING_USER` get their own.
+fn llm_key_entry(state: &AppState, id: ProviderId) -> CmdResult<keyring::Entry> {
+    let id = serde_json::to_value(id).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+    let user = if state.keyring_user == KEYRING_USER { format!("llm-{id}") } else { format!("{}-llm-{id}", state.keyring_user) };
+    keyring::Entry::new(KEYRING_SERVICE, &user).map_err(|e| kr(e).into())
+}
+
+fn llm_key(state: &AppState, id: ProviderId) -> CmdResult<Option<String>> {
+    match llm_key_entry(state, id)?.get_password() {
+        Ok(k) => Ok(Some(k)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(kr(e).into()),
+    }
+}
+
+fn llm_endpoint(state: &AppState, id: ProviderId) -> CmdResult<(Endpoint, LlmConfig)> {
+    let config = state.with(|s| s.llm_config())?;
+    let api_key = llm_key(state, id)?;
+    if llm::provider(id).needs_key && api_key.is_none() {
+        return Err(CmdError::Other("Kein API-Schlüssel hinterlegt".into()));
+    }
+    let base_url = config.base_url(id);
+    if base_url.is_empty() {
+        return Err(CmdError::Other("Kein Endpunkt eingetragen".into()));
+    }
+    Ok((Endpoint { provider: id, base_url, api_key }, config))
+}
+
+#[derive(Serialize)]
+struct LlmProviderView {
+    #[serde(flatten)]
+    info: ProviderInfo,
+    has_key: bool,
+}
+
+#[derive(Serialize)]
+struct LlmOverview {
+    config: LlmConfig,
+    providers: Vec<LlmProviderView>,
+}
+
+#[tauri::command]
+fn llm_overview(state: State<'_, AppState>) -> CmdResult<LlmOverview> {
+    let config = state.with(|s| s.llm_config())?;
+    let providers = llm::providers()
+        .into_iter()
+        .map(|info| Ok(LlmProviderView { has_key: llm_key(&state, info.id)?.is_some(), info }))
+        .collect::<CmdResult<_>>()?;
+    Ok(LlmOverview { config, providers })
+}
+
+#[tauri::command]
+fn llm_config_set(state: State<'_, AppState>, config: LlmConfig) -> CmdResult<()> {
+    state.with(|s| s.set_llm_config(&config))
+}
+
+/// Stores (or with `None`/empty removes) a provider's API key in the OS keychain.
+#[tauri::command]
+fn llm_key_set(state: State<'_, AppState>, provider: ProviderId, key: Option<String>) -> CmdResult<()> {
+    let entry = llm_key_entry(&state, provider)?;
+    match key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
+        Some(k) => entry.set_password(&k).map_err(kr)?,
+        None => match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(e) => return Err(kr(e).into()),
+        },
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn llm_models(app: AppHandle, provider: ProviderId) -> CmdResult<Vec<RemoteModel>> {
+    blocking(app, move |state| {
+        let (ep, _) = llm_endpoint(state, provider)?;
+        Ok(llm::list_models(&ep)?)
+    })
+    .await
+}
+
+#[derive(Serialize)]
+struct LlmTestResult {
+    model: String,
+    latency_ms: u64,
+    answer: String,
+}
+
+/// Sends a fixed prompt (no patient data) to the provider's chosen model.
+#[tauri::command]
+async fn llm_test(app: AppHandle, provider: ProviderId) -> CmdResult<LlmTestResult> {
+    blocking(app, move |state| {
+        let (ep, config) = llm_endpoint(state, provider)?;
+        let model = config.settings(provider).model.filter(|m| !m.is_empty()).ok_or_else(|| CmdError::Other("Kein Modell gewählt".into()))?;
+        let result = llm::ping(&ep, &model);
+        state.with(|s| s.log_llm_call("llm.test", provider, &model, result.as_ref().map_err(|_| "error")))?;
+        let c = result?;
+        Ok(LlmTestResult { model: c.model, latency_ms: c.latency_ms, answer: c.text.chars().take(200).collect() })
+    })
+    .await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1186,6 +1289,11 @@ pub fn run() {
             audit_verify,
             setting_get,
             setting_set,
+            llm_overview,
+            llm_config_set,
+            llm_key_set,
+            llm_models,
+            llm_test,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
