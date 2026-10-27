@@ -12,6 +12,13 @@ sqlcipher = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
 # Dev-only fallback so the core compiles/tests without the OpenSSL toolchain. Encryption is NOT active.
 plain-sqlite = ["rusqlite/bundled"]
 
+# Test-only stand-in for whisper-cli (see tests/stt_sidecar.rs).
+[[bin]]
+name = "thera-fake-whisper"
+path = "tests/support/fake_whisper.rs"
+test = false
+doc = false
+
 [dependencies]
 rusqlite = { version = "0.37" }
 serde.workspace = true

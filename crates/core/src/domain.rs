@@ -54,6 +54,15 @@ str_enum!(
     SourceKind { SessionAudio => "session_audio", Dictation => "dictation" }
 );
 str_enum!(SourceStatus { Recording => "recording", Recorded => "recorded", Interrupted => "interrupted" });
+str_enum!(
+    /// A confirmed transcript is read-only; confirming deletes the audio.
+    TranscriptStatus { Draft => "draft", Confirmed => "confirmed" }
+);
+str_enum!(JobStatus { Queued => "queued", Running => "running", Done => "done", Failed => "failed", Cancelled => "cancelled" });
+str_enum!(
+    /// Who speaks in a segment. Session recordings stay `unknown` until diarization exists.
+    Speaker { Therapist => "therapist", Patient => "patient", Unknown => "unknown" }
+);
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -154,6 +163,7 @@ pub struct SessionSource {
     pub kind: SourceKind,
     pub consent_id: Option<String>,
     pub status: SourceStatus,
+    pub language: String,
     pub started_at: String,
     pub ended_at: Option<String>,
     pub end_reason: Option<String>,
@@ -161,6 +171,63 @@ pub struct SessionSource {
     #[ts(type = "number | null")]
     pub duration_ms: Option<i64>,
     pub audio_deleted_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Transcript {
+    pub id: String,
+    pub source_id: String,
+    pub engine: String,
+    pub model: String,
+    pub language: String,
+    pub status: TranscriptStatus,
+    pub created_at: String,
+    pub confirmed_at: Option<String>,
+    pub segments: Vec<TranscriptSegment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TranscriptSegment {
+    #[ts(type = "number")]
+    pub idx: i64,
+    #[ts(type = "number")]
+    pub start_ms: i64,
+    #[ts(type = "number")]
+    pub end_ms: i64,
+    pub text: String,
+    pub edited: bool,
+}
+
+/// Background work (transcription) that survives an app restart.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Job {
+    pub id: String,
+    pub kind: String,
+    pub source_id: Option<String>,
+    pub status: JobStatus,
+    #[ts(type = "number")]
+    pub progress: i64,
+    #[ts(type = "number")]
+    pub attempts: i64,
+    pub last_error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// What every downstream stage consumes, whatever the capture mode (PLAN §6).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SourceSegment {
+    pub source_id: String,
+    pub role: Speaker,
+    #[ts(type = "number")]
+    pub start_ms: i64,
+    #[ts(type = "number")]
+    pub end_ms: i64,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

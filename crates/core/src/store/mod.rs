@@ -8,6 +8,7 @@ use serde_json::json;
 
 use crate::audio::{self, AudioKey, ChunkWriter};
 use crate::audit::{self, Entry};
+use crate::stt;
 use crate::consent;
 use crate::crypto::MasterKey;
 use crate::domain::*;
@@ -17,7 +18,11 @@ use crate::{Error, Result};
 const ACTOR: &str = "therapist";
 
 /// Ordered migrations; index + 1 = schema version (stored in `PRAGMA user_version`).
-const MIGRATIONS: &[&str] = &[include_str!("migrations/V1__spine.sql"), include_str!("migrations/V2__capture.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("migrations/V1__spine.sql"),
+    include_str!("migrations/V2__capture.sql"),
+    include_str!("migrations/V3__transcription.sql"),
+];
 
 pub struct Store {
     conn: Connection,
@@ -497,6 +502,244 @@ impl Store {
         Ok((PathBuf::from(path), AudioKey::from_hex(&dek)?))
     }
 
+    // ---------- transcription ----------
+
+    /// Queues a transcription of a finished recording. Re-running replaces a draft transcript.
+    pub fn enqueue_transcription(&self, source_id: &str) -> Result<Job> {
+        let src = self.source(source_id)?;
+        if src.status == SourceStatus::Recording {
+            return Err(Error::Invalid("Die Aufnahme läuft noch".into()));
+        }
+        if src.audio_deleted_at.is_some() {
+            return Err(Error::Invalid("Das Audio wurde bereits gelöscht".into()));
+        }
+        if self.transcript_for_source(source_id)?.is_some_and(|t| t.status == TranscriptStatus::Confirmed) {
+            return Err(Error::Invalid("Die Abschrift ist bereits bestätigt".into()));
+        }
+        if self.latest_job(source_id)?.is_some_and(|j| matches!(j.status, JobStatus::Queued | JobStatus::Running)) {
+            return Err(Error::Invalid("Die Transkription läuft bereits".into()));
+        }
+        let id = new_id();
+        let ts = now();
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO job (id, kind, source_id, created_at, updated_at) VALUES (?1, 'transcribe', ?2, ?3, ?3)",
+            params![id, source_id, ts],
+        )?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "transcription.enqueue", entity_type: "job", entity_id: Some(&id),
+            meta: json!({ "source_id": source_id }),
+        })?;
+        tx.commit()?;
+        self.job(&id)
+    }
+
+    /// Takes the oldest queued job and marks it running.
+    pub fn claim_next_job(&self) -> Result<Option<Job>> {
+        let id: Option<String> = self
+            .conn
+            .query_row("SELECT id FROM job WHERE status = 'queued' ORDER BY created_at, rowid LIMIT 1", [], |r| r.get(0))
+            .optional()?;
+        let Some(id) = id else { return Ok(None) };
+        self.conn.execute(
+            "UPDATE job SET status = 'running', attempts = attempts + 1, progress = 0, last_error = NULL, updated_at = ?2
+             WHERE id = ?1",
+            params![id, now()],
+        )?;
+        Ok(Some(self.job(&id)?))
+    }
+
+    pub fn set_job_progress(&self, id: &str, progress: u8) -> Result<()> {
+        self.conn.execute(
+            "UPDATE job SET progress = ?2, updated_at = ?3 WHERE id = ?1 AND status = 'running'",
+            params![id, progress, now()],
+        )?;
+        Ok(())
+    }
+
+    /// Ends a job as failed or cancelled. `error` must be a technical message: it is shown in
+    /// the UI and kept in the database, so it never carries transcript text.
+    pub fn fail_job(&self, id: &str, status: JobStatus, error: Option<&str>) -> Result<()> {
+        if !matches!(status, JobStatus::Failed | JobStatus::Cancelled) {
+            return Err(Error::Invalid(format!("fail_job with status {}", status.as_str())));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE job SET status = ?2, last_error = ?3, updated_at = ?4 WHERE id = ?1",
+            params![id, status.as_str(), error, now()],
+        )?;
+        audit::append(&tx, Entry {
+            actor: "system", action: "transcription.end", entity_type: "job", entity_id: Some(id),
+            meta: json!({ "status": status.as_str() }),
+        })?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Cancels a queued job. A running one is stopped by the worker, which then calls `fail_job`.
+    pub fn cancel_queued_job(&self, id: &str) -> Result<bool> {
+        if self.job(id)?.status != JobStatus::Queued {
+            return Ok(false);
+        }
+        self.fail_job(id, JobStatus::Cancelled, None)?;
+        Ok(true)
+    }
+
+    /// After a restart: work that was running is queued again.
+    pub fn requeue_running_jobs(&self) -> Result<usize> {
+        Ok(self.conn.execute("UPDATE job SET status = 'queued', progress = 0, updated_at = ?1 WHERE status = 'running'", [now()])?)
+    }
+
+    pub fn job(&self, id: &str) -> Result<Job> {
+        self.conn
+            .query_row(&format!("{JOB_SELECT} WHERE id = ?1"), [id], row_to_job)
+            .optional()?
+            .ok_or_else(|| Error::NotFound(format!("job {id}")))
+    }
+
+    pub fn latest_job(&self, source_id: &str) -> Result<Option<Job>> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!("{JOB_SELECT} WHERE source_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 1"),
+                [source_id],
+                row_to_job,
+            )
+            .optional()?)
+    }
+
+    /// Stores the engine output as a draft transcript and closes the job, in one transaction.
+    pub fn finish_transcription(&self, job_id: &str, engine: &str, model: &str, segments: &[stt::Segment]) -> Result<Transcript> {
+        let source_id = self.job(job_id)?.source_id.ok_or_else(|| Error::Invalid("job has no source".into()))?;
+        let language: String =
+            self.conn.query_row("SELECT language FROM session_source WHERE id = ?1", [&source_id], |r| r.get(0))?;
+        let tx = self.conn.unchecked_transaction()?;
+        let confirmed: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM transcript WHERE source_id = ?1 AND status = 'confirmed')",
+            [&source_id],
+            |r| r.get(0),
+        )?;
+        if confirmed {
+            return Err(Error::Invalid("Die Abschrift ist bereits bestätigt".into()));
+        }
+        tx.execute("DELETE FROM transcript WHERE source_id = ?1", [&source_id])?;
+        let id = new_id();
+        let ts = now();
+        tx.execute(
+            "INSERT INTO transcript (id, source_id, engine, model, language, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, source_id, engine, model, language, ts],
+        )?;
+        for (i, seg) in segments.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO transcript_segment (id, transcript_id, idx, start_ms, end_ms, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![new_id(), id, i as i64, seg.start_ms, seg.end_ms, seg.text],
+            )?;
+        }
+        tx.execute("UPDATE job SET status = 'done', progress = 100, updated_at = ?2 WHERE id = ?1", params![job_id, ts])?;
+        audit::append(&tx, Entry {
+            actor: "system", action: "transcript.create", entity_type: "transcript", entity_id: Some(&id),
+            meta: json!({ "source_id": source_id, "engine": engine, "model": model, "segments": segments.len() }),
+        })?;
+        tx.commit()?;
+        self.transcript(&id)
+    }
+
+    pub fn transcript(&self, id: &str) -> Result<Transcript> {
+        let mut t = self
+            .conn
+            .query_row(&format!("{TRANSCRIPT_SELECT} WHERE id = ?1"), [id], row_to_transcript)
+            .optional()?
+            .ok_or_else(|| Error::NotFound(format!("transcript {id}")))?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT idx, start_ms, end_ms, text, edited FROM transcript_segment WHERE transcript_id = ?1 ORDER BY idx")?;
+        t.segments = stmt
+            .query_map([id], |r| {
+                Ok(TranscriptSegment { idx: r.get(0)?, start_ms: r.get(1)?, end_ms: r.get(2)?, text: r.get(3)?, edited: r.get(4)? })
+            })?
+            .collect::<std::result::Result<_, _>>()?;
+        Ok(t)
+    }
+
+    pub fn transcript_for_source(&self, source_id: &str) -> Result<Option<Transcript>> {
+        let id: Option<String> =
+            self.conn.query_row("SELECT id FROM transcript WHERE source_id = ?1", [source_id], |r| r.get(0)).optional()?;
+        id.map(|id| self.transcript(&id)).transpose()
+    }
+
+    /// The therapist corrects a segment before confirming.
+    pub fn edit_segment(&self, transcript_id: &str, idx: i64, text: &str) -> Result<()> {
+        if self.transcript(transcript_id)?.status == TranscriptStatus::Confirmed {
+            return Err(Error::Invalid("Die Abschrift ist bestätigt und schreibgeschützt".into()));
+        }
+        let n = self.conn.execute(
+            "UPDATE transcript_segment SET text = ?3, edited = 1 WHERE transcript_id = ?1 AND idx = ?2",
+            params![transcript_id, idx, text.trim()],
+        )?;
+        if n == 0 {
+            return Err(Error::NotFound(format!("segment {idx}")));
+        }
+        Ok(())
+    }
+
+    /// Confirms a transcript and deletes the recording it came from: the text is what stays.
+    /// The key is wiped in the same transaction, so a chunk file that survives is unreadable.
+    pub fn confirm_transcript(&self, id: &str) -> Result<Transcript> {
+        let t = self.transcript(id)?;
+        let audio_dir: Option<String> = self
+            .conn
+            .query_row("SELECT path FROM audio_asset WHERE source_id = ?1 AND deleted_at IS NULL", [&t.source_id], |r| r.get(0))
+            .optional()?;
+        let ts = now();
+        let tx = self.conn.unchecked_transaction()?;
+        let n = tx.execute(
+            "UPDATE transcript SET status = 'confirmed', confirmed_at = ?2 WHERE id = ?1 AND status = 'draft'",
+            params![id, ts],
+        )?;
+        if n == 0 {
+            return Err(Error::Invalid("Die Abschrift ist bereits bestätigt".into()));
+        }
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "transcript.confirm", entity_type: "transcript", entity_id: Some(id),
+            meta: json!({ "source_id": t.source_id, "edited": t.segments.iter().filter(|s| s.edited).count() }),
+        })?;
+        if audio_dir.is_some() {
+            tx.execute("UPDATE audio_asset SET deleted_at = ?2, dek = '' WHERE source_id = ?1", params![t.source_id, ts])?;
+            audit::append(&tx, Entry {
+                actor: ACTOR, action: "audio.delete", entity_type: "session_source", entity_id: Some(&t.source_id),
+                meta: json!({ "reason": "transcript_confirmed" }),
+            })?;
+        }
+        tx.commit()?;
+        if let Some(dir) = audio_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        self.transcript(id)
+    }
+
+    /// The pipeline's input for a session: confirmed transcripts only, in recording order.
+    pub fn source_segments(&self, session_id: &str) -> Result<Vec<SourceSegment>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT src.id, src.kind, seg.start_ms, seg.end_ms, seg.text
+             FROM transcript_segment seg
+             JOIN transcript t ON t.id = seg.transcript_id
+             JOIN session_source src ON src.id = t.source_id
+             WHERE src.session_id = ?1 AND t.status = 'confirmed'
+             ORDER BY src.started_at, seg.idx",
+        )?;
+        let rows = stmt.query_map([session_id], |r| {
+            let kind: SourceKind = parse_col(r, 1)?;
+            Ok(SourceSegment {
+                source_id: r.get(0)?,
+                role: if kind == SourceKind::Dictation { Speaker::Therapist } else { Speaker::Unknown },
+                start_ms: r.get(2)?,
+                end_ms: r.get(3)?,
+                text: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     // ---------- reports ----------
 
     pub fn report(&self, id: &str) -> Result<Report> {
@@ -653,6 +896,39 @@ const EPISODE_SELECT: &str =
 const SESSION_SELECT: &str = "SELECT id, patient_id, episode_id, scheduled_at, started_at, ended_at, duration_s,
     modality, status FROM session";
 
+const JOB_SELECT: &str =
+    "SELECT id, kind, source_id, status, progress, attempts, last_error, created_at, updated_at FROM job";
+const TRANSCRIPT_SELECT: &str =
+    "SELECT id, source_id, engine, model, language, status, created_at, confirmed_at FROM transcript";
+
+fn row_to_job(r: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
+    Ok(Job {
+        id: r.get(0)?,
+        kind: r.get(1)?,
+        source_id: r.get(2)?,
+        status: parse_col(r, 3)?,
+        progress: r.get(4)?,
+        attempts: r.get(5)?,
+        last_error: r.get(6)?,
+        created_at: r.get(7)?,
+        updated_at: r.get(8)?,
+    })
+}
+
+fn row_to_transcript(r: &rusqlite::Row<'_>) -> rusqlite::Result<Transcript> {
+    Ok(Transcript {
+        id: r.get(0)?,
+        source_id: r.get(1)?,
+        engine: r.get(2)?,
+        model: r.get(3)?,
+        language: r.get(4)?,
+        status: parse_col(r, 5)?,
+        created_at: r.get(6)?,
+        confirmed_at: r.get(7)?,
+        segments: vec![],
+    })
+}
+
 fn row_to_patient(r: &rusqlite::Row<'_>) -> rusqlite::Result<Patient> {
     Ok(Patient {
         id: r.get(0)?,
@@ -670,7 +946,7 @@ fn row_to_patient(r: &rusqlite::Row<'_>) -> rusqlite::Result<Patient> {
 }
 
 const SOURCE_SELECT: &str = "SELECT src.id, src.session_id, src.kind, src.consent_id, src.status, src.started_at,
-    src.ended_at, src.end_reason, a.duration_ms, a.deleted_at
+    src.ended_at, src.end_reason, a.duration_ms, a.deleted_at, src.language
     FROM session_source src LEFT JOIN audio_asset a ON a.source_id = src.id";
 
 fn row_to_source(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSource> {
@@ -685,6 +961,7 @@ fn row_to_source(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSource> {
         end_reason: r.get(7)?,
         duration_ms: r.get(8)?,
         audio_deleted_at: r.get(9)?,
+        language: r.get(10)?,
     })
 }
 
@@ -906,6 +1183,100 @@ mod tests {
         store.erase_patient(&p.id).unwrap();
         assert!(!path.exists(), "erasure removes the audio directory");
         assert!(store.source(&src.id).is_err());
+    }
+
+    fn recorded_dictation(store: &Store, s: &Session, dir: &Path) -> SessionSource {
+        let (src, mut w) = store.start_source(&s.id, SourceKind::Dictation, dir).unwrap();
+        w.write(&vec![5i16; 8_000]).unwrap();
+        store.finish_source(&src.id, "stopped", &w).unwrap()
+    }
+
+    fn seg(start_ms: i64, text: &str) -> stt::Segment {
+        stt::Segment { start_ms, end_ms: start_ms + 1000, text: text.into() }
+    }
+
+    #[test]
+    fn transcription_job_lifecycle_and_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let s = session(&store, &p);
+        let src = recorded_dictation(&store, &s, dir.path());
+
+        let job = store.enqueue_transcription(&src.id).unwrap();
+        assert_eq!(job.status, JobStatus::Queued);
+        assert!(store.enqueue_transcription(&src.id).is_err(), "one active job per source");
+
+        let claimed = store.claim_next_job().unwrap().unwrap();
+        assert_eq!((claimed.id.as_str(), claimed.status, claimed.attempts), (job.id.as_str(), JobStatus::Running, 1));
+        assert!(store.claim_next_job().unwrap().is_none());
+        store.set_job_progress(&job.id, 40).unwrap();
+        assert_eq!(store.job(&job.id).unwrap().progress, 40);
+
+        // App restart mid-run: the job is picked up again.
+        assert_eq!(store.requeue_running_jobs().unwrap(), 1);
+        let again = store.claim_next_job().unwrap().unwrap();
+        assert_eq!((again.attempts, again.progress), (2, 0));
+
+        let t = store.finish_transcription(&job.id, "whisper.cpp-test", "small-q5_1", &[seg(0, "Erster Satz."), seg(1000, "Zweiter.")]).unwrap();
+        assert_eq!((t.status, t.segments.len(), t.language.as_str()), (TranscriptStatus::Draft, 2, "de"));
+        assert_eq!(store.job(&job.id).unwrap().status, JobStatus::Done);
+
+        // Re-running replaces the draft.
+        let j2 = store.enqueue_transcription(&src.id).unwrap();
+        store.claim_next_job().unwrap();
+        let t2 = store.finish_transcription(&j2.id, "whisper.cpp-test", "small-q5_1", &[seg(0, "Neu.")]).unwrap();
+        assert_eq!(t2.segments.len(), 1);
+        assert!(store.transcript(&t.id).is_err());
+
+        let j3 = store.enqueue_transcription(&src.id).unwrap();
+        assert!(store.cancel_queued_job(&j3.id).unwrap());
+        assert_eq!(store.job(&j3.id).unwrap().status, JobStatus::Cancelled);
+        assert_eq!(store.latest_job(&src.id).unwrap().unwrap().id, j3.id);
+        assert_eq!(audit::verify(store.conn()).unwrap(), None);
+    }
+
+    #[test]
+    fn confirming_a_transcript_deletes_audio_and_feeds_source_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let s = session(&store, &p);
+        let src = recorded_dictation(&store, &s, dir.path());
+        let job = store.enqueue_transcription(&src.id).unwrap();
+        store.claim_next_job().unwrap();
+        let t = store.finish_transcription(&job.id, "e", "m", &[seg(0, "Schlaf schlecht."), seg(1000, "Panik im Supermarkt.")]).unwrap();
+        assert!(store.source_segments(&s.id).unwrap().is_empty(), "drafts do not feed the pipeline");
+
+        store.edit_segment(&t.id, 1, "  Panikattacke im Supermarkt. ").unwrap();
+        let (audio_dir, _) = store.audio_location(&src.id).unwrap();
+        assert!(audio_dir.exists());
+
+        let done = store.confirm_transcript(&t.id).unwrap();
+        assert_eq!(done.status, TranscriptStatus::Confirmed);
+        assert!(done.segments[1].edited && !done.segments[0].edited);
+        assert!(!audio_dir.exists(), "audio is removed on confirm");
+        assert!(store.audio_location(&src.id).is_err());
+        let dek: String = store.conn().query_row("SELECT dek FROM audio_asset WHERE source_id = ?1", [&src.id], |r| r.get(0)).unwrap();
+        assert!(dek.is_empty(), "key is wiped");
+        assert!(store.source(&src.id).unwrap().audio_deleted_at.is_some());
+
+        assert!(store.edit_segment(&t.id, 0, "x").is_err(), "confirmed is read-only");
+        assert!(store.confirm_transcript(&t.id).is_err());
+        assert!(store.enqueue_transcription(&src.id).is_err(), "no audio left to transcribe");
+
+        let segs = store.source_segments(&s.id).unwrap();
+        assert_eq!(segs.len(), 2);
+        assert_eq!((segs[1].role, segs[1].text.as_str()), (Speaker::Therapist, "Panikattacke im Supermarkt."));
+
+        let events = audit::list(store.conn(), 50).unwrap();
+        assert!(events.iter().any(|e| e.action == "audio.delete"));
+        assert!(events.iter().all(|e| !e.meta_json.contains("Panik")), "no transcript text in the audit log");
+        assert_eq!(audit::verify(store.conn()).unwrap(), None);
+
+        store.erase_patient(&p.id).unwrap();
+        assert!(store.transcript(&t.id).is_err(), "erasure cascades to transcripts");
+        assert!(store.job(&job.id).is_err(), "and jobs");
     }
 
     #[test]

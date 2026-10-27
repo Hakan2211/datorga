@@ -9,6 +9,7 @@ pub mod pii;
 pub mod pseudo;
 pub mod render;
 pub mod store;
+pub mod stt;
 pub mod templates;
 
 #[cfg(not(any(feature = "sqlcipher", feature = "plain-sqlite")))]
@@ -32,6 +33,10 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("{0}")]
+    Stt(String),
+    #[error("Abgebrochen")]
+    Cancelled,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

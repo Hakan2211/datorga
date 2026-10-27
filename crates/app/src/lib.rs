@@ -1,11 +1,13 @@
 //! Tauri shell: thin command wrappers over `thera_core`. No business logic lives here.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use tauri::{Manager, State};
+use tauri::{AppHandle, Manager, State};
 use thera_capture::{InputDevice, Recorder};
 use thera_core::audio::{self, ChunkWriter};
 use thera_core::consent::{self, ConsentText};
@@ -14,6 +16,7 @@ use thera_core::domain::*;
 use thera_core::pii::{self, CheckItem};
 use thera_core::render;
 use thera_core::store::Store;
+use thera_core::stt::{self, WhisperCli};
 use thera_core::templates::{Context, Template};
 
 const KEYRING_SERVICE: &str = "de.datorga.thera";
@@ -64,8 +67,30 @@ fn kr(e: keyring::Error) -> thera_core::Error {
 
 struct AppState {
     data_dir: PathBuf,
+    /// Bundled resources; holds the whisper.cpp sidecar in `whisper/`.
+    resource_dir: PathBuf,
     store: Mutex<Option<Store>>,
     recording: Mutex<Option<ActiveRecording>>,
+    /// Set when there may be queued jobs; the worker waits on it.
+    work: (Mutex<bool>, Condvar),
+    transcribing: Mutex<Option<RunningJob>>,
+    /// The app is closing: a killed job stays `running` and is re-queued on the next unlock.
+    exiting: AtomicBool,
+    /// Model downloads/imports in progress (or failed), by model id.
+    model_transfers: Mutex<HashMap<String, Transfer>>,
+}
+
+struct RunningJob {
+    job_id: String,
+    source_id: String,
+    cancel: Arc<AtomicBool>,
+}
+
+#[derive(Clone, Serialize)]
+struct Transfer {
+    received: u64,
+    total: u64,
+    error: Option<String>,
 }
 
 /// The one recording that may run at a time.
@@ -88,18 +113,50 @@ impl AppState {
     fn audio_root(&self) -> PathBuf {
         self.data_dir.join("audio")
     }
-    /// Opens the store and closes sources a previous crash left in `recording`.
+    fn models_dir(&self) -> PathBuf {
+        self.data_dir.join("models")
+    }
+    /// Plaintext WAV/JSON while the sidecar runs. Wiped on every unlock (crash leftovers).
+    fn stt_tmp(&self) -> PathBuf {
+        self.data_dir.join("stt-tmp")
+    }
+    fn whisper_dir(&self) -> PathBuf {
+        self.resource_dir.join("whisper")
+    }
+    /// e.g. `whisper.cpp-b5454`; `None` when the sidecar is missing from this build.
+    fn engine(&self) -> Option<String> {
+        if !self.whisper_dir().join("whisper-cli.exe").exists() {
+            return None;
+        }
+        let version = std::fs::read_to_string(self.whisper_dir().join("VERSION")).unwrap_or_default();
+        Some(format!("{}-{}", stt::ENGINE, version.trim()))
+    }
+    /// Opens the store, closes sources a previous crash left in `recording` and resumes jobs.
     fn open_store(&self, key: &MasterKey) -> CmdResult<()> {
         let store = Store::open(&self.db_path(), key)?;
         store.recover_interrupted_sources()?;
-        *self.store.lock().map_err(|_| CmdError::Other("state poisoned".into()))? = Some(store);
+        store.requeue_running_jobs()?;
+        let _ = std::fs::remove_dir_all(self.stt_tmp());
+        *lock(&self.store)? = Some(store);
+        self.wake_worker();
         Ok(())
+    }
+    fn wake_worker(&self) {
+        let (flag, cv) = &self.work;
+        if let Ok(mut f) = flag.lock() {
+            *f = true;
+            cv.notify_one();
+        }
     }
     fn with<T>(&self, f: impl FnOnce(&Store) -> thera_core::Result<T>) -> CmdResult<T> {
         let guard = self.store.lock().map_err(|_| CmdError::Other("state poisoned".into()))?;
         let store = guard.as_ref().ok_or_else(|| CmdError::Other("locked".into()))?;
         Ok(f(store)?)
     }
+}
+
+fn lock<T>(m: &Mutex<T>) -> CmdResult<MutexGuard<'_, T>> {
+    m.lock().map_err(|_| CmdError::Other("state poisoned".into()))
 }
 
 #[derive(Serialize)]
@@ -158,6 +215,14 @@ fn patient_update(state: State<'_, AppState>, id: String, input: PatientInput) -
 
 #[tauri::command]
 fn patient_erase(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    // A running transcription of this patient is stopped first, which removes its plaintext WAV.
+    let running = lock(&state.transcribing)?.as_ref().map(|r| (r.source_id.clone(), r.cancel.clone()));
+    if let Some((source_id, cancel)) = running {
+        let owner = state.with(|s| Ok(s.session(&s.source(&source_id)?.session_id)?.patient_id))?;
+        if owner == id {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
     state.with(|s| s.erase_patient(&id))
 }
 
@@ -275,15 +340,270 @@ fn stop_recording(state: &AppState, reason: &str) -> CmdResult<SessionSource> {
 struct SessionView {
     session: Session,
     patient: Patient,
-    sources: Vec<SessionSource>,
+    sources: Vec<SourceView>,
+}
+
+#[derive(Serialize)]
+struct SourceView {
+    #[serde(flatten)]
+    source: SessionSource,
+    /// Latest transcription job, if any.
+    job: Option<Job>,
+    transcript: Option<Transcript>,
 }
 
 #[tauri::command]
 fn session_get(state: State<'_, AppState>, id: String) -> CmdResult<SessionView> {
     state.with(|s| {
         let session = s.session(&id)?;
-        Ok(SessionView { patient: s.patient(&session.patient_id)?, sources: s.list_sources(&id)?, session })
+        let sources = s
+            .list_sources(&id)?
+            .into_iter()
+            .map(|src| Ok(SourceView { job: s.latest_job(&src.id)?, transcript: s.transcript_for_source(&src.id)?, source: src }))
+            .collect::<thera_core::Result<_>>()?;
+        Ok(SessionView { patient: s.patient(&session.patient_id)?, sources, session })
     })
+}
+
+// ---------- transcription ----------
+
+#[tauri::command]
+fn transcription_start(state: State<'_, AppState>, source_id: String) -> CmdResult<Job> {
+    let job = state.with(|s| s.enqueue_transcription(&source_id))?;
+    state.wake_worker();
+    Ok(job)
+}
+
+#[tauri::command]
+fn transcription_cancel(state: State<'_, AppState>, job_id: String) -> CmdResult<()> {
+    if let Some(r) = lock(&state.transcribing)?.as_ref().filter(|r| r.job_id == job_id) {
+        r.cancel.store(true, Ordering::Relaxed);
+        return Ok(());
+    }
+    state.with(|s| s.cancel_queued_job(&job_id)).map(|_| ())
+}
+
+#[tauri::command]
+fn transcript_edit_segment(state: State<'_, AppState>, transcript_id: String, idx: i64, text: String) -> CmdResult<()> {
+    state.with(|s| s.edit_segment(&transcript_id, idx, &text))
+}
+
+#[tauri::command]
+fn transcript_confirm(state: State<'_, AppState>, id: String) -> CmdResult<Transcript> {
+    state.with(|s| s.confirm_transcript(&id))
+}
+
+/// Runs queued jobs one at a time, for the life of the app.
+fn stt_worker(app: AppHandle) {
+    let state = app.state::<AppState>();
+    loop {
+        {
+            let (flag, cv) = &state.work;
+            let mut pending = flag.lock().expect("work flag");
+            while !*pending {
+                pending = cv.wait(pending).expect("work flag");
+            }
+            *pending = false;
+        }
+        // `with` fails while the store is locked; the next unlock wakes us again.
+        while let Ok(Some(job)) = state.with(|s| s.claim_next_job()) {
+            run_job(&state, job);
+        }
+    }
+}
+
+fn run_job(state: &AppState, job: Job) {
+    let Some(source_id) = job.source_id.clone() else { return };
+    let cancel = Arc::new(AtomicBool::new(false));
+    if let Ok(mut slot) = state.transcribing.lock() {
+        *slot = Some(RunningJob { job_id: job.id.clone(), source_id: source_id.clone(), cancel: cancel.clone() });
+    }
+    let result = transcribe_job(state, &job, &source_id, &cancel)
+        .and_then(|(engine, model, segments)| state.with(|s| s.finish_transcription(&job.id, &engine, &model, &segments)));
+    if let Err(e) = result {
+        let (status, msg) = match e {
+            CmdError::Core(thera_core::Error::Cancelled) => (JobStatus::Cancelled, None),
+            e => (JobStatus::Failed, Some(e.to_string())),
+        };
+        if !state.exiting.load(Ordering::Relaxed) {
+            // Fails harmlessly when the patient was erased: the job went with the source.
+            let _ = state.with(|s| s.fail_job(&job.id, status, msg.as_deref()));
+        }
+    }
+    if let Ok(mut slot) = state.transcribing.lock() {
+        *slot = None;
+    }
+}
+
+fn transcribe_job(state: &AppState, job: &Job, source_id: &str, cancel: &AtomicBool) -> CmdResult<(String, String, Vec<stt::Segment>)> {
+    let engine = state
+        .engine()
+        .ok_or_else(|| CmdError::Other("Das Transkriptionsprogramm fehlt in dieser Installation".into()))?;
+    let model_id = active_model(state)?;
+    let model = stt::model(&model_id)?;
+    let model_path = state.models_dir().join(model.file);
+    if !model_path.exists() {
+        return Err(CmdError::Other("Kein Sprachmodell installiert (Einstellungen → Transkription)".into()));
+    }
+    let ((dir, key), language) = state.with(|s| Ok((s.audio_location(source_id)?, s.source(source_id)?.language)))?;
+    // Leave one core for the UI; beyond 8 threads whisper.cpp stops getting faster.
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get().saturating_sub(1).clamp(1, 8));
+    let cli = WhisperCli { exe: state.whisper_dir().join("whisper-cli.exe"), model: model_path, language, threads };
+    let mut last = None;
+    let on_progress = |p: u8| {
+        if last != Some(p) {
+            last = Some(p);
+            let _ = state.with(|s| s.set_job_progress(&job.id, p));
+        }
+    };
+    let segments = stt::transcribe(&dir, &key, &cli, &state.stt_tmp().join(&job.id), on_progress, cancel)?;
+    Ok((engine, model_id, segments))
+}
+
+fn active_model(state: &AppState) -> CmdResult<String> {
+    let chosen = state.with(|s| s.setting("stt_model"))?.and_then(|v| v.as_str().map(str::to_string));
+    Ok(chosen.unwrap_or_else(|| stt::DEFAULT_MODEL.to_string()))
+}
+
+// ---------- speech models ----------
+
+#[derive(Serialize)]
+struct SttOverview {
+    /// `None`: the sidecar is missing from this build.
+    engine: Option<String>,
+    active: String,
+    models: Vec<ModelView>,
+}
+
+#[derive(Serialize)]
+struct ModelView {
+    id: &'static str,
+    file: &'static str,
+    bytes: u64,
+    installed: bool,
+    transfer: Option<Transfer>,
+}
+
+#[tauri::command]
+fn stt_overview(state: State<'_, AppState>) -> CmdResult<SttOverview> {
+    let transfers = lock(&state.model_transfers)?.clone();
+    let models = stt::MODELS
+        .iter()
+        .map(|m| ModelView {
+            id: m.id,
+            file: m.file,
+            bytes: m.bytes,
+            // Size only here; the full hash is checked once, when the file arrives.
+            installed: std::fs::metadata(state.models_dir().join(m.file)).is_ok_and(|md| md.len() == m.bytes),
+            transfer: transfers.get(m.id).cloned(),
+        })
+        .collect();
+    Ok(SttOverview { engine: state.engine(), active: active_model(&state)?, models })
+}
+
+#[tauri::command]
+fn stt_model_select(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    stt::model(&id)?;
+    state.with(|s| s.set_setting("stt_model", &serde_json::json!(id)))
+}
+
+#[tauri::command]
+fn stt_model_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    let m = stt::model(&id)?;
+    if lock(&state.model_transfers)?.get(&id).is_some_and(|t| t.error.is_none()) {
+        return Err(CmdError::Other("Das Modell wird gerade übertragen".into()));
+    }
+    match std::fs::remove_file(state.models_dir().join(m.file)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(thera_core::Error::from(e).into()),
+        _ => Ok(()),
+    }
+}
+
+/// Fetches a model file from Hugging Face. Only the model travels; no patient data is sent.
+#[tauri::command]
+fn stt_model_download(app: AppHandle, id: String) -> CmdResult<()> {
+    let m = *stt::model(&id)?;
+    start_transfer(&app, m, Box::new(move || {
+        let resp = ureq::get(m.url).call().map_err(|e| format!("Download fehlgeschlagen: {e}"))?;
+        Ok(Box::new(resp.into_body().into_with_config().limit(m.bytes + 1).reader()) as Box<dyn std::io::Read>)
+    }))
+}
+
+/// Copies a model file the user already has (offline installs). It must match the catalog hash.
+#[tauri::command]
+fn stt_model_import(app: AppHandle, id: String, path: String) -> CmdResult<()> {
+    let m = *stt::model(&id)?;
+    start_transfer(&app, m, Box::new(move || {
+        Ok(Box::new(std::fs::File::open(&path).map_err(|e| e.to_string())?) as Box<dyn std::io::Read>)
+    }))
+}
+
+type OpenSource = Box<dyn FnOnce() -> Result<Box<dyn std::io::Read>, String> + Send>;
+
+/// Runs a download or import on its own thread; progress is read through `stt_overview`.
+fn start_transfer(app: &AppHandle, m: stt::ModelInfo, open: OpenSource) -> CmdResult<()> {
+    let state = app.state::<AppState>();
+    {
+        let mut transfers = lock(&state.model_transfers)?;
+        if transfers.get(m.id).is_some_and(|t| t.error.is_none()) {
+            return Err(CmdError::Other("Das Modell wird bereits übertragen".into()));
+        }
+        transfers.insert(m.id.to_string(), Transfer { received: 0, total: m.bytes, error: None });
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        let result = transfer_model(&state, &m, open);
+        let Ok(mut transfers) = state.model_transfers.lock() else { return };
+        match result {
+            Ok(()) => {
+                transfers.remove(m.id);
+            }
+            Err(e) => {
+                if let Some(t) = transfers.get_mut(m.id) {
+                    t.error = Some(e);
+                }
+            }
+        }
+    });
+    Ok(())
+}
+
+/// Streams into `<file>.part` while hashing, and renames only if the SHA-256 matches.
+fn transfer_model(state: &AppState, m: &stt::ModelInfo, open: OpenSource) -> Result<(), String> {
+    use std::io::{Read, Write};
+    std::fs::create_dir_all(state.models_dir()).map_err(|e| e.to_string())?;
+    let dest = state.models_dir().join(m.file);
+    let part = dest.with_extension("part");
+    let result = (|| {
+        let mut src = open()?;
+        let mut out = std::fs::File::create(&part).map_err(|e| e.to_string())?;
+        let mut hasher = Sha256::new();
+        let mut buf = vec![0u8; 1 << 20];
+        let mut received = 0u64;
+        loop {
+            let n = src.read(&mut buf).map_err(|e| format!("Übertragung abgebrochen: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+            out.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+            received += n as u64;
+            if let Some(t) = state.model_transfers.lock().ok().as_mut().and_then(|t| t.get_mut(m.id)) {
+                t.received = received;
+            }
+        }
+        out.sync_all().map_err(|e| e.to_string())?;
+        drop(out);
+        if hex::encode(hasher.finalize()) != m.sha256 {
+            return Err("Prüfsumme stimmt nicht: Datei ist beschädigt oder ein anderes Modell".into());
+        }
+        std::fs::rename(&part, &dest).map_err(|e| e.to_string())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&part);
+    }
+    result
 }
 
 // ---------- episodes / applications / sessions ----------
@@ -442,7 +762,18 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
-            app.manage(AppState { data_dir, store: Mutex::new(None), recording: Mutex::new(None) });
+            app.manage(AppState {
+                data_dir,
+                resource_dir: app.path().resource_dir()?,
+                store: Mutex::new(None),
+                recording: Mutex::new(None),
+                work: (Mutex::new(false), Condvar::new()),
+                transcribing: Mutex::new(None),
+                exiting: AtomicBool::new(false),
+                model_transfers: Mutex::new(HashMap::new()),
+            });
+            let handle = app.handle().clone();
+            std::thread::spawn(move || stt_worker(handle));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -462,6 +793,15 @@ pub fn run() {
             recording_status,
             recording_stop,
             session_get,
+            transcription_start,
+            transcription_cancel,
+            transcript_edit_segment,
+            transcript_confirm,
+            stt_overview,
+            stt_model_select,
+            stt_model_delete,
+            stt_model_download,
+            stt_model_import,
             episodes_list,
             episode_create,
             applications_list,
@@ -485,7 +825,20 @@ pub fn run() {
         .run(|app, event| {
             // Closing the window mid-recording still flushes and closes the source cleanly.
             if let tauri::RunEvent::Exit = event {
-                let _ = stop_recording(&app.state::<AppState>(), "stopped");
+                let state = app.state::<AppState>();
+                let _ = stop_recording(&state, "stopped");
+                // Kill a running sidecar and give the worker a moment to delete its plaintext WAV.
+                state.exiting.store(true, Ordering::Relaxed);
+                let cancel = state.transcribing.lock().ok().and_then(|g| g.as_ref().map(|r| r.cancel.clone()));
+                if let Some(cancel) = cancel {
+                    cancel.store(true, Ordering::Relaxed);
+                    for _ in 0..30 {
+                        if state.transcribing.lock().map_or(true, |g| g.is_none()) {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                }
             }
         });
 }

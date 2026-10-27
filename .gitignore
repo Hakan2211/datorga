@@ -11,3 +11,7 @@ fixtures/
 *.db-shm
 .env
 .DS_Store
+
+# whisper.cpp sidecar, fetched by scripts/fetch-whisper.ps1
+/crates/app/whisper/*
+!/crates/app/whisper/.gitkeep

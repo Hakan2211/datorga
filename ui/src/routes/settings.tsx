@@ -3,14 +3,16 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Lock, LockOpen } from 'lucide-react'
+import { open } from '@tauri-apps/plugin-dialog'
+import { AlertTriangle, CheckCircle2, Download, FolderOpen, Lock, LockOpen, Trash2 } from 'lucide-react'
 import { Page, PageHeader } from '@/components/app-shell'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { api, errorMessage, q } from '@/lib/api'
+import { api, errorMessage, q, type SttOverview } from '@/lib/api'
 
 export const Route = createFileRoute('/settings')({ component: Settings })
 
@@ -31,6 +33,7 @@ function Settings() {
             <SettingField settingKey="practice_header" label={t('settings.practice')} multiline />
           </CardContent>
         </Card>
+        <SttCard />
         <Card className="max-w-2xl">
           <CardHeader>
             <CardTitle className="text-base">{t('settings.security')}</CardTitle>
@@ -82,4 +85,137 @@ function SettingField({ settingKey, label, multiline }: { settingKey: string; la
       </div>
     </div>
   )
+}
+
+function SttCard() {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const stt = useQuery(q.stt())
+  const refresh = () => void qc.invalidateQueries({ queryKey: ['stt'] })
+  const act = useMutation({
+    mutationFn: (f: () => Promise<void>) => f(),
+    onSuccess: refresh,
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+  const importFile = async (id: string) => {
+    const path = await open({ multiple: false, filters: [{ name: 'ggml', extensions: ['bin'] }] })
+    if (typeof path === 'string') act.mutate(() => api.importModel(id, path))
+  }
+  const data = stt.data
+
+  return (
+    <Card className="max-w-2xl">
+      <CardHeader>
+        <CardTitle className="text-base">{t('settings.stt.title')}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4 text-sm">
+        <p className="text-muted-foreground">{t('settings.stt.intro')}</p>
+        {data && !data.engine && (
+          <p className="flex items-center gap-2 text-destructive">
+            <AlertTriangle className="size-4" /> {t('settings.stt.engineMissing')}
+          </p>
+        )}
+        <ul className="divide-y rounded-md border">
+          {data?.models.map((m) => (
+            <ModelRow
+              key={m.id}
+              model={m}
+              active={data.active === m.id}
+              busy={act.isPending}
+              onUse={() => act.mutate(() => api.selectModel(m.id))}
+              onDownload={() => act.mutate(() => api.downloadModel(m.id))}
+              onImport={() => void importFile(m.id)}
+              onDelete={() => act.mutate(() => api.deleteModel(m.id))}
+            />
+          ))}
+        </ul>
+        {data?.engine && (
+          <p className="text-xs text-muted-foreground">
+            {t('settings.stt.engine')}: {data.engine}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function ModelRow({
+  model,
+  active,
+  busy,
+  onUse,
+  onDownload,
+  onImport,
+  onDelete,
+}: {
+  model: SttOverview['models'][number]
+  active: boolean
+  busy: boolean
+  onUse: () => void
+  onDownload: () => void
+  onImport: () => void
+  onDelete: () => void
+}) {
+  const { t } = useTranslation()
+  const transfer = model.transfer
+  const moving = !!transfer && !transfer.error
+  const pct = transfer ? Math.floor((transfer.received / transfer.total) * 100) : 0
+  return (
+    <li className="space-y-2 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium">{model.id}</span>
+        <span className="text-muted-foreground">{formatBytes(model.bytes)}</span>
+        {active && (
+          <Badge variant="secondary" className="bg-success/15 font-normal text-success">
+            {t('settings.stt.active')}
+          </Badge>
+        )}
+        {model.installed && (
+          <span className="flex items-center gap-1 text-success">
+            <CheckCircle2 className="size-3.5" /> {t('settings.stt.installed')}
+          </span>
+        )}
+        <span className="ml-auto flex gap-1">
+          {model.installed && !active && (
+            <Button size="sm" variant="outline" onClick={onUse} disabled={busy}>
+              {t('settings.stt.use')}
+            </Button>
+          )}
+          {!model.installed && !moving && (
+            <>
+              <Button size="sm" variant="outline" onClick={onDownload} disabled={busy}>
+                <Download /> {t('settings.stt.download')}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={onImport} disabled={busy}>
+                <FolderOpen /> {t('settings.stt.import')}
+              </Button>
+            </>
+          )}
+          {model.installed && (
+            <Button size="sm" variant="ghost" onClick={onDelete} disabled={busy} aria-label={t('settings.stt.delete')}>
+              <Trash2 />
+            </Button>
+          )}
+        </span>
+      </div>
+      <p className="text-muted-foreground">{t(`settings.stt.models.${model.id}`)}</p>
+      {moving && (
+        <div className="flex items-center gap-3">
+          <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+            <div className="h-full bg-primary transition-[width]" style={{ width: `${pct}%` }} />
+          </div>
+          <span className="font-mono text-xs tabular-nums">{pct} %</span>
+        </div>
+      )}
+      {transfer?.error && (
+        <p className="text-destructive">
+          {t('settings.stt.failed')}: {transfer.error}
+        </p>
+      )}
+    </li>
+  )
+}
+
+function formatBytes(n: number): string {
+  return n >= 1e9 ? `${(n / 1e9).toFixed(1).replace('.', ',')} GB` : `${Math.round(n / 1e6)} MB`
 }

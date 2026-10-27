@@ -3,8 +3,7 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { AlertTriangle, Mic, NotebookPen, Square } from 'lucide-react'
-import type { SessionSource } from '@/bindings/SessionSource'
+import { AlertTriangle, FileText, Mic, NotebookPen, Square, X } from 'lucide-react'
 import type { SourceKind } from '@/bindings/SourceKind'
 import { Page, PageHeader } from '@/components/app-shell'
 import { formatDate } from '@/components/bits'
@@ -13,7 +12,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { api, errorMessage, q, type RecordingStatus, type SessionView } from '@/lib/api'
+import { TranscriptView } from '@/components/transcript-view'
+import { api, errorMessage, jobActive, q, type RecordingStatus, type SessionView, type SourceView, type SttOverview } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/sessions/$sessionId')({ component: SessionPage })
@@ -22,6 +22,7 @@ function SessionPage() {
   const { sessionId } = Route.useParams()
   const { t } = useTranslation()
   const view = useQuery(q.session(sessionId))
+  const stt = useQuery(q.stt())
   if (!view.data) return null
   const { session, patient, sources } = view.data
 
@@ -47,7 +48,7 @@ function SessionPage() {
             ) : (
               <ul className="divide-y text-sm">
                 {sources.map((s) => (
-                  <SourceRow key={s.id} source={s} />
+                  <SourceRow key={s.id} source={s} sttReady={sttReady(stt.data)} />
                 ))}
               </ul>
             )}
@@ -210,18 +211,90 @@ function LevelMeter({ level }: { level: number }) {
   )
 }
 
-function SourceRow({ source }: { source: SessionSource }) {
+const sttReady = (o: SttOverview | undefined) => !!o?.engine && !!o.models.find((m) => m.id === o.active)?.installed
+
+function SourceRow({ source, sttReady }: { source: SourceView; sttReady: boolean }) {
   const { t } = useTranslation()
+  const qc = useQueryClient()
+  const { job, transcript } = source
+  // Drafts open by default: they need review. Confirmed ones stay collapsed.
+  const [open, setOpen] = useState<boolean | null>(null)
+  const expanded = open ?? transcript?.status === 'draft'
+  const refresh = () => void qc.invalidateQueries({ queryKey: ['session', source.session_id] })
+  const start = useMutation({
+    mutationFn: () => api.startTranscription(source.id),
+    onSuccess: refresh,
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+  const cancel = useMutation({
+    mutationFn: (jobId: string) => api.cancelTranscription(jobId),
+    onSuccess: refresh,
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+
   const reason = source.end_reason ? t(`capture.reason.${source.end_reason}`) : ''
+  const finished = source.status !== 'recording'
+  const canTranscribe = finished && !source.audio_deleted_at && transcript?.status !== 'confirmed' && !jobActive(job)
   return (
-    <li className="flex flex-wrap items-center gap-x-3 py-2">
-      <span className="font-medium">{t(`capture.kind.${source.kind}`)}</span>
-      <span className="text-muted-foreground">{formatDate(source.started_at, true)}</span>
-      {source.duration_ms != null && <span className="font-mono tabular-nums">{formatDuration(source.duration_ms)}</span>}
-      <Badge variant="secondary" className={cn('font-normal', source.status === 'interrupted' && 'bg-warning/20')}>
-        {t(`capture.sourceStatus.${source.status}`)}
-      </Badge>
-      {reason && <span className="text-muted-foreground">{reason}</span>}
+    <li className="space-y-2 py-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="font-medium">{t(`capture.kind.${source.kind}`)}</span>
+        <span className="text-muted-foreground">{formatDate(source.started_at, true)}</span>
+        {source.duration_ms != null && <span className="font-mono tabular-nums">{formatDuration(source.duration_ms)}</span>}
+        <Badge variant="secondary" className={cn('font-normal', source.status === 'interrupted' && 'bg-warning/20')}>
+          {t(`capture.sourceStatus.${source.status}`)}
+        </Badge>
+        {transcript && (
+          <Badge
+            variant="secondary"
+            className={cn('font-normal', transcript.status === 'confirmed' ? 'bg-success/15 text-success' : 'bg-warning/20')}
+          >
+            {t(`transcript.${transcript.status}`)}
+          </Badge>
+        )}
+        {source.audio_deleted_at && <span className="text-muted-foreground">{t('transcript.audioDeleted')}</span>}
+        {reason && <span className="text-muted-foreground">{reason}</span>}
+        <span className="ml-auto flex items-center gap-2">
+          {transcript && (
+            <Button size="sm" variant="ghost" onClick={() => setOpen(!expanded)}>
+              <FileText /> {expanded ? t('transcript.hide') : transcript.status === 'draft' ? t('transcript.review') : t('transcript.show')}
+            </Button>
+          )}
+          {canTranscribe && sttReady && (
+            <Button size="sm" variant="outline" onClick={() => start.mutate()} disabled={start.isPending}>
+              {transcript || job ? t('transcript.retry') : t('transcript.start')}
+            </Button>
+          )}
+        </span>
+      </div>
+      {jobActive(job) && job && (
+        <div className="flex items-center gap-3">
+          <span className="text-muted-foreground">
+            {job.status === 'queued' ? t('transcript.queued') : `${t('transcript.running')} · ${job.progress} %`}
+          </span>
+          <div className="h-2 w-48 overflow-hidden rounded-full bg-muted">
+            <div className="h-full bg-primary transition-[width]" style={{ width: `${job.progress}%` }} />
+          </div>
+          <Button size="sm" variant="ghost" onClick={() => cancel.mutate(job.id)} disabled={cancel.isPending}>
+            <X /> {t('transcript.cancel')}
+          </Button>
+        </div>
+      )}
+      {job?.status === 'failed' && !transcript && (
+        <p className="flex items-center gap-2 text-destructive">
+          <AlertTriangle className="size-4" /> {t('transcript.failed')}: {job.last_error}
+        </p>
+      )}
+      {job?.status === 'cancelled' && !transcript && <p className="text-muted-foreground">{t('transcript.cancelled')}</p>}
+      {canTranscribe && !sttReady && !transcript && (
+        <p className="text-muted-foreground">
+          {t('transcript.noModel')}{' '}
+          <Link to="/settings" className="underline">
+            {t('transcript.settingsLink')}
+          </Link>
+        </p>
+      )}
+      {transcript && expanded && <TranscriptView transcript={transcript} sessionId={source.session_id} />}
     </li>
   )
 }

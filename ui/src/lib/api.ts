@@ -11,6 +11,7 @@ import type { ConsentKind } from '@/bindings/ConsentKind'
 import type { ConsentText } from '@/bindings/ConsentText'
 import type { Episode } from '@/bindings/Episode'
 import type { EpisodeInput } from '@/bindings/EpisodeInput'
+import type { Job } from '@/bindings/Job'
 import type { Patient } from '@/bindings/Patient'
 import type { PatientInput } from '@/bindings/PatientInput'
 import type { Report } from '@/bindings/Report'
@@ -21,6 +22,7 @@ import type { SessionInput } from '@/bindings/SessionInput'
 import type { SessionSource } from '@/bindings/SessionSource'
 import type { SourceKind } from '@/bindings/SourceKind'
 import type { Template } from '@/bindings/Template'
+import type { Transcript } from '@/bindings/Transcript'
 
 export type InitResult = {
   status: 'ready' | 'recovery_required'
@@ -36,11 +38,23 @@ export type ReportView = {
   application: Application | null
 }
 
+export type SourceView = SessionSource & { job: Job | null; transcript: Transcript | null }
+
 export type SessionView = {
   session: Session
   patient: Patient
-  sources: SessionSource[]
+  sources: SourceView[]
 }
+
+export type Transfer = { received: number; total: number; error: string | null }
+
+export type SttOverview = {
+  engine: string | null
+  active: string
+  models: { id: string; file: string; bytes: number; installed: boolean; transfer: Transfer | null }[]
+}
+
+export const jobActive = (job: Job | null | undefined) => job?.status === 'queued' || job?.status === 'running'
 
 export type InputDevice = { id: string; name: string; is_default: boolean }
 
@@ -87,6 +101,18 @@ export const api = {
   recordingStatus: () => invoke<RecordingStatus | null>('recording_status'),
   stopRecording: () => invoke<SessionSource>('recording_stop'),
 
+  startTranscription: (sourceId: string) => invoke<Job>('transcription_start', { sourceId }),
+  cancelTranscription: (jobId: string) => invoke<void>('transcription_cancel', { jobId }),
+  editSegment: (transcriptId: string, idx: number, text: string) =>
+    invoke<void>('transcript_edit_segment', { transcriptId, idx, text }),
+  confirmTranscript: (id: string) => invoke<Transcript>('transcript_confirm', { id }),
+
+  stt: () => invoke<SttOverview>('stt_overview'),
+  selectModel: (id: string) => invoke<void>('stt_model_select', { id }),
+  deleteModel: (id: string) => invoke<void>('stt_model_delete', { id }),
+  downloadModel: (id: string) => invoke<void>('stt_model_download', { id }),
+  importModel: (id: string, path: string) => invoke<void>('stt_model_import', { id, path }),
+
   templates: () => invoke<Template[]>('templates_list'),
 
   reports: (status?: ReportStatus) => invoke<ReportSummary[]>('reports_list', { status: status ?? null }),
@@ -118,7 +144,20 @@ export const q = {
     queryOptions({ queryKey: ['applications', episodeId], queryFn: () => api.applications(episodeId) }),
   sessions: (patientId?: string) =>
     queryOptions({ queryKey: ['sessions', patientId ?? 'all'], queryFn: () => api.sessions(patientId) }),
-  session: (id: string) => queryOptions({ queryKey: ['session', id], queryFn: () => api.session(id) }),
+  // Polled while a transcription is queued or running (progress bar).
+  session: (id: string) =>
+    queryOptions({
+      queryKey: ['session', id],
+      queryFn: () => api.session(id),
+      refetchInterval: (query) => (query.state.data?.sources.some((s) => jobActive(s.job)) ? 1000 : false),
+    }),
+  stt: () =>
+    queryOptions({
+      queryKey: ['stt'],
+      queryFn: api.stt,
+      refetchInterval: (query) =>
+        query.state.data?.models.some((m) => m.transfer && !m.transfer.error) ? 500 : false,
+    }),
   audioDevices: () => queryOptions({ queryKey: ['audioDevices'], queryFn: api.audioDevices }),
   // Polled for the timer and level meter; cheap (no DB access).
   recording: () =>

@@ -5,7 +5,7 @@ import type { SourceStatus } from "./SourceStatus";
 /**
  * One capture within a session, with its audio metadata.
  */
-export type SessionSource = { id: string, session_id: string, kind: SourceKind, consent_id: string | null, status: SourceStatus, started_at: string, ended_at: string | null, end_reason: string | null, 
+export type SessionSource = { id: string, session_id: string, kind: SourceKind, consent_id: string | null, status: SourceStatus, language: string, started_at: string, ended_at: string | null, end_reason: string | null, 
 /**
  * JSON number; ms durations stay far below 2^53.
  */
