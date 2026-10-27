@@ -11,6 +11,7 @@ import type { Method } from '@/bindings/Method'
 import type { Setting } from '@/bindings/Setting'
 import { Page, PageHeader } from '@/components/app-shell'
 import { formatDate } from '@/components/bits'
+import { ConsentCard } from '@/components/consent-card'
 import { PatientFormDialog } from '@/components/patient-form'
 import {
   AlertDialog,
@@ -99,6 +100,7 @@ function PatientDetail() {
         }
       />
       <Page>
+        <ConsentCard patientId={patientId} />
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold">{t('episodes.title')}</h2>
           <NewEpisodeDialog patientId={patientId} />

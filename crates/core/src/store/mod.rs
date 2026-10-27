@@ -7,6 +7,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::json;
 
 use crate::audit::{self, Entry};
+use crate::consent;
 use crate::crypto::MasterKey;
 use crate::domain::*;
 use crate::templates::{self, Template};
@@ -169,6 +170,75 @@ impl Store {
         audit::append(&tx, Entry { actor: ACTOR, action: "patient.erase", entity_type: "patient", entity_id: Some(id), meta: json!({}) })?;
         tx.commit()?;
         Ok(())
+    }
+
+    // ---------- consent ----------
+
+    /// Records consent against the current text version. Only one active consent per kind.
+    pub fn grant_consent(&self, patient_id: &str, kind: ConsentKind, note: Option<&str>) -> Result<Consent> {
+        self.patient(patient_id)?;
+        if self.active_consent(patient_id, kind)?.is_some() {
+            return Err(Error::Invalid("Einwilligung ist bereits erteilt".into()));
+        }
+        let text = consent::current(kind);
+        let note = note.map(str::trim).filter(|n| !n.is_empty());
+        let tx = self.conn.unchecked_transaction()?;
+        let id = new_id();
+        tx.execute(
+            "INSERT INTO consent (id, patient_id, kind, text_version, text_hash, granted_at, note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, patient_id, kind.as_str(), text.version, text.hash, now(), note],
+        )?;
+        sync_consent_flag(&tx, patient_id)?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "consent.grant", entity_type: "consent", entity_id: Some(&id),
+            meta: json!({ "kind": kind.as_str(), "text_version": text.version, "text_hash": text.hash }),
+        })?;
+        tx.commit()?;
+        self.consent(&id)
+    }
+
+    /// Revocation applies from now on; the record stays as evidence of the earlier grant.
+    pub fn revoke_consent(&self, id: &str) -> Result<Consent> {
+        let c = self.consent(id)?;
+        let tx = self.conn.unchecked_transaction()?;
+        let n = tx.execute("UPDATE consent SET revoked_at = ?2 WHERE id = ?1 AND revoked_at IS NULL", params![id, now()])?;
+        if n == 0 {
+            return Err(Error::Invalid("Einwilligung ist bereits widerrufen".into()));
+        }
+        sync_consent_flag(&tx, &c.patient_id)?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "consent.revoke", entity_type: "consent", entity_id: Some(id),
+            meta: json!({ "kind": c.kind.as_str() }),
+        })?;
+        tx.commit()?;
+        self.consent(id)
+    }
+
+    pub fn consent(&self, id: &str) -> Result<Consent> {
+        self.conn
+            .query_row(&format!("{CONSENT_SELECT} WHERE id = ?1"), [id], row_to_consent)
+            .optional()?
+            .ok_or_else(|| Error::NotFound(format!("consent {id}")))
+    }
+
+    /// Newest first, revoked ones included (consent history).
+    pub fn list_consents(&self, patient_id: &str) -> Result<Vec<Consent>> {
+        let mut stmt = self.conn.prepare(&format!("{CONSENT_SELECT} WHERE patient_id = ?1 ORDER BY granted_at DESC"))?;
+        let rows = stmt.query_map([patient_id], row_to_consent)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// The consent a recording gets linked to; `None` means recording is not allowed.
+    pub fn active_consent(&self, patient_id: &str, kind: ConsentKind) -> Result<Option<Consent>> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!("{CONSENT_SELECT} WHERE patient_id = ?1 AND kind = ?2 AND revoked_at IS NULL"),
+                params![patient_id, kind.as_str()],
+                row_to_consent,
+            )
+            .optional()?)
     }
 
     // ---------- episodes & applications ----------
@@ -434,6 +504,8 @@ fn validate_patient(p: &PatientInput) -> Result<()> {
 
 const PATIENT_SELECT: &str = "SELECT id, external_ref, first_name, last_name, birth_date, chiffre, pronouns,
     consent_recording, status, created_at, archived_at FROM patient";
+const CONSENT_SELECT: &str = "SELECT id, patient_id, kind, scope, text_version, text_hash, granted_at, revoked_at,
+    note FROM consent";
 const EPISODE_SELECT: &str =
     "SELECT id, patient_id, method, age_group, setting, stage, started_at, ended_at FROM episode";
 const SESSION_SELECT: &str = "SELECT id, patient_id, episode_id, scheduled_at, started_at, ended_at, duration_s,
@@ -452,6 +524,31 @@ fn row_to_patient(r: &rusqlite::Row<'_>) -> rusqlite::Result<Patient> {
         status: r.get(8)?,
         created_at: r.get(9)?,
         archived_at: r.get(10)?,
+    })
+}
+
+/// `patient.consent_recording` is derived: true while an unrevoked recording consent exists.
+fn sync_consent_flag(conn: &Connection, patient_id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE patient SET consent_recording = EXISTS (
+             SELECT 1 FROM consent WHERE patient_id = ?1 AND kind = 'recording' AND revoked_at IS NULL)
+         WHERE id = ?1",
+        [patient_id],
+    )?;
+    Ok(())
+}
+
+fn row_to_consent(r: &rusqlite::Row<'_>) -> rusqlite::Result<Consent> {
+    Ok(Consent {
+        id: r.get(0)?,
+        patient_id: r.get(1)?,
+        kind: parse_col(r, 2)?,
+        scope: r.get(3)?,
+        text_version: r.get(4)?,
+        text_hash: r.get(5)?,
+        granted_at: r.get(6)?,
+        revoked_at: r.get(7)?,
+        note: r.get(8)?,
     })
 }
 
@@ -561,6 +658,34 @@ mod tests {
 
         store.erase_patient(&p.id).unwrap();
         assert!(store.report(&rid).is_err(), "cascade removes the report");
+        assert_eq!(audit::verify(store.conn()).unwrap(), None);
+    }
+
+    #[test]
+    fn consent_grant_and_revoke_drive_recording_flag() {
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        assert!(!p.consent_recording);
+
+        let c = store.grant_consent(&p.id, ConsentKind::Recording, Some("  Papierformular unterschrieben ")).unwrap();
+        assert_eq!(c.text_hash, consent::current(ConsentKind::Recording).hash);
+        assert_eq!(c.note.as_deref(), Some("Papierformular unterschrieben"));
+        assert!(store.patient(&p.id).unwrap().consent_recording);
+        assert!(store.grant_consent(&p.id, ConsentKind::Recording, None).is_err(), "one active consent per kind");
+
+        store.revoke_consent(&c.id).unwrap();
+        assert!(!store.patient(&p.id).unwrap().consent_recording);
+        assert!(store.active_consent(&p.id, ConsentKind::Recording).unwrap().is_none());
+        assert!(store.revoke_consent(&c.id).is_err(), "double revoke");
+
+        // Re-granting after a revocation is a new record; history keeps both.
+        store.grant_consent(&p.id, ConsentKind::Recording, None).unwrap();
+        assert_eq!(store.list_consents(&p.id).unwrap().len(), 2);
+        assert!(store.patient(&p.id).unwrap().consent_recording);
+
+        let events = audit::list(store.conn(), 50).unwrap();
+        assert_eq!(events.iter().filter(|e| e.action.starts_with("consent.")).count(), 3);
+        assert!(events.iter().all(|e| !e.meta_json.contains("Papierformular")), "free-text note stays out of the audit log");
         assert_eq!(audit::verify(store.conn()).unwrap(), None);
     }
 

@@ -6,6 +6,9 @@ import type { Application } from '@/bindings/Application'
 import type { ApplicationKind } from '@/bindings/ApplicationKind'
 import type { AuditEvent } from '@/bindings/AuditEvent'
 import type { CheckItem } from '@/bindings/CheckItem'
+import type { Consent } from '@/bindings/Consent'
+import type { ConsentKind } from '@/bindings/ConsentKind'
+import type { ConsentText } from '@/bindings/ConsentText'
 import type { Episode } from '@/bindings/Episode'
 import type { EpisodeInput } from '@/bindings/EpisodeInput'
 import type { Patient } from '@/bindings/Patient'
@@ -43,6 +46,12 @@ export const api = {
   updatePatient: (id: string, input: PatientInput) => invoke<Patient>('patient_update', { id, input }),
   erasePatient: (id: string) => invoke<void>('patient_erase', { id }),
 
+  consentText: (kind: ConsentKind) => invoke<ConsentText>('consent_text', { kind }),
+  consents: (patientId: string) => invoke<Consent[]>('consents_list', { patientId }),
+  grantConsent: (patientId: string, kind: ConsentKind, note: string) =>
+    invoke<Consent>('consent_grant', { patientId, kind, note: note || null }),
+  revokeConsent: (id: string) => invoke<Consent>('consent_revoke', { id }),
+
   episodes: (patientId: string) => invoke<Episode[]>('episodes_list', { patientId }),
   createEpisode: (input: EpisodeInput) => invoke<Episode>('episode_create', { input }),
   applications: (episodeId: string) => invoke<Application[]>('applications_list', { episodeId }),
@@ -73,6 +82,10 @@ export const api = {
 export const q = {
   patients: (query = '') => queryOptions({ queryKey: ['patients', query], queryFn: () => api.patients(query) }),
   patient: (id: string) => queryOptions({ queryKey: ['patient', id], queryFn: () => api.patient(id) }),
+  consentText: (kind: ConsentKind) =>
+    queryOptions({ queryKey: ['consentText', kind], queryFn: () => api.consentText(kind), staleTime: Infinity }),
+  consents: (patientId: string) =>
+    queryOptions({ queryKey: ['consents', patientId], queryFn: () => api.consents(patientId) }),
   episodes: (patientId: string) =>
     queryOptions({ queryKey: ['episodes', patientId], queryFn: () => api.episodes(patientId) }),
   applications: (episodeId: string) =>

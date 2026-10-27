@@ -45,6 +45,10 @@ str_enum!(
 );
 str_enum!(ReportStatus { Draft => "draft", InReview => "in_review", Signed => "signed", Exported => "exported" });
 str_enum!(SectionOrigin { Ai => "ai", Human => "human", Mixed => "mixed" });
+str_enum!(
+    /// What a consent covers. `cloud_processing` follows with the Phase 2 LLM adapter.
+    ConsentKind { Recording => "recording" }
+);
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -71,6 +75,21 @@ pub struct PatientInput {
     pub birth_date: Option<String>,
     pub chiffre: Option<String>,
     pub pronouns: Option<String>,
+}
+
+/// One grant of consent. Revoking sets `revoked_at`; the row is never deleted (except on erasure).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Consent {
+    pub id: String,
+    pub patient_id: String,
+    pub kind: ConsentKind,
+    pub scope: Option<String>,
+    pub text_version: String,
+    pub text_hash: String,
+    pub granted_at: String,
+    pub revoked_at: Option<String>,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

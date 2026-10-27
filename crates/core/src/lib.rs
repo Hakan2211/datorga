@@ -1,6 +1,7 @@
 //! thera core: the portable product. No tauri, no UI.
 
 pub mod audit;
+pub mod consent;
 pub mod crypto;
 pub mod domain;
 pub mod pii;

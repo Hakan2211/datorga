@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::{Manager, State};
+use thera_core::consent::{self, ConsentText};
 use thera_core::crypto::{self, KeyStore, MasterKey, Unlock};
 use thera_core::domain::*;
 use thera_core::pii::{self, CheckItem};
@@ -138,6 +139,28 @@ fn patient_update(state: State<'_, AppState>, id: String, input: PatientInput) -
 #[tauri::command]
 fn patient_erase(state: State<'_, AppState>, id: String) -> CmdResult<()> {
     state.with(|s| s.erase_patient(&id))
+}
+
+// ---------- consent ----------
+
+#[tauri::command]
+fn consent_text(kind: ConsentKind) -> ConsentText {
+    consent::current(kind)
+}
+
+#[tauri::command]
+fn consents_list(state: State<'_, AppState>, patient_id: String) -> CmdResult<Vec<Consent>> {
+    state.with(|s| s.list_consents(&patient_id))
+}
+
+#[tauri::command]
+fn consent_grant(state: State<'_, AppState>, patient_id: String, kind: ConsentKind, note: Option<String>) -> CmdResult<Consent> {
+    state.with(|s| s.grant_consent(&patient_id, kind, note.as_deref()))
+}
+
+#[tauri::command]
+fn consent_revoke(state: State<'_, AppState>, id: String) -> CmdResult<Consent> {
+    state.with(|s| s.revoke_consent(&id))
 }
 
 // ---------- episodes / applications / sessions ----------
@@ -307,6 +330,10 @@ pub fn run() {
             patient_create,
             patient_update,
             patient_erase,
+            consent_text,
+            consents_list,
+            consent_grant,
+            consent_revoke,
             episodes_list,
             episode_create,
             applications_list,
