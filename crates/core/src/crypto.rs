@@ -156,7 +156,7 @@ pub fn check_recovery(wrapped_path: &std::path::Path, recovery: &str) -> Result<
 }
 
 /// temp + fsync + rename: a crash leaves either the old or the new wrapped key, never half.
-fn write_wrapped(path: &std::path::Path, contents: &str) -> Result<()> {
+pub(crate) fn write_wrapped(path: &std::path::Path, contents: &str) -> Result<()> {
     use std::io::Write;
     let tmp = path.with_extension("wrapped.tmp");
     let mut f = std::fs::File::create(&tmp)?;

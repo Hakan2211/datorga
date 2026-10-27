@@ -7,7 +7,7 @@
     set text(8pt, fill: luma(110))
     [Vertraulich – getrennt vom Computer aufbewahren. #h(1fr) Seite #counter(page).display() / #counter(page).final().first()]
   })
-#set text(font: "Libertinus Serif", size: 11pt, lang: "de", hyphenate: true)
+#set text(font: "Libertinus Serif", size: 10.5pt, lang: "de", hyphenate: true)
 #set par(justify: true, leading: 0.58em, spacing: 0.9em)
 #show heading: set text(12pt)
 #show heading: set block(above: 1.3em, below: 0.6em)
@@ -39,20 +39,18 @@
 )
 
 = Wann brauchen Sie diesen Schlüssel?
-Der Schlüssel zur Datenbank liegt in der Windows-Anmeldeinformationsverwaltung dieses Benutzerkontos. Geht er dort verloren, meldet thera beim Start *„Wiederherstellung erforderlich“*. Das passiert zum Beispiel nach
-- einer Neuinstallation von Windows oder einem neuen Benutzerkonto,
-- dem Umzug des Datenordners auf einen anderen Computer (etwa aus einer Datensicherung),
-- dem Löschen gespeicherter Anmeldeinformationen.
+- *Schlüsselbund verloren:* Der Schlüssel zur Datenbank liegt in der Windows-Anmeldeinformationsverwaltung dieses Benutzerkontos. Fehlt er dort (nach einer Neuinstallation von Windows, mit einem neuen Benutzerkonto oder nach dem Löschen gespeicherter Anmeldeinformationen), meldet thera beim Start *„Wiederherstellung erforderlich“*.
+- *Neuer Computer:* Ihre Datensicherungen (`.therabak`) sind mit diesem Schlüssel geschützt.
 
 = So stellen Sie die Daten wieder her
-+ Sorgen Sie dafür, dass der Datenordner vollständig vorhanden ist (mindestens `thera.db` und `master.wrapped`, bei Aufnahmen auch der Unterordner `audio`).
-+ Starten Sie thera. Auf dem Bildschirm „Wiederherstellung erforderlich“ geben Sie den Notfall-Schlüssel oben ein.
-+ Klicken Sie auf „Wiederherstellen“. thera legt den Schlüssel wieder im Schlüsselbund ab und öffnet Ihre Daten wie gewohnt.
+*Datenordner noch vorhanden:* Starten Sie thera, geben Sie auf dem Bildschirm „Wiederherstellung erforderlich“ den Schlüssel oben ein und klicken Sie auf „Wiederherstellen“. thera legt den Schlüssel wieder im Schlüsselbund ab.
 
-Wird der Schlüssel abgelehnt, prüfen Sie, ob er vom *neuesten* Notfall-Kit stammt und ob die Datei `master.wrapped` zu diesem Datenordner gehört.
+*Aus einer Datensicherung:* Installieren Sie thera, wählen Sie beim ersten Start „Aus Datensicherung wiederherstellen“, dann die Datei (`.therabak`), und geben Sie den Schlüssel ein. Auf demselben Computer geht das auch unter _Einstellungen → Datensicherung_, dort ohne Schlüssel.
+
+Wird der Schlüssel abgelehnt, prüfen Sie, ob er vom *neuesten* Notfall-Kit stammt. Eine Sicherung, die nicht im Sicherungsordner lag, als ein neuer Schlüssel erstellt wurde, öffnet nur mit dem Kit, das zur Zeit der Sicherung galt.
 
 = Wichtig
 - *Ohne diesen Schlüssel und ohne den Schlüsselbund sind die Daten unwiederbringlich verloren.* Niemand, auch nicht der Hersteller, kann sie dann noch öffnen.
-- Wer diesen Schlüssel *und* den Datenordner besitzt, kann alle Patientendaten lesen. Bewahren Sie das Blatt deshalb wie eine Patientenakte auf: ausgedruckt, getrennt vom Computer und von Datensicherungen, zum Beispiel im Praxistresor.
+- Wer diesen Schlüssel *und* den Datenordner oder eine Datensicherung besitzt, kann alle Patientendaten lesen. Bewahren Sie das Blatt wie eine Patientenakte auf: ausgedruckt, getrennt vom Computer und von den Datensicherungen, zum Beispiel im Praxistresor.
 - Nicht fotografieren, nicht per E-Mail versenden, nicht in einer Cloud ablegen. Löschen Sie die PDF-Datei nach dem Ausdrucken.
-- Unter *Einstellungen → Sicherheit → Neuen Notfall-Schlüssel erstellen* erzeugen Sie jederzeit einen neuen Schlüssel. Ältere Notfall-Kits sind danach ungültig und sollten vernichtet werden.
+- Unter _Einstellungen → Sicherheit → Neuen Notfall-Schlüssel erstellen_ erzeugen Sie jederzeit einen neuen Schlüssel. Sicherungen im Sicherungsordner stellt thera dabei um. Bewahren Sie das alte Kit auf, solange Sie Sicherungen von anderen Orten noch brauchen.

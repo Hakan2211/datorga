@@ -1,8 +1,8 @@
-# thera: session handoff (2026-10-27, after the Recovery-kit PDF)
+# thera: session handoff (2026-10-27, after backup + restore)
 
 Start a new session with: *"Read docs/HANDOFF.md and continue with the next step."*
 
-**State at end of session (2026-10-27):** the Recovery-kit work (slice 5) is done, tested, committed and pushed to `main`. The release app (desktop shortcut) and installers were rebuilt from it. Next step: **encrypted backup + restore** (see Next steps 6), the last A10 gate before real patient data.
+**State at end of session (2026-10-27):** encrypted backup + restore (slice 6) is done, tested, committed and pushed to `main`. The release app (desktop shortcut) and installers were rebuilt from it. The user asked to work through the remaining steps one by one until Phase 2. Next step: **capture guards** (disk space + keep-awake, see Next steps 7).
 
 On the next start of the dev-box app you'll see **"Notfall-Kit fehlt"**: the DB predates the kit, so it was never confirmed. Create a new key there and save/print the kit.
 
@@ -118,9 +118,42 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
   - keychain entry deleted → "Wiederherstellung erforderlich": the old key is rejected; the new key, typed in lower case with spaces, opens the DB
 - E2E trick: the native save dialog can't be driven over CDP, and overriding `__TAURI_INTERNALS__.invoke` doesn't take. Use `page.route(/ipc\.localhost\/plugin%3Adialog%7Csave/, …)` and fulfill it with a JSON path (header `Tauri-Response: ok`).
 
+**Built (slice 6, 2026-10-27): encrypted backup + restore (A10, PLAN 3.2)**
+- `core::backup`, the `.therabak` format:
+  - layout: `THERABK\x01 | header_len | header JSON | frames`
+  - header: format, created_at, app_version, `key_id` (non-secret fingerprint of the master key), `wrapped` (master key under the recovery key current at backup time), salt, nonce prefix
+  - frames: 1 MiB AES-256-GCM chunks. The payload key is SHA-256 of domain + salt + master key. The nonce binds chunk index + last flag, and the AAD binds the fixed header fields, so a flipped bit, truncation or appended data all fail.
+  - plaintext: entries `thera.db` (SQLCipher snapshot via `VACUUM INTO`, still encrypted) + `audio/<source>/<chunk>` (already encrypted)
+- **The Notfall-Schlüssel is the backup key (user decision).** On a new machine the printed kit opens the backup. On the same machine the keychain key is enough (`key_id` match).
+- `create` (temp + fsync + rename), `inspect`, `unlock` (keychain first, else recovery key), `extract` (paths limited to `thera.db` / `audio/…`), `verify` (decrypt into scratch, open DB, walk audit chain, scratch always removed).
+- `rewrap_file` swaps only the header (temp + rename). Key rotation re-wraps every backup of this database in the backup folder (toast with count; failures reported). Copies elsewhere keep the old key, and the kit and confirm dialog say so.
+- `install`:
+  - extracts into `restore-staging`, opens and verifies the DB there, and rewrites `audio_asset.path` to `<data_dir>/audio/<source>` (`Store::relocate_audio`; paths were absolute)
+  - then moves the current DB, `audio` and (when restoring with the recovery key) `master.wrapped` to `vor-wiederherstellung-<German local time>/` (moved, never deleted)
+  - moves the restored files in and rolls back on error
+- Store: `snapshot_to`, `relocate_audio`, `log_backup` (audit `backup.create/restore/rekey` with counts only).
+- `render::file_stamp` gives German local time for file/folder names.
+- App:
+  - `app_init` returns status **`new`** when there's neither a keychain entry nor `master.wrapped`; `app_setup` then creates the keys and DB ("Neu einrichten").
+  - async `backup_create`: setting `backup_dir`; snapshot → archive → verify → audit; setting `last_backup`.
+  - `backup_inspect`: date, version, `keychain_matches`.
+  - async `backup_restore`: refuses during a recording or transcription; closes the store, installs, stores the master key in the keychain when restored with the recovery key, reopens, audits and sets `last_backup`; reopens the old store on failure.
+  - `recovery_key_rotate` is async and returns `{recovery_key, rekeyed, rekey_failed}`.
+- UI:
+  - `components/backup-restore.tsx` (`RestoreBackup`: pick file, info, key field only if needed, restore; keeps the `init` query and drops the rest)
+  - welcome screen "Willkommen bei thera" (Neu einrichten / Aus Datensicherung wiederherstellen)
+  - restore option on the "Wiederherstellung erforderlich" screen
+  - Settings card "Datensicherung" (folder, Jetzt sichern, last backup, restore with a warning about where the current data goes)
+  - The Notfall-Kit PDF now covers backups and still fits on one page (10.5 pt).
+- Tests: 97 core (+ backup round trip into another folder with the recovery key incl. audio decrypt after relocation, restore over existing data moves it aside, tamper/truncate/append/wrong key fail, re-wrap, path traversal, file_stamp). E2E in the real app with isolated data dirs and keychain users (`e2e-machine-a/b/c`, all removed afterwards):
+  - welcome → setup → kit → patient → backup written and verified (archive contains neither the name nor an SQLite header)
+  - second patient → same-machine restore without a key (newer data moved aside) → rotation re-keyed 1 backup
+  - new machine: key field required, old key rejected, new key typed in lower case with spaces restored → patient back, chain intact, `last_backup` shown
+- Found in E2E and fixed: dropping all queries after a restore also dropped `init`, so the gate stayed on the welcome screen.
+
 ## Current limitations
 
-- ~~Database is unencrypted~~ Encrypted SQLCipher build is live (2026-10-27): Strawberry Perl, LLVM, CMake installed, `LIBCLANG_PATH` set. Old plain DB backed up to `%APPDATA%\de.datorga.thera.plain-backup-20261027` (delete once not needed). The recovery kit exists now; still fake patients only until backup + restore is verified (A10).
+- ~~Database is unencrypted~~ Encrypted SQLCipher build is live (2026-10-27): Strawberry Perl, LLVM, CMake installed, `LIBCLANG_PATH` set. Old plain DB backed up to `%APPDATA%\de.datorga.thera.plain-backup-20261027` (delete once not needed). A10's technical gates (encryption, recovery kit, verified backup) are done. Before real patients: legal review of the consent text and a restore test on the therapist's own machine.
 - Recording/dictation and local transcription work. No diarization (session recordings are one speaker stream, role `unknown`) and no AI drafting yet.
 - Transcription is **CPU only**. A 50-min session on a laptop CPU may take ~25–50 min (unmeasured on laptop hardware). The CUDA build is 285 MB+ and NVIDIA-only; Vulkan has no prebuilt Windows release (would need our own build). Decide once the therapist's laptop specs are known.
 - The sidecar reads a **plaintext WAV** from `stt-tmp` while it runs (deleted afterwards, wiped on next unlock after a crash). Possible hardening: whisper-cli `-f -` (stdin) + parsing stdout, or a Windows Job Object so a crashed app can't leave the sidecar running.
@@ -128,6 +161,7 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
 - The consent text is a **draft**: needs legal review before real patients. After any wording change, bump `RECORDING_VERSION` in `crates/core/src/consent.rs`.
 - No printable consent form yet (the therapist notes the signed paper form in the consent note).
 - Capture lacks a disk-space guard and keep-awake (laptop sleep during long sessions).
+- Backups are manual (no schedule, no reminder yet) and always full. `last_backup` is the only "how old is my backup" signal.
 - Vorlagen upload is a placeholder card.
 - Sitzungsnotiz: no AI drafting (Phase 2: fact extraction from `source_segments`). A note exported before a Nachtrag lacks it until exported again (no "newer addenda than last export" hint yet). Partial insert works within one segment only, not across segments.
 
@@ -153,17 +187,21 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
      - since the key can't be re-shown: a Settings action "Neuen Notfallschlüssel erstellen" that generates a new recovery key, re-wraps the master key into `master.wrapped` atomically (write temp + rename) and produces a new PDF; the old printed key stops working (say so); audit entry without the key;
      - tests: re-wrap then `recover()` with new key works and old key fails; E2E of first run on the dev box needs isolation: the data dir comes from Tauri `app_data_dir()` (known-folder API, not the `APPDATA` env var) and the keychain entry `de.datorga.thera`/`master-key` is shared, so an existing entry skips first run. Add a debug-only override for both (e.g. `THERA_DATA_DIR` + a different keyring user), never touch the real entry.
    - The dev box's DB was created before this; the "Notfall-Kit fehlt" gate asks for a new kit on next start.
-6. **NEXT → Encrypted backup + restore** (PLAN §362 / 3.2, A10 gate):
+6. ~~**Encrypted backup + restore**~~ **done** (slice 6). Original brief:
    - an `age`-encrypted (or AES-GCM) archive of `thera.db` (consistent snapshot via SQLite backup API / `VACUUM INTO`), `master.wrapped` and `audio/`, written to a path the user chooses
    - restore from within the app, needing the Notfall-Schlüssel when the keychain doesn't match
    - a verified restore test
    - schedule later
    - **Decided (user, 2026-10-27):** the Notfall-Schlüssel is the backup key. No separate backup password. Restoring on a new machine needs the backup archive and the current Notfall-Kit. Consequences to handle: after a key rotation, older backups need the old key, or re-wrap the key inside them. Say so in the UI and on the kit.
-7. **Vorlagen module: deferred** until the therapist hands over material. She will supply old **Sitzungen and Berichte** later, and she must be able to **upload them herself in the app** (no developer-side import):
+7. **NEXT → Capture guards:** disk-space check before and during a recording (warn early, stop cleanly before the disk is full), and keep the laptop awake while recording (Windows `SetThreadExecutionState`).
+8. **Nachtrag export hint:** mark a note whose newest Nachtrag is newer than its last export ("neu exportieren").
+9. **Printable consent form:** PDF of the current recording-consent text (version + hash) with signature lines, from the patient's consent card.
+10. **Backup reminder:** a hint in the app when the last backup is older than N days (schedule later).
+11. **Vorlagen module: deferred** until the therapist hands over material. She will supply old **Sitzungen and Berichte** later, and she must be able to **upload them herself in the app** (no developer-side import):
    - upload old Berichte, old session notes and her forms (PDF/DOCX → text)
    - redaction review (pseudonymizer `detect()` spans), stored as style exemplars
    - the "Vorlagen" placeholder card stays until then
-8. **Phase 2:** LLM adapter (OpenAI-compatible, EU default, US-intermediary warning), per-session fact extraction with citations, Bericht drafting from facts + style exemplars, eval set.
+12. **Phase 2:** LLM adapter (OpenAI-compatible, EU default, US-intermediary warning), per-session fact extraction with citations, Bericht drafting from facts + style exemplars, eval set.
 
 ## Open questions for the therapist
 

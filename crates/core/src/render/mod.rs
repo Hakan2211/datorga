@@ -136,7 +136,7 @@ impl RecoveryKit {
             groups: key.display().split('-').map(str::to_string).collect(),
             created: german_datetime(created_at),
             reason: if rotated {
-                "Neuer Schlüssel; alle früheren Notfall-Kits sind ungültig".into()
+                "Neuer Schlüssel; ersetzt alle früheren Notfall-Kits".into()
             } else {
                 "Ersteinrichtung".into()
             },
@@ -277,9 +277,21 @@ fn german_date(rfc3339: &str) -> String {
 /// Wall-clock time in Germany (CET/CEST, EU switch at 01:00 UTC on the last Sundays of March
 /// and October), so a Nachtrag shows the time it was signed regardless of the machine's zone.
 fn german_datetime(rfc3339: &str) -> String {
+    let Some(t) = german_time(rfc3339) else { return rfc3339.to_string() };
+    format!("{:02}.{:02}.{}, {:02}:{:02}", t.day(), u8::from(t.month()), t.year(), t.hour(), t.minute())
+}
+
+/// German local time as `20261027-143621`, for file and folder names.
+pub fn file_stamp(rfc3339: &str) -> String {
+    match german_time(rfc3339) {
+        Some(t) => format!("{}{:02}{:02}-{:02}{:02}{:02}", t.year(), u8::from(t.month()), t.day(), t.hour(), t.minute(), t.second()),
+        None => rfc3339.chars().filter(char::is_ascii_digit).collect(),
+    }
+}
+
+fn german_time(rfc3339: &str) -> Option<time::OffsetDateTime> {
     use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset, Weekday};
-    let Ok(t) = OffsetDateTime::parse(rfc3339, &Rfc3339) else { return rfc3339.to_string() };
-    let t = t.to_offset(UtcOffset::UTC);
+    let t = OffsetDateTime::parse(rfc3339, &Rfc3339).ok()?.to_offset(UtcOffset::UTC);
     let switch = |m: Month| {
         let mut d = Date::from_calendar_date(t.year(), m, 31).expect("March and October have 31 days");
         while d.weekday() != Weekday::Sunday {
@@ -288,8 +300,7 @@ fn german_datetime(rfc3339: &str) -> String {
         PrimitiveDateTime::new(d, Time::from_hms(1, 0, 0).expect("valid time")).assume_utc()
     };
     let summer = t >= switch(Month::March) && t < switch(Month::October);
-    let t = t.to_offset(UtcOffset::from_hms(if summer { 2 } else { 1 }, 0, 0).expect("valid offset"));
-    format!("{:02}.{:02}.{}, {:02}:{:02}", t.day(), u8::from(t.month()), t.year(), t.hour(), t.minute())
+    Some(t.to_offset(UtcOffset::from_hms(if summer { 2 } else { 1 }, 0, 0).expect("valid offset")))
 }
 
 #[cfg(test)]
@@ -414,6 +425,7 @@ mod tests {
         assert_eq!(german_datetime("2026-03-29T01:00:00Z"), "29.03.2026, 03:00");
         assert_eq!(german_datetime("2026-10-25T00:59:00Z"), "25.10.2026, 02:59");
         assert_eq!(german_datetime("2026-10-25T01:00:00Z"), "25.10.2026, 02:00");
+        assert_eq!(file_stamp("2026-10-27T13:36:21.5Z"), "20261027-143621");
     }
 
     #[test]

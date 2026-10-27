@@ -34,6 +34,13 @@ export const de = {
     recoveryTitle: 'Ihr Notfall-Schlüssel',
     recoveryBody:
       'Mit diesem Schlüssel können Sie Ihre Daten wiederherstellen, falls der Schlüsselbund dieses Computers verloren geht. Er wird nur dieses eine Mal angezeigt. Speichern und drucken Sie das Notfall-Kit oder notieren Sie den Schlüssel, und bewahren Sie ihn sicher auf (nicht auf diesem Computer).',
+    welcomeTitle: 'Willkommen bei thera',
+    welcomeBody:
+      'Auf diesem Computer ist thera noch nicht eingerichtet. Richten Sie thera neu ein oder übernehmen Sie Ihre Daten aus einer Datensicherung.',
+    newSetup: 'Neu einrichten',
+    restoreHint:
+      'Neuer Computer? Wählen Sie Ihre Datensicherung (.therabak). Dazu brauchen Sie Ihr Notfall-Kit.',
+    recoverFromBackupHint: 'Oder Daten aus einer Datensicherung wiederherstellen:',
     unconfirmedTitle: 'Notfall-Kit fehlt',
     unconfirmedBody:
       'Für diese Datenbank wurde noch kein Notfall-Schlüssel als sicher verwahrt bestätigt (etwa weil das Fenster beim ersten Start geschlossen wurde). Ohne ihn sind Ihre Daten verloren, wenn der Schlüsselbund dieses Computers verloren geht. Erstellen Sie jetzt einen neuen; ein eventuell vorhandener älterer Schlüssel wird damit ungültig.',
@@ -43,6 +50,37 @@ export const de = {
     recoveryInput: 'Notfall-Schlüssel',
     recover: 'Wiederherstellen',
     outsideTauri: 'Diese Oberfläche läuft nur innerhalb der Desktop-App (npm run tauri dev).',
+  },
+  backup: {
+    title: 'Datensicherung',
+    intro:
+      'Die Sicherung ist eine verschlüsselte Datei mit allen Daten und Aufnahmen. Zum Wiederherstellen auf einem anderen Computer brauchen Sie Ihr Notfall-Kit. Wählen Sie einen Ordner außerhalb dieses Computers, etwa einen USB-Stick oder eine externe Festplatte. Jede Sicherung wird nach dem Schreiben geprüft.',
+    folder: 'Sicherungsordner',
+    noFolder: 'Noch kein Ordner gewählt',
+    chooseFolder: 'Ordner wählen',
+    now: 'Jetzt sichern',
+    running: 'Sichere und prüfe…',
+    done: 'Gesichert und geprüft: {{path}}',
+    last: 'Letzte Sicherung: {{date}} ({{file}})',
+    never: 'Noch keine Sicherung',
+    restoreIntro:
+      'Wiederherstellen ersetzt die aktuellen Daten durch den Stand der Sicherung. Die aktuellen Daten werden nicht gelöscht, sondern in einen Ordner im Datenverzeichnis verschoben.',
+    restore: 'Aus Datensicherung wiederherstellen',
+    fileType: 'thera-Datensicherung',
+    pickedInfo: 'Datensicherung vom {{date}} (thera {{version}}).',
+    replaceWarning:
+      'Alle Änderungen seit dieser Sicherung sind danach nicht mehr in thera sichtbar. Sie bleiben im verschobenen Ordner erhalten.',
+    keyNeeded: 'Notfall-Schlüssel (vom Notfall-Kit, das zu dieser Sicherung gehört)',
+    restoreNow: 'Wiederherstellen',
+    restoring: 'Stelle wieder her…',
+    restored: 'Daten wiederhergestellt.',
+    restoredWithPrevious: 'Daten wiederhergestellt. Die vorherigen Daten liegen in {{path}}.',
+    rekeyed_one: '{{count}} Datensicherung auf den neuen Schlüssel umgestellt.',
+    rekeyed_other: '{{count}} Datensicherungen auf den neuen Schlüssel umgestellt.',
+    rekeyFailed_one:
+      '{{count}} Datensicherung im Sicherungsordner konnte nicht umgestellt werden. Sie öffnet nur mit dem alten Notfall-Schlüssel.',
+    rekeyFailed_other:
+      '{{count}} Datensicherungen im Sicherungsordner konnten nicht umgestellt werden. Sie öffnen nur mit dem alten Notfall-Schlüssel.',
   },
   recoveryKit: {
     savePdf: 'Notfall-Kit als PDF speichern',
@@ -56,7 +94,7 @@ export const de = {
     rotate: 'Neuen Notfall-Schlüssel erstellen',
     rotateConfirmTitle: 'Neuen Notfall-Schlüssel erstellen?',
     rotateConfirmBody:
-      'Der bisherige Notfall-Schlüssel und alle bisher gedruckten Notfall-Kits funktionieren danach nicht mehr. Vernichten Sie den alten Ausdruck, sobald der neue sicher verwahrt ist.',
+      'Der bisherige Notfall-Schlüssel und alle bisher gedruckten Notfall-Kits funktionieren danach nicht mehr. Datensicherungen im Sicherungsordner werden auf den neuen Schlüssel umgestellt; Kopien an anderen Orten öffnen weiterhin nur mit dem alten Schlüssel. Vernichten Sie den alten Ausdruck erst, wenn Sie solche Kopien nicht mehr brauchen.',
     rotateAction: 'Erstellen',
     newTitle: 'Ihr neuer Notfall-Schlüssel',
     newBody: 'Er wird nur dieses eine Mal angezeigt. Bitte jetzt das Notfall-Kit speichern und ausdrucken.',

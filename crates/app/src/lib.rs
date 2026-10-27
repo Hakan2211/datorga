@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
 use thera_capture::{InputDevice, Recorder};
 use thera_core::audio::{self, ChunkWriter};
+use thera_core::backup::{self, BackupSummary, Unlocked};
 use thera_core::consent::{self, ConsentText};
 use thera_core::crypto::{self, KeyStore, MasterKey, Unlock};
 use thera_core::domain::*;
@@ -169,7 +170,7 @@ fn lock<T>(m: &Mutex<T>) -> CmdResult<MutexGuard<'_, T>> {
 
 #[derive(Serialize)]
 struct InitResult {
-    /// "ready" | "recovery_required"
+    /// "ready" | "recovery_required" | "new" (nothing set up yet: set up or restore a backup)
     status: &'static str,
     /// Shown once on first run; the user must write it down / print it.
     recovery_key: Option<String>,
@@ -184,6 +185,23 @@ fn app_init(state: State<'_, AppState>) -> CmdResult<InitResult> {
         let recovery_confirmed = state.with(|s| s.recovery_kit_confirmed())?;
         return Ok(InitResult { status: "ready", recovery_key: None, recovery_confirmed, encrypted: Store::is_encrypted() });
     }
+    // First start on this machine: let the user choose between a new setup and a restore.
+    if state.keys().load()?.is_none() && !state.wrapped_path().exists() {
+        return Ok(InitResult { status: "new", recovery_key: None, recovery_confirmed: false, encrypted: Store::is_encrypted() });
+    }
+    app_open(&state)
+}
+
+/// "Neu einrichten": creates the master key, recovery key and an empty database.
+#[tauri::command]
+fn app_setup(state: State<'_, AppState>) -> CmdResult<InitResult> {
+    if lock(&state.store)?.is_some() {
+        return Err(CmdError::Other("Bereits eingerichtet".into()));
+    }
+    app_open(&state)
+}
+
+fn app_open(state: &AppState) -> CmdResult<InitResult> {
     let (key, recovery_key) = match crypto::unlock_or_init(&state.keys(), &state.wrapped_path()) {
         Ok(Unlock::Existing(k)) => (k, None),
         Ok(Unlock::Created { key, recovery }) => (key, Some(recovery.display())),
@@ -230,11 +248,173 @@ fn recovery_kit_confirm(state: State<'_, AppState>) -> CmdResult<()> {
     state.with(|s| s.confirm_recovery_kit())
 }
 
+#[derive(Serialize)]
+struct Rotated {
+    /// Shown once.
+    recovery_key: String,
+    /// Backups in the backup folder moved to the new key.
+    rekeyed: u32,
+    /// Backups there that could not be updated (they still need the old key).
+    rekey_failed: u32,
+}
+
 /// "Neuen Notfall-Schlüssel erstellen". Returns the new key once; earlier kits stop working.
+/// Backups in the backup folder are re-wrapped to the new key (header only).
 #[tauri::command]
-fn recovery_key_rotate(state: State<'_, AppState>) -> CmdResult<String> {
-    let key = state.keys().load()?.ok_or_else(|| CmdError::Other("Schlüssel nicht im Schlüsselbund".into()))?;
-    Ok(state.with(|s| s.rotate_recovery_key(&key, &state.wrapped_path()))?.display())
+async fn recovery_key_rotate(app: AppHandle) -> CmdResult<Rotated> {
+    blocking(app, |state| {
+        let key = state.keys().load()?.ok_or_else(|| CmdError::Other("Schlüssel nicht im Schlüsselbund".into()))?;
+        let recovery = state.with(|s| s.rotate_recovery_key(&key, &state.wrapped_path()))?;
+        let (mut rekeyed, mut rekey_failed) = (0, 0);
+        if let Some(dir) = backup_dir(state)? {
+            for path in backup_files(&dir) {
+                match backup::rewrap_file(&path, &key, &recovery) {
+                    Ok(true) => rekeyed += 1,
+                    Ok(false) => {}
+                    Err(_) => rekey_failed += 1,
+                }
+            }
+            if rekeyed > 0 {
+                state.with(|s| s.log_backup("backup.rekey", rekeyed as u64, 0))?;
+            }
+        }
+        Ok(Rotated { recovery_key: recovery.display(), rekeyed, rekey_failed })
+    })
+    .await
+}
+
+// ---------- backup ----------
+
+/// Runs `f` off the main thread (backups and restores take seconds).
+async fn blocking<T: Send + 'static>(app: AppHandle, f: impl FnOnce(&AppState) -> CmdResult<T> + Send + 'static) -> CmdResult<T> {
+    tauri::async_runtime::spawn_blocking(move || f(&app.state::<AppState>()))
+        .await
+        .map_err(|e| CmdError::Other(e.to_string()))?
+}
+
+fn backup_dir(state: &AppState) -> CmdResult<Option<PathBuf>> {
+    Ok(state
+        .with(|s| s.setting("backup_dir"))?
+        .and_then(|v| v.as_str().map(PathBuf::from))
+        .filter(|p| !p.as_os_str().is_empty()))
+}
+
+fn backup_files(dir: &std::path::Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return vec![] };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == backup::EXTENSION))
+        .collect();
+    files.sort();
+    files
+}
+
+#[derive(Serialize)]
+struct BackupDone {
+    path: String,
+    summary: BackupSummary,
+}
+
+/// Writes `thera-backup-<time>.therabak` to the backup folder and checks it can be restored
+/// (decrypt everything, open the database, walk the audit chain).
+#[tauri::command]
+async fn backup_create(app: AppHandle) -> CmdResult<BackupDone> {
+    blocking(app, |state| {
+        let dir = backup_dir(state)?.ok_or_else(|| CmdError::Other("Bitte zuerst einen Sicherungsordner wählen".into()))?;
+        std::fs::create_dir_all(&dir).map_err(thera_core::Error::from)?;
+        let key = state.keys().load()?.ok_or_else(|| CmdError::Other("Schlüssel nicht im Schlüsselbund".into()))?;
+        let wrapped = std::fs::read_to_string(state.wrapped_path()).map_err(thera_core::Error::from)?;
+
+        let tmp = state.data_dir.join("backup-tmp");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir(&tmp).map_err(thera_core::Error::from)?;
+        let snapshot = tmp.join("thera.db");
+        let result = (|| {
+            state.with(|s| s.snapshot_to(&snapshot))?;
+            let stamp = render::file_stamp(&thera_core::domain::now());
+            let out = dir.join(format!("thera-backup-{stamp}.{}", backup::EXTENSION));
+            let summary = backup::create(&out, &snapshot, &state.audio_root(), &key, &wrapped, env!("CARGO_PKG_VERSION"))?;
+            backup::verify(&out, &key, &state.data_dir.join("backup-verify"))?;
+            Ok::<_, CmdError>((out, summary))
+        })();
+        let _ = std::fs::remove_dir_all(&tmp);
+        let (out, summary) = result?;
+        let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        state.with(|s| {
+            s.log_backup("backup.create", summary.files, summary.bytes)?;
+            s.set_setting("last_backup", &serde_json::json!({ "at": summary.created_at, "file": name, "bytes": summary.bytes }))
+        })?;
+        Ok(BackupDone { path: out.display().to_string(), summary })
+    })
+    .await
+}
+
+#[derive(Serialize)]
+struct BackupHeaderView {
+    created_at: String,
+    app_version: String,
+    /// The keychain already holds this backup's key: no Notfall-Schlüssel needed.
+    keychain_matches: bool,
+}
+
+#[tauri::command]
+fn backup_inspect(state: State<'_, AppState>, path: String) -> CmdResult<BackupHeaderView> {
+    let h = backup::inspect(std::path::Path::new(&path))?;
+    let keychain_matches = state.keys().load()?.is_some_and(|k| backup::key_id(&k) == h.key_id);
+    Ok(BackupHeaderView { created_at: h.created_at, app_version: h.app_version, keychain_matches })
+}
+
+#[derive(Serialize)]
+struct RestoreDone {
+    summary: BackupSummary,
+    /// Folder holding the data that was replaced (moved, not deleted).
+    previous: Option<String>,
+}
+
+/// Replaces the current data with a backup. Needs the Notfall-Schlüssel unless the keychain key
+/// matches. Works from the setup/recovery screens (store closed) and from Settings (store open).
+#[tauri::command]
+async fn backup_restore(app: AppHandle, path: String, recovery_key: Option<String>) -> CmdResult<RestoreDone> {
+    blocking(app, move |state| {
+        if lock(&state.recording)?.is_some() {
+            return Err(CmdError::Other("Bitte zuerst die laufende Aufnahme beenden".into()));
+        }
+        if lock(&state.transcribing)?.is_some() {
+            return Err(CmdError::Other("Bitte warten, bis die Transkription fertig ist, oder sie abbrechen".into()));
+        }
+        let archive = PathBuf::from(&path);
+        let header = backup::inspect(&archive)?;
+        let keychain = state.keys().load()?;
+        let (master, how) = backup::unlock(&header, keychain.as_ref(), recovery_key.as_deref())?;
+        let via_recovery = matches!(how, Unlocked::Recovery);
+        let wrapped = (via_recovery || !state.wrapped_path().exists()).then_some(header.wrapped.as_str());
+
+        let was_open = lock(&state.store)?.take().is_some();
+        let installed = match backup::install(&archive, &master, &state.data_dir, wrapped) {
+            Ok(i) => i,
+            Err(e) => {
+                if let (true, Some(k)) = (was_open, keychain.as_ref()) {
+                    let _ = state.open_store(k);
+                }
+                return Err(e.into());
+            }
+        };
+        if via_recovery {
+            state.keys().store(&master)?;
+        }
+        state.open_store(&master)?;
+        // The restored database predates its own "last backup" entry; this backup is the latest known one.
+        let name = archive.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        state.with(|s| {
+            s.log_backup("backup.restore", installed.summary.files, installed.summary.bytes)?;
+            s.set_setting(
+                "last_backup",
+                &serde_json::json!({ "at": installed.summary.created_at, "file": name, "bytes": installed.summary.bytes }),
+            )
+        })?;
+        Ok(RestoreDone { summary: installed.summary, previous: installed.previous.map(|p| p.display().to_string()) })
+    })
+    .await
 }
 
 // ---------- patients ----------
@@ -874,6 +1054,10 @@ pub fn run() {
             recovery_kit_export,
             recovery_key_rotate,
             recovery_kit_confirm,
+            app_setup,
+            backup_create,
+            backup_inspect,
+            backup_restore,
             patients_list,
             patient_get,
             patient_create,

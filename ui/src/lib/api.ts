@@ -24,13 +24,20 @@ import type { SourceKind } from '@/bindings/SourceKind'
 import type { SourceSegment } from '@/bindings/SourceSegment'
 import type { Template } from '@/bindings/Template'
 import type { Transcript } from '@/bindings/Transcript'
+import type { BackupSummary } from '@/bindings/BackupSummary'
 
 export type InitResult = {
-  status: 'ready' | 'recovery_required'
+  status: 'ready' | 'recovery_required' | 'new'
   recovery_key: string | null
   recovery_confirmed: boolean
   encrypted: boolean
 }
+
+export type BackupHeaderView = { created_at: string; app_version: string; keychain_matches: boolean }
+export type BackupDone = { path: string; summary: BackupSummary }
+export type RestoreDone = { summary: BackupSummary; previous: string | null }
+export type Rotated = { recovery_key: string; rekeyed: number; rekey_failed: number }
+export type LastBackup = { at: string; file: string; bytes: number }
 
 export type ReportView = {
   report: Report
@@ -79,7 +86,12 @@ export const api = {
   recover: (recoveryKey: string) => invoke<void>('app_recover', { recoveryKey }),
   exportRecoveryKit: (recoveryKey: string, rotated: boolean, path: string) =>
     invoke<void>('recovery_kit_export', { recoveryKey, rotated, path }),
-  rotateRecoveryKey: () => invoke<string>('recovery_key_rotate'),
+  rotateRecoveryKey: () => invoke<Rotated>('recovery_key_rotate'),
+  setup: () => invoke<InitResult>('app_setup'),
+  createBackup: () => invoke<BackupDone>('backup_create'),
+  inspectBackup: (path: string) => invoke<BackupHeaderView>('backup_inspect', { path }),
+  restoreBackup: (path: string, recoveryKey: string | null) =>
+    invoke<RestoreDone>('backup_restore', { path, recoveryKey }),
   confirmRecoveryKit: () => invoke<void>('recovery_kit_confirm'),
 
   patients: (query?: string) => invoke<Patient[]>('patients_list', { query: query || null }),

@@ -94,6 +94,39 @@ impl Store {
         Ok(())
     }
 
+    // ---------- backup ----------
+
+    /// Consistent copy of the database into `path` (must not exist), keyed like this one.
+    pub fn snapshot_to(&self, path: &Path) -> Result<()> {
+        self.conn.execute("VACUUM INTO ?1", [path.to_string_lossy()])?;
+        Ok(())
+    }
+
+    /// Points every audio asset at `root/<source id>` (after a restore into another folder).
+    pub fn relocate_audio(&self, root: &Path) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let rows: Vec<(String, String)> = {
+            let mut stmt = tx.prepare("SELECT id, source_id FROM audio_asset")?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<std::result::Result<_, _>>()?
+        };
+        for (id, source_id) in rows {
+            tx.execute("UPDATE audio_asset SET path = ?2 WHERE id = ?1", params![id, root.join(&source_id).to_string_lossy()])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn log_backup(&self, action: &str, files: u64, bytes: u64) -> Result<()> {
+        audit::append(&self.conn, Entry {
+            actor: ACTOR,
+            action,
+            entity_type: "backup",
+            entity_id: None,
+            meta: json!({ "files": files, "bytes": bytes }),
+        })
+    }
+
     // ---------- recovery key ----------
 
     /// "Neuen Notfall-Schlüssel erstellen": re-wraps `key` under a fresh recovery key. The audit
