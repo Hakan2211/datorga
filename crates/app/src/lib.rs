@@ -2,12 +2,13 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
+use thera_capture::power::{self, KeepAwake};
 use thera_capture::{InputDevice, Recorder};
 use thera_core::audio::{self, ChunkWriter};
 use thera_core::backup::{self, BackupSummary, Unlocked};
@@ -107,6 +108,52 @@ struct ActiveRecording {
     kind: SourceKind,
     recorder: Recorder,
     writer: Arc<Mutex<ChunkWriter>>,
+    /// Last measured free space on the audio volume (`u64::MAX` = unknown), updated by the guard.
+    free_bytes: Arc<AtomicU64>,
+}
+
+/// 16 kHz mono i16 on disk: 32 kB per second, ~115 MB per hour.
+const AUDIO_BYTES_PER_SEC: u64 = 32_000;
+/// Free space needed to start a recording (~4 h of audio).
+const DISK_START_MIN: u64 = 500 << 20;
+/// Below this a running recording is stopped cleanly (`end_reason = disk_full`).
+const DISK_FLOOR: u64 = 200 << 20;
+/// The UI warns once fewer minutes than this are left before the automatic stop.
+const DISK_WARN_MINUTES: u64 = 60;
+
+/// (start minimum, floor). Debug builds take `THERA_DISK_START_MB` / `THERA_DISK_FLOOR_MB` (E2E).
+fn disk_limits() -> (u64, u64) {
+    #[cfg(debug_assertions)]
+    {
+        let mb = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u64>().ok()).map(|v| v << 20);
+        (mb("THERA_DISK_START_MB").unwrap_or(DISK_START_MIN), mb("THERA_DISK_FLOOR_MB").unwrap_or(DISK_FLOOR))
+    }
+    #[cfg(not(debug_assertions))]
+    (DISK_START_MIN, DISK_FLOOR)
+}
+
+/// Runs for one recording: keeps the machine awake (the flag is per thread) and stops the
+/// recording before the disk fills up.
+fn spawn_recording_guard(app: AppHandle, source_id: String, free: Arc<AtomicU64>) {
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        let _awake = KeepAwake::new();
+        let (_, floor) = disk_limits();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let current = state.recording.lock().ok().and_then(|g| g.as_ref().map(|r| r.source_id.clone()));
+            if current.as_deref() != Some(source_id.as_str()) {
+                break;
+            }
+            if let Some(bytes) = power::free_space(&state.audio_root()) {
+                free.store(bytes, Ordering::Relaxed);
+                if bytes < floor {
+                    let _ = stop_recording(&state, "disk_full");
+                    break;
+                }
+            }
+        }
+    });
 }
 
 impl AppState {
@@ -491,6 +538,7 @@ fn audio_devices() -> CmdResult<Vec<InputDevice>> {
 
 #[tauri::command]
 fn recording_start(
+    app: AppHandle,
     state: State<'_, AppState>,
     session_id: String,
     kind: SourceKind,
@@ -501,6 +549,14 @@ fn recording_start(
         return Err(CmdError::Other("Es läuft bereits eine Aufnahme".into()));
     }
     let patient_id = state.with(|s| s.session(&session_id))?.patient_id;
+    let free = power::free_space(&state.audio_root());
+    if let Some(bytes) = free.filter(|b| *b < disk_limits().0) {
+        return Err(CmdError::Other(format!(
+            "Zu wenig Speicherplatz: {} MB frei, für eine Aufnahme werden mindestens {} MB benötigt",
+            bytes >> 20,
+            disk_limits().0 >> 20
+        )));
+    }
     let (source, writer) = state.with(|s| s.start_source(&session_id, kind, &state.audio_root()))?;
     let writer = Arc::new(Mutex::new(writer));
     let w = writer.clone();
@@ -513,7 +569,9 @@ fn recording_start(
             return Err(CmdError::Other(e.to_string()));
         }
     };
-    *slot = Some(ActiveRecording { source_id: source.id.clone(), session_id, patient_id, kind, recorder, writer });
+    let free_bytes = Arc::new(AtomicU64::new(free.unwrap_or(u64::MAX)));
+    *slot = Some(ActiveRecording { source_id: source.id.clone(), session_id, patient_id, kind, recorder, writer, free_bytes: free_bytes.clone() });
+    spawn_recording_guard(app, source.id.clone(), free_bytes);
     Ok(source)
 }
 
@@ -525,6 +583,8 @@ struct RecordingStatus {
     duration_ms: u64,
     level: f32,
     error: Option<String>,
+    /// Minutes of recording left before the automatic stop; only when space is getting low.
+    minutes_left: Option<u64>,
 }
 
 /// Polled by the UI (~10 Hz) for the timer and level meter.
@@ -538,6 +598,10 @@ fn recording_status(state: State<'_, AppState>) -> CmdResult<Option<RecordingSta
         duration_ms: r.recorder.duration_ms(),
         level: r.recorder.level(),
         error: r.recorder.error(),
+        minutes_left: Some(r.free_bytes.load(Ordering::Relaxed))
+            .filter(|b| *b != u64::MAX)
+            .map(|b| b.saturating_sub(disk_limits().1) / AUDIO_BYTES_PER_SEC / 60)
+            .filter(|m| *m < DISK_WARN_MINUTES),
     }))
 }
 

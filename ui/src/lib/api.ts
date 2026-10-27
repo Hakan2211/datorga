@@ -77,6 +77,7 @@ export type RecordingStatus = {
   duration_ms: number
   level: number
   error: string | null
+  minutes_left: number | null
 }
 
 export const isTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window

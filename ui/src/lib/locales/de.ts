@@ -173,6 +173,9 @@ export const de = {
     running: 'Aufnahme läuft',
     elsewhere: 'Es läuft bereits eine Aufnahme in einer anderen Sitzung.',
     goThere: 'Dorthin wechseln',
+    lowDiskNow: 'Speicherplatz fast erschöpft: thera beendet die Aufnahme gleich automatisch und speichert sie.',
+    lowDisk:
+      'Speicherplatz wird knapp: noch etwa {{minutes}} Minuten Aufnahme möglich. Danach beendet thera die Aufnahme automatisch und speichert sie.',
     silent: 'Kein Signal? Mikrofon und Windows-Datenschutzeinstellung „Mikrofonzugriff für Desktop-Apps“ prüfen.',
     sources: 'Aufnahmen',
     none: 'Noch keine Aufnahme.',
@@ -183,6 +186,7 @@ export const de = {
       stopped: '',
       consent_revoked: 'Abgebrochen: Einwilligung widerrufen',
       device_error: 'Abgebrochen: Mikrofonfehler',
+      disk_full: 'Automatisch beendet: Speicherplatz fast erschöpft; die Aufnahme bis dahin ist gespeichert',
       crash: 'App wurde während der Aufnahme beendet; gespeicherte Teile bleiben erhalten',
     },
   },

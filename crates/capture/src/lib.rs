@@ -5,6 +5,8 @@
 //! (what Whisper expects), converts to i16 and passes fixed-size chunks to the caller's sink.
 //! Persistence and encryption are the sink's job (`thera_core::audio`).
 
+pub mod power;
+
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -53,6 +55,8 @@ struct Shared {
     level: AtomicU32,
     /// 16 kHz samples handed to the sink so far.
     samples: AtomicU64,
+    /// 16 kHz samples captured so far, including the chunk still being filled (timer display).
+    captured: AtomicU64,
     failed: AtomicBool,
     error: Mutex<Option<String>>,
 }
@@ -77,6 +81,7 @@ impl Recorder {
         let shared = Arc::new(Shared {
             level: AtomicU32::new(0),
             samples: AtomicU64::new(0),
+            captured: AtomicU64::new(0),
             failed: AtomicBool::new(false),
             error: Mutex::new(None),
         });
@@ -112,8 +117,9 @@ impl Recorder {
         f32::from_bits(self.shared.level.load(Ordering::Relaxed))
     }
 
+    /// Live duration, including the chunk not yet written.
     pub fn duration_ms(&self) -> u64 {
-        self.shared.samples.load(Ordering::Relaxed) * 1000 / SAMPLE_RATE as u64
+        self.shared.captured.load(Ordering::Relaxed) * 1000 / SAMPLE_RATE as u64
     }
 
     /// Device lost, sink failed, etc. The recording keeps what was written so far.
@@ -206,7 +212,9 @@ fn write_loop(rx: mpsc::Receiver<Vec<f32>>, in_rate: u32, chunk: usize, mut sink
     // Ends when the stream thread drops the stream (and with it the sender).
     // A sink error returns early; the dropped receiver then makes the callback's sends no-ops.
     for block in rx {
+        let before = buf.len();
         buf.extend(resampler.process(&block).into_iter().map(to_i16));
+        shared.captured.fetch_add((buf.len() - before) as u64, Ordering::Relaxed);
         while buf.len() >= chunk {
             let rest = buf.split_off(chunk);
             emit(&buf)?;
@@ -304,7 +312,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let got = Arc::new(Mutex::new(Vec::<usize>::new()));
         let g = got.clone();
-        let shared = Arc::new(Shared { level: AtomicU32::new(0), samples: AtomicU64::new(0), failed: AtomicBool::new(false), error: Mutex::new(None) });
+        let shared = Arc::new(Shared { level: AtomicU32::new(0), samples: AtomicU64::new(0), captured: AtomicU64::new(0), failed: AtomicBool::new(false), error: Mutex::new(None) });
         for b in sine(16_000, 200.0, 1.3).chunks(480) {
             tx.send(b.to_vec()).unwrap();
         }
@@ -313,5 +321,6 @@ mod tests {
         // The interpolator holds back one sample (it needs the next one), hence 4_799 not 4_800.
         assert_eq!(*got.lock().unwrap(), vec![8_000, 8_000, 4_799]);
         assert_eq!(shared.samples.load(Ordering::SeqCst), 20_799);
+        assert_eq!(shared.captured.load(Ordering::SeqCst), 20_799, "timer counts the same samples");
     }
 }

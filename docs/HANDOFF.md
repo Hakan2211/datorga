@@ -1,8 +1,8 @@
-# thera: session handoff (2026-10-27, after backup + restore)
+# thera: session handoff (2026-10-27, after capture guards)
 
 Start a new session with: *"Read docs/HANDOFF.md and continue with the next step."*
 
-**State at end of session (2026-10-27):** encrypted backup + restore (slice 6) is done, tested, committed and pushed to `main`. The release app (desktop shortcut) and installers were rebuilt from it. The user asked to work through the remaining steps one by one until Phase 2. Next step: **capture guards** (disk space + keep-awake, see Next steps 7).
+**State at end of session (2026-10-27):** capture guards (slice 7) are done, tested, committed and pushed to `main`. The release app (desktop shortcut) and installers were rebuilt from it. The user asked to work through the remaining steps one by one until Phase 2. Next step: **Nachtrag export hint** (see Next steps 8).
 
 On the next start of the dev-box app you'll see **"Notfall-Kit fehlt"**: the DB predates the kit, so it was never confirmed. Create a new key there and save/print the kit.
 
@@ -151,6 +151,21 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
   - new machine: key field required, old key rejected, new key typed in lower case with spaces restored → patient back, chain intact, `last_backup` shown
 - Found in E2E and fixed: dropping all queries after a restore also dropped `init`, so the gate stayed on the welcome screen.
 
+**Built (slice 7, 2026-10-27): capture guards**
+- `thera_capture::power`: `free_space(path)` (nearest existing ancestor; Windows `GetDiskFreeSpaceExW`) and `KeepAwake` (`SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)`; the flag belongs to the calling thread, so the guard is `!Send`; the display may still turn off). Plain FFI to kernel32, no new crate; non-Windows builds compile to no-ops.
+- App:
+  - `recording_start` refuses when less than 500 MB is free (message gives MB free and needed) before any source row exists.
+  - A guard thread per recording holds `KeepAwake`, measures free space every 2 s and stops the recording cleanly below 200 MB (`end_reason = disk_full`; what was recorded stays).
+  - `recording_status.minutes_left` is set only when fewer than 60 minutes remain before that stop (16 kHz mono = 32 kB/s ≈ 115 MB/h, so a fixed GB threshold would warn ~17 h early).
+  - Debug-only `THERA_DISK_START_MB` / `THERA_DISK_FLOOR_MB` overrides for E2E.
+- UI: low-space warning under the recording controls ("noch etwa N Minuten" / "gleich automatisch beendet"); reason text for `disk_full` in the recordings list.
+- Fix found on the way (from slice 2): the recording timer only counted samples already written in 5-s chunks, so it showed 00:00 for 5 s and then jumped. `Recorder::duration_ms` now counts captured samples; the stored duration is unchanged.
+- Tests: capture 5 (+ free space, keep-awake checked via `CallNtPowerInformation(SystemExecutionState)` without admin rights; another process can hold the same flag, so this shows the call works, not exclusivity). E2E in the real app (isolated data dir, `e2e-cap` keychain user, removed afterwards):
+  - start minimum above actual free space → refused with the message, no recording
+  - floor above free space → warning shown, auto-stop after ~2 s with `disk_full`, reason on the page
+  - normal limits → no warning, live timer (2970 ms after 3 s), clean stop
+- Not covered: lid close still sleeps if Windows is set to (no app can prevent that); `powercfg /requests` needs admin, so the request wasn't checked from outside.
+
 ## Current limitations
 
 - ~~Database is unencrypted~~ Encrypted SQLCipher build is live (2026-10-27): Strawberry Perl, LLVM, CMake installed, `LIBCLANG_PATH` set. Old plain DB backed up to `%APPDATA%\de.datorga.thera.plain-backup-20261027` (delete once not needed). A10's technical gates (encryption, recovery kit, verified backup) are done. Before real patients: legal review of the consent text and a restore test on the therapist's own machine.
@@ -160,7 +175,7 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
 - There is no audio playback in the transcript viewer, so the therapist reviews text without hearing it.
 - The consent text is a **draft**: needs legal review before real patients. After any wording change, bump `RECORDING_VERSION` in `crates/core/src/consent.rs`.
 - No printable consent form yet (the therapist notes the signed paper form in the consent note).
-- Capture lacks a disk-space guard and keep-awake (laptop sleep during long sessions).
+- Closing the laptop lid during a recording still sleeps if Windows is configured to. What the audio stream does after resume is untested.
 - Backups are manual (no schedule, no reminder yet) and always full. `last_backup` is the only "how old is my backup" signal.
 - Vorlagen upload is a placeholder card.
 - Sitzungsnotiz: no AI drafting (Phase 2: fact extraction from `source_segments`). A note exported before a Nachtrag lacks it until exported again (no "newer addenda than last export" hint yet). Partial insert works within one segment only, not across segments.
@@ -175,7 +190,8 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
    - ~~local transcription via a whisper.cpp sidecar~~ **done** (resource folder instead of `externalBin`, see slice 3)
    - ~~transcript viewer~~ **done** (edit per segment, confirm)
    - ~~audio auto-delete after the transcript is confirmed~~ **done**
-   - open: disk-space guard + keep-awake for capture; GPU decision; optional audio playback in the viewer; diarization for session recordings (PLAN §4.3)
+   - ~~disk-space guard + keep-awake~~ **done** (slice 7)
+   - open: GPU decision; optional audio playback in the viewer; diarization for session recordings (PLAN §4.3)
 3. ~~**Sitzungsnotiz** form per session~~ **done** (slice 4).
 4. ~~**Sitzungsnotiz follow-ups**~~ **done**: Nachtrag, sidebar highlight, partial transcript insert.
 5. ~~**Recovery-kit PDF**~~ **done** (slice 5). The original brief follows for reference.
@@ -193,8 +209,8 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
    - a verified restore test
    - schedule later
    - **Decided (user, 2026-10-27):** the Notfall-Schlüssel is the backup key. No separate backup password. Restoring on a new machine needs the backup archive and the current Notfall-Kit. Consequences to handle: after a key rotation, older backups need the old key, or re-wrap the key inside them. Say so in the UI and on the kit.
-7. **NEXT → Capture guards:** disk-space check before and during a recording (warn early, stop cleanly before the disk is full), and keep the laptop awake while recording (Windows `SetThreadExecutionState`).
-8. **Nachtrag export hint:** mark a note whose newest Nachtrag is newer than its last export ("neu exportieren").
+7. ~~**Capture guards**~~ **done** (slice 7): disk-space check before and during a recording (warn early, stop cleanly before the disk is full), and keep the laptop awake while recording (Windows `SetThreadExecutionState`).
+8. **NEXT → Nachtrag export hint:** mark a note whose newest Nachtrag is newer than its last export ("neu exportieren").
 9. **Printable consent form:** PDF of the current recording-consent text (version + hash) with signature lines, from the patient's consent card.
 10. **Backup reminder:** a hint in the app when the last backup is older than N days (schedule later).
 11. **Vorlagen module: deferred** until the therapist hands over material. She will supply old **Sitzungen and Berichte** later, and she must be able to **upload them herself in the app** (no developer-side import):
