@@ -199,13 +199,42 @@ pub fn prepare(template: &Template, segments: &[SourceSegment], mut dict: Dictio
     Ok(Prepared { system, chunks: prepared, map: p.into_map(), prompt_hash, digest: hex::encode(h.finalize()) })
 }
 
-fn sha256(s: &str) -> String {
+pub(crate) fn sha256(s: &str) -> String {
     hex::encode(Sha256::digest(s.as_bytes()))
 }
 
 static THINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<think>.*?</think>").expect("valid regex"));
 // ICD-10 codes (F32.1, F43, Z73.0…). "U" codes are left out: they are rare and "U18" is no diagnosis talk.
-static ICD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b[A-TV-Z][0-9]{2}(\.[0-9]{1,2})?\b").expect("valid regex"));
+pub(crate) static ICD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b[A-TV-Z][0-9]{2}(\.[0-9]{1,2})?\b").expect("valid regex"));
+
+/// The list in a model answer: `{"<field>": [...]}` or a bare array, after any `<think>` block
+/// and around code fences or chatter.
+pub(crate) fn json_list(answer: &str, field: &str) -> Result<Vec<Value>> {
+    let answer = THINK.replace_all(answer, "");
+    let invalid = || Error::Llm("Die Antwort des Modells war kein gültiges JSON".into());
+    let v: Value = match (answer.find(['{', '[']), answer.rfind(['}', ']'])) {
+        (Some(a), Some(b)) if a < b => serde_json::from_str(&answer[a..=b]).map_err(|_| invalid())?,
+        _ => return Err(invalid()),
+    };
+    match v {
+        Value::Array(a) => Ok(a),
+        Value::Object(mut o) => match o.remove(field) {
+            Some(Value::Array(a)) => Ok(a),
+            _ => Err(invalid()),
+        },
+        _ => Err(invalid()),
+    }
+}
+
+/// A citation number as models write it: `3`, `"3"`, `"S3"`, `"[S3]"` (`prefix` = `S`).
+pub(crate) fn citation_number(v: &Value, prefix: char) -> Option<usize> {
+    let n = match v {
+        Value::Number(n) => n.as_u64(),
+        Value::String(t) => t.trim().trim_matches(['[', ']']).trim_start_matches([prefix, prefix.to_ascii_lowercase()]).parse().ok(),
+        _ => None,
+    }?;
+    Some(n as usize)
+}
 
 #[derive(Deserialize)]
 struct RawFact {
@@ -219,20 +248,7 @@ struct RawFact {
 
 /// Checks a model answer for the chunk `range`. Fails only if the answer has no JSON at all.
 pub fn parse(answer: &str, range: &Range<usize>, sections: &[&str], map: &TokenMap) -> Result<Parsed> {
-    let answer = THINK.replace_all(answer, "");
-    let invalid = || Error::Llm("Die Antwort des Modells war kein gültiges JSON".into());
-    let v: Value = match (answer.find(['{', '[']), answer.rfind(['}', ']'])) {
-        (Some(a), Some(b)) if a < b => serde_json::from_str(&answer[a..=b]).map_err(|_| invalid())?,
-        _ => return Err(invalid()),
-    };
-    let list = match v {
-        Value::Array(a) => a,
-        Value::Object(mut o) => match o.remove("facts") {
-            Some(Value::Array(a)) => a,
-            _ => return Err(invalid()),
-        },
-        _ => return Err(invalid()),
-    };
+    let list = json_list(answer, "facts")?;
 
     let mut out = Parsed::default();
     for item in list {
@@ -261,11 +277,7 @@ fn check(raw: RawFact, range: &Range<usize>, sections: &[&str], map: &TokenMap) 
     let mut segments = Vec::new();
     for s in raw.segments {
         // "S3", "[S3]", "3" and 3 all mean segment 3.
-        let n = match &s {
-            Value::Number(n) => n.as_u64(),
-            Value::String(t) => t.trim().trim_matches(['[', ']']).trim_start_matches(['S', 's']).parse().ok(),
-            _ => None,
-        }? as usize;
+        let n = citation_number(&s, 'S')?;
         if n == 0 || !range.contains(&(n - 1)) {
             return None;
         }

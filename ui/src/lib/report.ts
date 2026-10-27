@@ -15,6 +15,9 @@ export function plainText(html: string): string {
     .trim()
 }
 
+/** No visible text (an empty editor holds `<p></p>`). */
+export const isBlank = (html: string) => plainText(html) === ''
+
 export function parseDiagnoses(body: string): DiagnosesBody {
   try {
     const d = JSON.parse(body) as Partial<DiagnosesBody>

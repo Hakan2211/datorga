@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { appendParagraph, estimatePages, parseDiagnoses, plainText, sectionText } from './report'
+import { appendParagraph, estimatePages, isBlank, parseDiagnoses, plainText, sectionText } from './report'
 
 describe('report helpers', () => {
+  it('treats an empty editor as blank', () => {
+    expect(isBlank('')).toBe(true)
+    expect(isBlank('<p></p>')).toBe(true)
+    expect(isBlank('<p> &nbsp; </p>')).toBe(true)
+    expect(isBlank('<p>x</p>')).toBe(false)
+  })
+
   it('strips TipTap html', () => {
     expect(plainText('<p>Angst &amp; <strong>Unruhe</strong></p><ul><li><p>Schlaf</p></li></ul>')).toBe('Angst & Unruhe Schlaf')
   })

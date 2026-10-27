@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -35,7 +35,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { api, errorMessage, q, type ExtractProgress } from "@/lib/api";
+import {
+  api,
+  errorMessage,
+  q,
+  type ExtractPreview,
+  type ExtractProgress,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const KINDS: EntityKind[] = ["person", "ort", "arbeitgeber", "datum"];
@@ -245,6 +251,27 @@ export function FactDraftCard({
         <RedactionDialog
           reportId={reportId}
           patientId={patientId}
+          previewKey={["extractPreview", reportId]}
+          loadPreview={() => api.extractPreview(reportId)}
+          progressEvent="extract-progress"
+          labels={{
+            send: t("facts.preview.send"),
+            runLocal: t("facts.preview.runLocal"),
+            running: t("facts.progress.running"),
+            part: (done, total) => t("facts.progress.chunk", { done, total }),
+            parts: (count) => t("facts.preview.chunks", { count }),
+          }}
+          onRun={async (digest) => {
+            const r = await api.extractRun(reportId, digest);
+            qc.setQueryData(q.noteFacts(reportId).queryKey, r.facts);
+            const open = r.facts.filter((f) => f.status === "proposed").length;
+            toast.success(
+              t("facts.done", { count: open }) +
+                (r.dropped
+                  ? ` ${t("facts.dropped", { count: r.dropped })}`
+                  : ""),
+            );
+          }}
           onClose={() => setPreviewOpen(false)}
         />
       )}
@@ -346,29 +373,57 @@ function Citations({ fact }: { fact: NoteFact }) {
   );
 }
 
-/** Shows exactly what would be sent, lets the therapist add missed terms, then runs the extraction. */
-function RedactionDialog({
+export type RedactionLabels = {
+  send: string;
+  runLocal: string;
+  running: string;
+  /** Progress while request `done` of `total` runs. */
+  part: (done: number, total: number) => string;
+  /** "in N Teilen" next to the target. */
+  parts: (count: number) => string;
+};
+
+/**
+ * Shows exactly what would be sent, lets the therapist add missed terms, then runs the request.
+ * Shared by fact extraction (Sitzungsnotiz) and drafting (Bericht). `onRun` gets the digest of
+ * the text shown, so the backend can refuse if it changed since.
+ */
+export function RedactionDialog({
   reportId,
   patientId,
+  previewKey,
+  loadPreview,
+  progressEvent,
+  labels,
+  onRun,
   onClose,
+  children,
+  canRun = true,
 }: {
   reportId: string;
   patientId: string;
+  previewKey: readonly unknown[];
+  loadPreview: () => Promise<ExtractPreview>;
+  progressEvent: "extract-progress" | "draft-progress";
+  labels: RedactionLabels;
+  onRun: (digest: string) => Promise<void>;
   onClose: () => void;
+  /** Extra controls above the preview (e.g. an instruction). */
+  children?: ReactNode;
+  canRun?: boolean;
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const preview = useQuery({
-    queryKey: ["extractPreview", reportId],
-    queryFn: () => api.extractPreview(reportId),
+    queryKey: previewKey,
+    queryFn: loadPreview,
     gcTime: 0,
   });
   const [term, setTerm] = useState("");
   const [kind, setKind] = useState<EntityKind>("person");
   const [progress, setProgress] = useState<ExtractProgress | null>(null);
 
-  const refresh = () =>
-    void qc.invalidateQueries({ queryKey: ["extractPreview", reportId] });
+  const refresh = () => void qc.invalidateQueries({ queryKey: previewKey });
   const add = useMutation({
     mutationFn: () => api.addPseudoTerm(patientId, kind, term),
     onSuccess: () => {
@@ -383,16 +438,8 @@ function RedactionDialog({
     onError: (e) => toast.error(errorMessage(e)),
   });
   const run = useMutation({
-    mutationFn: (digest: string) => api.extractRun(reportId, digest),
-    onSuccess: (r) => {
-      qc.setQueryData(q.noteFacts(reportId).queryKey, r.facts);
-      const open = r.facts.filter((f) => f.status === "proposed").length;
-      toast.success(
-        t("facts.done", { count: open }) +
-          (r.dropped ? ` ${t("facts.dropped", { count: r.dropped })}` : ""),
-      );
-      onClose();
-    },
+    mutationFn: onRun,
+    onSuccess: onClose,
     onError: (e) => {
       setProgress(null);
       toast.error(errorMessage(e));
@@ -400,11 +447,11 @@ function RedactionDialog({
   });
 
   useEffect(() => {
-    const off = listen<ExtractProgress>("extract-progress", (e) => {
+    const off = listen<ExtractProgress>(progressEvent, (e) => {
       if (e.payload.report_id === reportId) setProgress(e.payload);
     });
     return () => void off.then((f) => f());
-  }, [reportId]);
+  }, [reportId, progressEvent]);
 
   const data = preview.data;
   const local = data?.provider?.id === "local";
@@ -424,6 +471,7 @@ function RedactionDialog({
         </DialogHeader>
 
         <div className="min-h-0 space-y-4 overflow-y-auto pr-1 text-sm">
+          {children}
           {preview.isError && (
             <p className="text-destructive">{errorMessage(preview.error)}</p>
           )}
@@ -441,8 +489,7 @@ function RedactionDialog({
                 )}
                 {data.messages.length > 1 && (
                   <span className="text-muted-foreground">
-                    ·{" "}
-                    {t("facts.preview.chunks", { count: data.messages.length })}
+                    · {labels.parts(data.messages.length)}
                   </span>
                 )}
               </p>
@@ -597,11 +644,11 @@ function RedactionDialog({
               {progress?.stage === "loading"
                 ? t("facts.progress.loading")
                 : progress && progress.total > 1
-                  ? t("facts.progress.chunk", {
-                      done: Math.min(progress.done + 1, progress.total),
-                      total: progress.total,
-                    })
-                  : t("facts.progress.running")}
+                  ? labels.part(
+                      Math.min(progress.done + 1, progress.total),
+                      progress.total,
+                    )
+                  : labels.running}
             </span>
           )}
           <Button variant="ghost" onClick={onClose} disabled={busy}>
@@ -609,10 +656,16 @@ function RedactionDialog({
           </Button>
           <Button
             onClick={() => data && run.mutate(data.digest)}
-            disabled={!data?.provider || !data.model || busy || add.isPending}
+            disabled={
+              !canRun ||
+              !data?.provider ||
+              !data.model ||
+              preview.isFetching ||
+              busy ||
+              add.isPending
+            }
           >
-            <Sparkles />{" "}
-            {local ? t("facts.preview.runLocal") : t("facts.preview.send")}
+            <Sparkles /> {local ? labels.runLocal : labels.send}
           </Button>
         </DialogFooter>
       </DialogContent>

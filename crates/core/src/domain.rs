@@ -62,6 +62,14 @@ str_enum!(
     /// An extracted fact: waiting for review, dismissed, or appended to the note.
     FactStatus { Proposed => "proposed", Rejected => "rejected", Applied => "applied" }
 );
+str_enum!(
+    /// A Bericht section draft. `superseded`: applied once, then replaced by a later draft.
+    DraftStatus { Proposed => "proposed", Applied => "applied", Rejected => "rejected", Superseded => "superseded" }
+);
+str_enum!(
+    /// How a section draft goes into the section: instead of its text or after it.
+    ApplyMode { Replace => "replace", Append => "append" }
+);
 str_enum!(JobStatus { Queued => "queued", Running => "running", Done => "done", Failed => "failed", Cancelled => "cancelled" });
 str_enum!(
     /// Who speaks in a segment. Session recordings stay `unknown` until diarization exists.
@@ -374,6 +382,57 @@ pub struct ExtractionMeta {
     pub prompt_hash: String,
     pub chunks: usize,
     pub dropped: usize,
+}
+
+/// An applied Sitzungsnotiz fact of the episode, as a source for Bericht drafts.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct EpisodeFact {
+    pub fact_id: String,
+    pub session_id: String,
+    pub note_id: String,
+    /// Appointment or start time of the session.
+    pub session_at: Option<String>,
+    /// 1-based position of the session among the episode's sessions with facts.
+    pub session_no: usize,
+    /// Sitzungsnotiz section the fact was filed under.
+    pub section_key: String,
+    pub text: String,
+}
+
+/// A model draft for one Bericht section, sentence by sentence.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SectionDraft {
+    pub id: String,
+    pub section_key: String,
+    pub status: DraftStatus,
+    pub mode: Option<ApplyMode>,
+    pub provider: String,
+    pub model: String,
+    pub instructed: bool,
+    #[ts(type = "number")]
+    pub dropped: i64,
+    pub created_at: String,
+    pub applied_at: Option<String>,
+    pub sentences: Vec<DraftSentenceView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DraftSentenceView {
+    pub id: String,
+    pub text: String,
+    pub sources: Vec<EpisodeFact>,
+}
+
+/// Provenance of one drafting run.
+#[derive(Debug, Clone)]
+pub struct DraftMeta {
+    pub provider: String,
+    pub model: String,
+    pub prompt_hash: String,
+    pub instructed: bool,
 }
 
 pub fn new_id() -> String {

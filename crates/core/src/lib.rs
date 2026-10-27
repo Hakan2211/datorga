@@ -6,6 +6,7 @@ pub mod audit;
 pub mod consent;
 pub mod crypto;
 pub mod domain;
+pub mod draft;
 pub mod extract;
 pub mod llm;
 pub mod local;

@@ -1,8 +1,8 @@
-# thera: session handoff (2026-10-27, Phase 2: slices 11–13 done)
+# thera: session handoff (2026-10-27, Phase 2: slices 11–14 done)
 
 Start a new session with: *"Read docs/HANDOFF.md and continue with the next step."*
 
-**State at end of session (2026-10-27):** Phase 1 is done (slices 1–10). Phase 2 has started. The user decided (PLAN-AMENDMENTS §9): OpenRouter/Requesty + own endpoint, chosen model, the therapist's own key, only pseudonymized text leaves the machine, local models with hardware-based recommendation; ChatGPT/OpenCode subscription deferred. **Slice 11 (LLM provider layer) is done** and verified in the real app against a mock endpoint. It isn't tested against a real OpenRouter/Requesty key yet (none on the dev box). **Slice 12 (local models) is done** and verified with the real llama-server on the dev box GPU. **Slice 13 (fact extraction → Sitzungsnotiz draft) is done**, verified in the real app against a mock endpoint (egress checked) and the real Qwen3 8B. Next step: **slice 14, Bericht drafting per section** (see Next steps 12).
+**State at end of session (2026-10-27):** Phase 1 is done (slices 1–10). Phase 2 has started. The user decided (PLAN-AMENDMENTS §9): OpenRouter/Requesty + own endpoint, chosen model, the therapist's own key, only pseudonymized text leaves the machine, local models with hardware-based recommendation; ChatGPT/OpenCode subscription deferred. **Slice 11 (LLM provider layer) is done** and verified in the real app against a mock endpoint. It isn't tested against a real OpenRouter/Requesty key yet (none on the dev box). **Slice 12 (local models) is done** and verified with the real llama-server on the dev box GPU. **Slice 13 (fact extraction → Sitzungsnotiz draft) is done**, verified in the real app against a mock endpoint (egress checked) and the real Qwen3 8B. **Slice 14 (Bericht drafting per section from applied facts) is done**, verified in the real app against a mock endpoint (egress checked) and the real Qwen3 8B. Next step: **slice 15, eval set** (see Next steps 12).
 
 On the next start of the dev-box app you'll see **"Notfall-Kit fehlt"**: the DB predates the kit, so it was never confirmed. Create a new key there and save/print the kit.
 
@@ -275,10 +275,33 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
   - **real Qwen3 8B** (GPU): first prompt version missed the denied suicidality, filed mood under Verlauf and turned "Ihre Schwester [PERSON_2]" into "Frau Gerda". After adding the split/negation/relationship rules: 8 facts, all in the right sections, 11.4 s including model load.
 - Not done: no E2E with a session long enough to need several chunks (unit-tested only); no real cloud provider run; the prompt was tuned on one synthetic dictation (slice 15's eval set should cover it); session recordings still have no speaker separation, so the model can't tell patient from therapist there.
 
+**Built (slice 14, 2026-10-27): Bericht drafting per section (Phase 2)**
+- `core::draft`:
+  - input: the **applied** facts of all Sitzungsnotizen in the Bericht's episode (`Store::episode_facts`, session order, sessions numbered 1…n, no dates), sent as `Sitzung n:` + `[F7] (Aktueller psychischer Befund) text`.
+  - the patient's own name is rewritten to **"Pat."** *before* pseudonymizing (`patient_as_pat`: name parts, "Frau/Herr", genitive s), since the Bericht goes to the Gutachter under the Chiffre. Other names/places/employers still become tokens.
+  - one request per section (prose + `ai_allowed`; Diagnose never). System prompt per template + frame (kind, method, age group, PTV 3 intro, page target), no patient data; `PROMPT_VERSION = draft-2026.1`, `prompt_hash` like extraction. The user message holds heading + hints + the therapist's optional instruction (max 500 chars, pseudonymized, not stored) + facts, and repeats the section scope at the end (small models follow what comes last). 24k-char fact budget, else an error.
+  - `parse`: `{"sentences": [{"text", "facts": [n]}]}` or a bare array, `F3`/`[F3]`/`3`. Dropped and counted: no or out-of-range citation, > 500 chars, ICD pattern, invented tokens, **any PERSON/ORT/ARBEITGEBER token** (a sentence naming someone else must not reach the Gutachter; dates are restored). Inline markers like `[F1]`/`(F1, F2)` are stripped from the text. `html()` joins the sentences into one `<p>`.
+  - `extract` shares `json_list`, `citation_number`, `ICD`, `sha256` with it.
+- Migration V8: `section_draft` (provider, model, prompt version/hash, `instructed`, dropped, status `proposed`/`applied`/`rejected`/`superseded`, mode `replace`/`append`), `draft_sentence`, `report_citation` (sentence → `note_fact`; the fact → segment trail is `fact_citation`).
+- Store: `episode_facts`, `section_drafts` (open + applied, each sentence with its source facts), `save_drafts` (one transaction per run; replaces the section's open proposal), `reject_draft`, `apply_draft(mode)` (empty section → replace; replace → origin `ai` and earlier applied drafts `superseded`; append → after the therapist's text, `mixed`; sets `report.provider/model/prompt_version/prompt_hash`). Signed Berichte refused. Audit `report.draft` (sections, counts, prompt hash, `instructed`), `report.draft_apply`, `llm.draft` per request; never text.
+- App: `draft_sources`, `draft_preview(report_id, sections, instruction)`, async `draft_run(…, digest)` (digest must match the preview; nothing stored if any request fails; `draft-progress` events), `report_drafts`, `report_draft_reject`, `report_draft_apply`.
+- UI (`components/report-draft.tsx`; `RedactionDialog` in `fact-draft.tsx` is now shared, with labels/progress event/children as props):
+  - Bericht editor: card "KI-Entwurf aus den Sitzungsnotizen" (N facts from M sessions, "Leere Abschnitte entwerfen…", hints when there's no provider or no applied facts), "Entwurf…" next to each draftable heading
+  - dialog: sections being drafted, optional instruction (preview refreshes after typing pauses; send waits for it), then the usual preview + terms
+  - proposal box above the section editor: sentences with "Sitzung n" chips (tooltip: date, note section, fact text; click opens the Sitzungsnotiz), "Übernehmen" (empty section) or "Ersetzen"/"Anhängen", "Verwerfen". Pending autosaves are flushed first. Applied drafts stay listed under the section as "Quellen des KI-Entwurfs".
+- `thera-fake-llama` answers draft prompts (one sentence per fact, max 3, plus one with a bad citation).
+- Tests: 142 core unit (+ draft: prompt frame, "Pat." rewrite, numbering/tokens/digest/instruction/budget, parse checks; store: sources across sessions and episodes, save/apply replace+append/supersede/reject/sign/audit/erasure), UI typecheck + vitest (+ `isBlank`).
+- E2E in the real debug app (isolated data dir + keychain user `e2e-draft`, removed afterwards; DB seeded through the store API by a scratch tool: two Sitzungsnotizen with 6 applied facts, a Gerda term, an Erstantrag with text in section 1), custom provider → Node mock at 127.0.0.1:8765 logging bodies:
+  - card "6 übernommene Fakten aus 2 Sitzung(en)"; "Leere Abschnitte entwerfen…" → 4 sections; outgoing text has "Pat. berichtet…", `Schwester [PERSON_1]`, no Anna/Beispiel/Gerda/birth date; instruction shows in the preview
+  - toast "4 Abschnitte entworfen. 8 ungültige Sätze … verworfen" (the mock's `[PERSON_1]` sentence and bad citation per section)
+  - Übernehmen → `ai`; Verwerfen; single-section draft on section 1 (already filled) offers Ersetzen/Anhängen; text typed just before Anhängen kept → `mixed`; tooltip shows the original fact; survives reload; audit without text, chain intact; mock got 5 requests, none with names, birth date, Chiffre or the therapist's own section text
+  - **real Qwen3 8B** (GPU, 4 sections, 12–16 s): the first prompt invented a prognosis and "reflektierte Therapieziele" and put every fact into every section. After the scope/no-evaluation rules: nothing invented, Behandlungsplan empty rather than padded, but **Somatik still gets unrelated facts** and the model wrote `[F1]` into the text (now stripped).
+- Not done: section fit with an 8B model is unreliable (the therapist's review catches it; slice 15 should measure it, and a per-section default source mapping in the template YAML, e.g. `sources: [befund, risiko]`, is the obvious next lever); no real cloud model run; existing section text isn't sent as context (so "Anhängen" may repeat what's there); no session selection (all sessions of the episode count, also for a Fortführungsbericht); style exemplars wait for the Vorlagen module.
+
 ## Current limitations
 
 - ~~Database is unencrypted~~ Encrypted SQLCipher build is live (2026-10-27): Strawberry Perl, LLVM, CMake installed, `LIBCLANG_PATH` set. Old plain DB backed up to `%APPDATA%\de.datorga.thera.plain-backup-20261027` (delete once not needed). A10's technical gates (encryption, recovery kit, verified backup) are done. Before real patients: legal review of the consent text and a restore test on the therapist's own machine.
-- Recording/dictation and local transcription work. No diarization (session recordings are one speaker stream, role `unknown`). AI providers (cloud and local) can be configured and tested, but nothing drafts with them yet.
+- Recording/dictation and local transcription work. No diarization (session recordings are one speaker stream, role `unknown`). AI providers (cloud and local) propose Sitzungsnotiz facts (slice 13) and draft Bericht sections from applied facts (slice 14).
 - The OpenRouter/Requesty paths are tested only against a mock. Before real use: one test with a real key, and check that the chosen model has a ZDR endpoint (OpenRouter) / an EU region with logging off (Requesty).
 - Transcription is **CPU only**. A 50-min session on a laptop CPU may take ~25–50 min (unmeasured on laptop hardware). The CUDA build is 285 MB+ and NVIDIA-only; Vulkan has no prebuilt Windows release (would need our own build). Decide once the therapist's laptop specs are known.
 - The sidecar reads a **plaintext WAV** from `stt-tmp` while it runs (deleted afterwards, wiped on next unlock after a crash). Possible hardening: whisper-cli `-f -` (stdin) + parsing stdout, and putting whisper-cli into the app's `ProcessJob` (llama-server already is) so a crashed app can't leave it running.
@@ -290,6 +313,7 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
 - Backups are manual (reminder banner, no automatic schedule) and always full.
 - Vorlagen upload is a placeholder card.
 - Sitzungsnotiz: AI proposals exist (slice 13), but facts are appended as bullets: merging them into existing prose is up to the therapist. A note exported before a Nachtrag lacks it until exported again (now flagged "neu exportieren"). Partial insert works within one segment only, not across segments.
+- Bericht drafts: an 8B local model often puts facts into the wrong section (e.g. symptoms under Somatik); the therapist reviews each draft. Facts only, no style exemplars yet, no session selection.
 - Fact extraction runs one request per 24k-character chunk without a cancel button; a long session on a CPU-only laptop may take minutes. Facts from different chunks aren't merged, so the same point can come twice.
 
 ## Next steps (in order)
@@ -333,8 +357,8 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
    - ~~slice 11, LLM provider layer~~ **done**
    - ~~slice 12, local models~~ **done** (hardware probe, GGUF catalog + recommendation, hash-checked download/import, llama-server sidecar in a kill-on-close job object, provider `local`)
    - ~~slice 13, fact extraction per session~~ **done** (redaction preview with per-patient terms, cited facts, review + apply into the note)
-   - **NEXT → slice 14:** Bericht drafting per section from the applied facts of the episode's sessions (`note_fact` + `fact_citation` give the sentence → segment trail for `report_citation`); store model/provider/prompt hash; reuse `extract_preview`'s dialog for the redaction preview
-   - slice 15: eval set
+   - ~~slice 14, Bericht drafting per section~~ **done** (applied facts → cited sentences per section, "Pat." instead of the name, replace/append, provenance on the report)
+   - **NEXT → slice 15: eval set**: synthetic German sessions → expected facts (extraction) and expected section assignment (drafting), `cargo run -p eval`; measure Qwen3 8B/14B and one cloud model; use it to decide on a per-section source mapping in the template YAML
    - deferred: using a ChatGPT/OpenCode subscription (reasons in PLAN-AMENDMENTS §9). An endpoint with an API key already works as "Eigener Endpunkt".
 ## Open questions for the therapist
 

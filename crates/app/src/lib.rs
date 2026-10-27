@@ -16,6 +16,7 @@ use thera_core::backup::{self, BackupSummary, Unlocked};
 use thera_core::consent::{self, ConsentText};
 use thera_core::crypto::{self, KeyStore, MasterKey, Unlock};
 use thera_core::domain::*;
+use thera_core::draft;
 use thera_core::extract;
 use thera_core::llm::{self, Endpoint, LlmConfig, ProviderId, ProviderInfo, RemoteModel};
 use thera_core::local::{self, Fit, Gpu, Hardware, LlamaServer, Recommendation};
@@ -1412,6 +1413,134 @@ fn note_facts_apply(state: State<'_, AppState>, report_id: String, facts: Vec<Fa
     state.with(|s| s.apply_facts(&report_id, &facts))
 }
 
+// ---------- Bericht drafting (Phase 2) ----------
+
+/// Exactly what drafting `sections` of this Bericht would send, from the episode's applied facts.
+fn prepare_draft(
+    s: &Store,
+    report_id: &str,
+    sections: &[String],
+    instruction: Option<&str>,
+) -> thera_core::Result<(draft::Prepared, Vec<EpisodeFact>)> {
+    let view = report_view(s, report_id)?;
+    let (Some(episode), Some(application)) = (&view.episode, &view.application) else {
+        return Err(thera_core::Error::Invalid("Entwürfe gibt es nur für Berichte zu einem Antrag".into()));
+    };
+    let facts = s.episode_facts(&episode.id)?;
+    let note = s.template(thera_core::templates::SESSION_NOTE_KEY)?;
+    let input: Vec<draft::InputFact> = facts
+        .iter()
+        .map(|f| draft::InputFact {
+            session_no: f.session_no,
+            label: note.sections.iter().find(|d| d.key == f.section_key).map_or(f.section_key.clone(), |d| d.heading.clone()),
+            text: f.text.clone(),
+        })
+        .collect();
+    let frame = draft::Frame { method: episode.method, age_group: episode.age_group, kind: application.kind };
+    let dict = s.pseudo_dictionary(&view.patient.id)?;
+    let prepared = draft::prepare(&view.template, &frame, sections, &input, &view.patient, dict, instruction)?;
+    Ok((prepared, facts))
+}
+
+/// The redaction preview for a draft: one outgoing message per section.
+#[tauri::command]
+fn draft_preview(
+    state: State<'_, AppState>,
+    report_id: String,
+    sections: Vec<String>,
+    instruction: Option<String>,
+) -> CmdResult<ExtractPreview> {
+    let (prepared, _) = state.with(|s| prepare_draft(s, &report_id, &sections, instruction.as_deref()))?;
+    let report = state.with(|s| s.report(&report_id))?;
+    let terms = state.with(|s| s.pseudo_terms(&report.patient_id))?;
+    let config = state.with(|s| s.llm_config())?;
+    let provider = config.active.map(llm::provider);
+    let model = config.active.and_then(|id| config.settings(id).model).filter(|m| !m.is_empty());
+    Ok(ExtractPreview { preview: prepared.preview(), terms, provider, model })
+}
+
+/// The applied Sitzungsnotiz facts a draft of this Bericht would draw on.
+#[tauri::command]
+fn draft_sources(state: State<'_, AppState>, report_id: String) -> CmdResult<Vec<EpisodeFact>> {
+    state.with(|s| match s.report(&report_id)?.episode_id {
+        Some(ep) => s.episode_facts(&ep),
+        None => Ok(vec![]),
+    })
+}
+
+#[tauri::command]
+fn report_drafts(state: State<'_, AppState>, report_id: String) -> CmdResult<Vec<SectionDraft>> {
+    state.with(|s| s.section_drafts(&report_id))
+}
+
+#[derive(Serialize)]
+struct DraftResult {
+    drafts: Vec<SectionDraft>,
+    sentences: usize,
+    dropped: usize,
+}
+
+/// Sends the previewed requests (one per section) and stores the checked drafts. `digest` must
+/// match the preview the therapist saw; nothing is stored if any request fails.
+#[tauri::command]
+async fn draft_run(
+    app: AppHandle,
+    report_id: String,
+    sections: Vec<String>,
+    instruction: Option<String>,
+    digest: String,
+) -> CmdResult<DraftResult> {
+    let events = app.clone();
+    blocking(app, move |state| {
+        let (provider, model) = active_llm(state)?;
+        let (prepared, facts) = state.with(|s| prepare_draft(s, &report_id, &sections, instruction.as_deref()))?;
+        if prepared.digest != digest {
+            return Err(CmdError::Other("Der Text hat sich seit der Vorschau geändert. Bitte die Vorschau erneut prüfen.".into()));
+        }
+        let total = prepared.sections.len();
+        let progress = |stage, done| {
+            let _ = events.emit("draft-progress", ExtractProgress { report_id: report_id.clone(), stage, done, total });
+        };
+        if provider == ProviderId::Local {
+            progress("loading", 0);
+        }
+        let (ep, _) = llm_endpoint(state, provider)?;
+        let opts = llm::ChatOptions { temperature: 0.2, max_tokens: 2048, timeout: std::time::Duration::from_secs(900) };
+        let (mut drafts, mut sentences, mut dropped, mut answered_by) = (Vec::new(), 0, 0, model.clone());
+        for (i, section) in prepared.sections.iter().enumerate() {
+            progress("running", i);
+            let result = llm::chat(&ep, &model, &[(llm::Role::System, &prepared.system), (llm::Role::User, &section.user)], &opts);
+            state.with(|s| s.log_llm_call("llm.draft", provider, &model, result.as_ref().map_err(|_| "error")))?;
+            let completion = result?;
+            let parsed = draft::parse(&completion.text, facts.len(), &prepared.map)?;
+            sentences += parsed.sentences.len();
+            dropped += parsed.dropped;
+            drafts.push((section.key.clone(), parsed));
+            answered_by = completion.model;
+        }
+        progress("running", total);
+        let meta = DraftMeta {
+            provider: provider_str(provider),
+            model: answered_by,
+            prompt_hash: prepared.prompt_hash.clone(),
+            instructed: draft::clean_instruction(instruction.as_deref())?.is_some(),
+        };
+        let drafts = state.with(|s| s.save_drafts(&report_id, &meta, &drafts, &facts))?;
+        Ok(DraftResult { drafts, sentences, dropped })
+    })
+    .await
+}
+
+#[tauri::command]
+fn report_draft_reject(state: State<'_, AppState>, report_id: String, draft_id: String) -> CmdResult<Vec<SectionDraft>> {
+    state.with(|s| s.reject_draft(&report_id, &draft_id))
+}
+
+#[tauri::command]
+fn report_draft_apply(state: State<'_, AppState>, report_id: String, draft_id: String, mode: ApplyMode) -> CmdResult<Report> {
+    state.with(|s| s.apply_draft(&report_id, &draft_id, mode))
+}
+
 // ---------- local models (Phase 2) ----------
 
 /// Loading 15 GB from a slow disk can take minutes.
@@ -1649,6 +1778,12 @@ pub fn run() {
             note_facts,
             note_facts_reject,
             note_facts_apply,
+            draft_preview,
+            draft_sources,
+            draft_run,
+            report_drafts,
+            report_draft_reject,
+            report_draft_apply,
             local_overview,
             local_model_download,
             local_model_import,

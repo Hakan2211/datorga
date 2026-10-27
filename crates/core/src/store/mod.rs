@@ -30,6 +30,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V5__report_addendum.sql"),
     include_str!("migrations/V6__export_state.sql"),
     include_str!("migrations/V7__extraction.sql"),
+    include_str!("migrations/V8__report_draft.sql"),
 ];
 
 pub struct Store {
@@ -1149,6 +1150,225 @@ impl Store {
         self.report(report_id)
     }
 
+    // ---------- Bericht drafts ----------
+
+    /// The applied facts of all Sitzungsnotizen in the episode, in session order.
+    pub fn episode_facts(&self, episode_id: &str) -> Result<Vec<EpisodeFact>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.id, s.id, r.id, COALESCE(s.scheduled_at, s.started_at), f.section_key, f.text
+             FROM note_fact f
+             JOIN report r ON r.id = f.report_id AND r.kind = 'sitzungsnotiz'
+             JOIN session s ON s.id = r.session_id
+             WHERE s.episode_id = ?1 AND f.status = 'applied'
+             ORDER BY COALESCE(s.scheduled_at, s.started_at, r.created_at), s.id, f.seq",
+        )?;
+        let mut facts: Vec<EpisodeFact> = stmt
+            .query_map([episode_id], |r| {
+                Ok(EpisodeFact {
+                    fact_id: r.get(0)?,
+                    session_id: r.get(1)?,
+                    note_id: r.get(2)?,
+                    session_at: r.get(3)?,
+                    session_no: 0,
+                    section_key: r.get(4)?,
+                    text: r.get(5)?,
+                })
+            })?
+            .collect::<std::result::Result<_, _>>()?;
+        let mut last: Option<String> = None;
+        let mut n = 0;
+        for f in &mut facts {
+            if last.as_deref() != Some(f.session_id.as_str()) {
+                n += 1;
+                last = Some(f.session_id.clone());
+            }
+            f.session_no = n;
+        }
+        Ok(facts)
+    }
+
+    /// A Bericht that can still take content (not signed).
+    fn editable_bericht(&self, report_id: &str) -> Result<Report> {
+        let report = self.report(report_id)?;
+        if report.kind != "bericht" {
+            return Err(Error::Invalid("Entwürfe gibt es nur für Berichte".into()));
+        }
+        if matches!(report.status, ReportStatus::Signed | ReportStatus::Exported) {
+            return Err(Error::Invalid("Der Bericht ist unterschrieben und schreibgeschützt".into()));
+        }
+        Ok(report)
+    }
+
+    /// Open proposals and applied drafts, oldest first, each sentence with the facts it cites.
+    pub fn section_drafts(&self, report_id: &str) -> Result<Vec<SectionDraft>> {
+        let report = self.report(report_id)?;
+        let facts = match &report.episode_id {
+            Some(ep) => self.episode_facts(ep)?,
+            None => vec![],
+        };
+        let mut stmt = self.conn.prepare(
+            "SELECT id, section_key, status, mode, provider, model, instructed, dropped, created_at, applied_at
+             FROM section_draft WHERE report_id = ?1 AND status IN ('proposed', 'applied') ORDER BY created_at, rowid",
+        )?;
+        let mut drafts: Vec<SectionDraft> = stmt
+            .query_map([report_id], |r| {
+                Ok(SectionDraft {
+                    id: r.get(0)?,
+                    section_key: r.get(1)?,
+                    status: parse_col(r, 2)?,
+                    mode: r.get::<_, Option<String>>(3)?.and_then(|m| m.parse().ok()),
+                    provider: r.get(4)?,
+                    model: r.get(5)?,
+                    instructed: r.get(6)?,
+                    dropped: r.get(7)?,
+                    created_at: r.get(8)?,
+                    applied_at: r.get(9)?,
+                    sentences: vec![],
+                })
+            })?
+            .collect::<std::result::Result<_, _>>()?;
+        let mut sentences = self.conn.prepare("SELECT id, text FROM draft_sentence WHERE draft_id = ?1 ORDER BY seq")?;
+        let mut cites = self.conn.prepare("SELECT fact_id FROM report_citation WHERE sentence_id = ?1")?;
+        for d in &mut drafts {
+            let rows: Vec<(String, String)> =
+                sentences.query_map([&d.id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<std::result::Result<_, _>>()?;
+            for (id, text) in rows {
+                let ids: Vec<String> = cites.query_map([&id], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
+                let sources = facts.iter().filter(|f| ids.contains(&f.fact_id)).cloned().collect();
+                d.sentences.push(DraftSentenceView { id, text, sources });
+            }
+        }
+        Ok(drafts)
+    }
+
+    /// Stores one run's drafts, one per section. An open proposal for the same section is replaced.
+    /// `facts` are the facts the run saw: `DraftSentence::facts` index into them.
+    pub fn save_drafts(
+        &self,
+        report_id: &str,
+        meta: &DraftMeta,
+        drafts: &[(String, crate::draft::Parsed)],
+        facts: &[EpisodeFact],
+    ) -> Result<Vec<SectionDraft>> {
+        let report = self.editable_bericht(report_id)?;
+        let ts = now();
+        let tx = self.conn.unchecked_transaction()?;
+        let (mut sentences, mut dropped) = (0, 0);
+        for (key, parsed) in drafts {
+            if !report.sections.iter().any(|s| &s.key == key) {
+                return Err(Error::NotFound(format!("section {key}")));
+            }
+            tx.execute(
+                "DELETE FROM section_draft WHERE report_id = ?1 AND section_key = ?2 AND status = 'proposed'",
+                params![report_id, key],
+            )?;
+            let id = new_id();
+            tx.execute(
+                "INSERT INTO section_draft (id, report_id, section_key, provider, model, prompt_version, prompt_hash, instructed, dropped, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![id, report_id, key, meta.provider, meta.model, crate::draft::PROMPT_VERSION, meta.prompt_hash,
+                        meta.instructed, parsed.dropped as i64, ts],
+            )?;
+            for (seq, sentence) in parsed.sentences.iter().enumerate() {
+                let sid = new_id();
+                tx.execute(
+                    "INSERT INTO draft_sentence (id, draft_id, seq, text) VALUES (?1, ?2, ?3, ?4)",
+                    params![sid, id, seq as i64, sentence.text],
+                )?;
+                for &i in &sentence.facts {
+                    let f = facts.get(i).ok_or_else(|| Error::Invalid(format!("Beleg auf unbekannten Fakt {i}")))?;
+                    tx.execute("INSERT OR IGNORE INTO report_citation (sentence_id, fact_id) VALUES (?1, ?2)", params![sid, f.fact_id])?;
+                }
+            }
+            sentences += parsed.sentences.len();
+            dropped += parsed.dropped;
+        }
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "report.draft", entity_type: "report", entity_id: Some(report_id),
+            meta: json!({
+                "provider": meta.provider, "model": meta.model,
+                "prompt_version": crate::draft::PROMPT_VERSION, "prompt_hash": meta.prompt_hash,
+                "sections": drafts.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+                "facts": facts.len(), "sentences": sentences, "dropped": dropped, "instructed": meta.instructed,
+            }),
+        })?;
+        tx.commit()?;
+        self.section_drafts(report_id)
+    }
+
+    pub fn reject_draft(&self, report_id: &str, draft_id: &str) -> Result<Vec<SectionDraft>> {
+        self.editable_bericht(report_id)?;
+        let n = self.conn.execute(
+            "UPDATE section_draft SET status = 'rejected' WHERE id = ?1 AND report_id = ?2 AND status = 'proposed'",
+            params![draft_id, report_id],
+        )?;
+        if n == 0 {
+            return Err(Error::Invalid("Der Entwurf ist nicht mehr offen".into()));
+        }
+        self.section_drafts(report_id)
+    }
+
+    /// Puts a proposed draft into its section, instead of the current text or after it. The report
+    /// takes the draft's provenance (model, provider, prompt version and hash).
+    pub fn apply_draft(&self, report_id: &str, draft_id: &str, mode: ApplyMode) -> Result<Report> {
+        let report = self.editable_bericht(report_id)?;
+        let draft = self
+            .section_drafts(report_id)?
+            .into_iter()
+            .find(|d| d.id == draft_id && d.status == DraftStatus::Proposed)
+            .ok_or_else(|| Error::Invalid("Der Entwurf ist nicht mehr offen".into()))?;
+        if draft.sentences.is_empty() {
+            return Err(Error::Invalid("Der Entwurf ist leer".into()));
+        }
+        let section = report
+            .sections
+            .iter()
+            .find(|s| s.key == draft.section_key)
+            .ok_or_else(|| Error::NotFound(format!("section {}", draft.section_key)))?;
+        let (prompt_version, prompt_hash): (String, String) = self.conn.query_row(
+            "SELECT prompt_version, prompt_hash FROM section_draft WHERE id = ?1",
+            [draft_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let html = crate::draft::html(draft.sentences.iter().map(|s| s.text.as_str()));
+        // Into an empty section, append and replace are the same.
+        let replaces = mode == ApplyMode::Replace || crate::pii::plain_text(&section.body).trim().is_empty();
+        let (body, origin) = if replaces {
+            (html, SectionOrigin::Ai)
+        } else {
+            let origin = if section.origin == SectionOrigin::Ai { SectionOrigin::Ai } else { SectionOrigin::Mixed };
+            (format!("{}{html}", section.body), origin)
+        };
+
+        let ts = now();
+        let tx = self.conn.unchecked_transaction()?;
+        if replaces {
+            tx.execute(
+                "UPDATE section_draft SET status = 'superseded' WHERE report_id = ?1 AND section_key = ?2 AND status = 'applied'",
+                params![report_id, draft.section_key],
+            )?;
+        }
+        let mode = if replaces { ApplyMode::Replace } else { ApplyMode::Append };
+        tx.execute(
+            "UPDATE section_draft SET status = 'applied', mode = ?2, applied_at = ?3 WHERE id = ?1",
+            params![draft_id, mode.as_str(), ts],
+        )?;
+        tx.execute(
+            "UPDATE report_section SET body = ?3, origin = ?4, edited_at = ?5 WHERE report_id = ?1 AND key = ?2",
+            params![report_id, draft.section_key, body, origin.as_str(), ts],
+        )?;
+        tx.execute(
+            "UPDATE report SET provider = ?2, model = ?3, prompt_version = ?4, prompt_hash = ?5, updated_at = ?6 WHERE id = ?1",
+            params![report_id, draft.provider, draft.model, prompt_version, prompt_hash, ts],
+        )?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "report.draft_apply", entity_type: "report", entity_id: Some(report_id),
+            meta: json!({ "draft_id": draft_id, "section": draft.section_key, "mode": mode.as_str(), "sentences": draft.sentences.len() }),
+        })?;
+        tx.commit()?;
+        self.report(report_id)
+    }
+
     // ---------- reports ----------
 
     pub fn report(&self, id: &str) -> Result<Report> {
@@ -1909,6 +2129,123 @@ mod tests {
 
         store.erase_patient(&p.id).unwrap();
         for table in ["note_fact", "fact_citation", "extraction"] {
+            let n: i64 = store.conn().query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap();
+            assert_eq!(n, 0, "{table} cascades on erasure");
+        }
+    }
+
+    /// A Sitzungsnotiz in `ep` with the given facts applied (no transcript needed for the store).
+    fn note_with_facts(store: &Store, p: &Patient, ep: &Episode, at: &str, facts: &[(&str, &str)]) -> Report {
+        let s = store
+            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: Some(ep.id.clone()), scheduled_at: Some(at.into()), modality: None })
+            .unwrap();
+        let note = store.create_session_note(&s.id).unwrap();
+        let meta = ExtractionMeta { provider: "local".into(), model: "m".into(), prompt_hash: "h".into(), chunks: 1, dropped: 0 };
+        let drafts: Vec<_> =
+            facts.iter().map(|(k, t)| crate::extract::DraftFact { section: k.to_string(), text: t.to_string(), segments: vec![] }).collect();
+        let saved = store.save_extraction(&note.id, &meta, &drafts, &[]).unwrap();
+        let edits: Vec<_> = saved.iter().map(|f| FactEdit { id: f.id.clone(), section_key: f.section_key.clone(), text: f.text.clone() }).collect();
+        store.apply_facts(&note.id, &edits).unwrap()
+    }
+
+    #[test]
+    fn bericht_drafts_cite_episode_facts_and_apply_per_section() {
+        use crate::draft::{DraftSentence, Parsed};
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let ep = store
+            .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Vt, age_group: AgeGroup::Adult, setting: Setting::Einzel })
+            .unwrap();
+        // Created out of order: the later session first.
+        note_with_facts(&store, &p, &ep, "2026-02-10T09:00:00Z", &[("verlauf", "Panik im Bus"), ("risiko", "Suizidgedanken verneint")]);
+        let first = note_with_facts(&store, &p, &ep, "2026-02-03T09:00:00Z", &[("befund", "Stimmung gedrückt")]);
+        // A proposed fact that was never applied is no source.
+        let open = store
+            .save_extraction(&first.id, &ExtractionMeta { provider: "x".into(), model: "x".into(), prompt_hash: "x".into(), chunks: 1, dropped: 0 },
+                &[crate::extract::DraftFact { section: "verlauf".into(), text: "offen".into(), segments: vec![] }], &[])
+            .unwrap();
+        assert_eq!(open.len(), 2);
+        let other = store
+            .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Tp, age_group: AgeGroup::Adult, setting: Setting::Einzel })
+            .unwrap();
+        note_with_facts(&store, &p, &other, "2026-01-01T09:00:00Z", &[("verlauf", "anderer Fall")]);
+
+        let facts = store.episode_facts(&ep.id).unwrap();
+        assert_eq!(
+            facts.iter().map(|f| (f.session_no, f.text.as_str())).collect::<Vec<_>>(),
+            [(1, "Stimmung gedrückt"), (2, "Panik im Bus"), (2, "Suizidgedanken verneint")]
+        );
+
+        let app = store.create_application(&ep.id, ApplicationKind::Erstantrag).unwrap();
+        let report_id = app.report_id.clone().unwrap();
+        assert!(store.save_drafts(&first.id, &meta(), &[], &facts).is_err(), "only for Berichte");
+        let sentence = |t: &str, f: Vec<usize>| DraftSentence { text: t.into(), facts: f };
+        let run = |sections: Vec<(&str, Vec<DraftSentence>)>| -> Vec<(String, Parsed)> {
+            sections.into_iter().map(|(k, s)| (k.to_string(), Parsed { sentences: s, dropped: 1 })).collect()
+        };
+        fn meta() -> DraftMeta {
+            DraftMeta { provider: "local".into(), model: "qwen3-8b".into(), prompt_hash: "ph".into(), instructed: false }
+        }
+
+        let drafts = store
+            .save_drafts(&report_id, &meta(), &run(vec![
+                ("symptomatik_befund", vec![sentence("Pat. wirkt gedrückt.", vec![0]), sentence("Panik im Bus, Suizidgedanken verneint.", vec![1, 2])]),
+                ("somatik", vec![]),
+            ]), &facts)
+            .unwrap();
+        assert_eq!(drafts.len(), 2);
+        assert_eq!(drafts[0].sentences[1].sources.iter().map(|f| f.session_no).collect::<Vec<_>>(), [2, 2]);
+        assert_eq!(drafts[0].sentences[0].sources[0].note_id, first.id);
+        assert!(store.save_drafts(&report_id, &meta(), &run(vec![("diagnose_nope", vec![])]), &facts).is_err());
+        assert!(store.save_drafts(&report_id, &meta(), &run(vec![("somatik", vec![sentence("x", vec![9])])]), &facts).is_err(), "unknown fact");
+        assert_eq!(store.section_drafts(&report_id).unwrap().len(), 2, "a failed save changes nothing");
+        assert!(store.apply_draft(&report_id, &drafts[1].id, ApplyMode::Replace).is_err(), "empty draft");
+
+        let report = store.apply_draft(&report_id, &drafts[0].id, ApplyMode::Append).unwrap();
+        let section = |r: &Report, k: &str| r.sections.iter().find(|s| s.key == k).unwrap().clone();
+        let s = section(&report, "symptomatik_befund");
+        assert_eq!(s.body, "<p>Pat. wirkt gedrückt. Panik im Bus, Suizidgedanken verneint.</p>");
+        assert_eq!(s.origin, SectionOrigin::Ai);
+        let row: (Option<String>, Option<String>, Option<String>) = store
+            .conn()
+            .query_row("SELECT model, prompt_version, prompt_hash FROM report WHERE id = ?1", [&report_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        assert_eq!(row, (Some("qwen3-8b".into()), Some(crate::draft::PROMPT_VERSION.into()), Some("ph".into())));
+        assert!(store.apply_draft(&report_id, &drafts[0].id, ApplyMode::Replace).is_err(), "applied once");
+        let applied = store.section_drafts(&report_id).unwrap();
+        assert_eq!((applied[0].status, applied[0].mode), (DraftStatus::Applied, Some(ApplyMode::Replace)), "into an empty section");
+
+        // The therapist edits, then appends a second draft: mixed. A third one replaces everything.
+        store.save_section(&report_id, "symptomatik_befund", "<p>Eigener Satz.</p>").unwrap();
+        let d2 = store.save_drafts(&report_id, &meta(), &run(vec![("symptomatik_befund", vec![sentence("Zweiter <Entwurf>.", vec![0])])]), &facts).unwrap();
+        let d2 = d2.iter().find(|d| d.status == DraftStatus::Proposed && d.section_key == "symptomatik_befund").unwrap();
+        let r = store.apply_draft(&report_id, &d2.id, ApplyMode::Append).unwrap();
+        assert_eq!(section(&r, "symptomatik_befund").body, "<p>Eigener Satz.</p><p>Zweiter &lt;Entwurf&gt;.</p>");
+        assert_eq!(section(&r, "symptomatik_befund").origin, SectionOrigin::Mixed);
+        let d3 = store.save_drafts(&report_id, &meta(), &run(vec![("symptomatik_befund", vec![sentence("Neu.", vec![2])])]), &facts).unwrap();
+        let d3 = d3.iter().find(|d| d.status == DraftStatus::Proposed && d.section_key == "symptomatik_befund").unwrap().id.clone();
+        let r = store.apply_draft(&report_id, &d3, ApplyMode::Replace).unwrap();
+        assert_eq!((section(&r, "symptomatik_befund").body.as_str(), section(&r, "symptomatik_befund").origin), ("<p>Neu.</p>", SectionOrigin::Ai));
+        let live: Vec<_> = store.section_drafts(&report_id).unwrap().into_iter().filter(|d| d.section_key == "symptomatik_befund").collect();
+        assert_eq!(live.len(), 1, "replaced drafts are superseded");
+
+        let somatik = store.section_drafts(&report_id).unwrap().into_iter().find(|d| d.section_key == "somatik").unwrap();
+        let left = store.reject_draft(&report_id, &somatik.id).unwrap();
+        assert!(left.iter().all(|d| d.section_key != "somatik"));
+        assert!(store.reject_draft(&report_id, &somatik.id).is_err());
+
+        let events = audit::list(store.conn(), 100).unwrap();
+        let draft_event = events.iter().filter(|e| e.action == "report.draft").last().unwrap();
+        assert!(draft_event.meta_json.contains("\"sections\":[\"symptomatik_befund\",\"somatik\"]") && draft_event.meta_json.contains("\"sentences\":2"));
+        assert_eq!(events.iter().filter(|e| e.action == "report.draft_apply").count(), 3);
+        assert!(events.iter().all(|e| !e.meta_json.contains("Panik") && !e.meta_json.contains("gedrückt")), "no text in the audit log");
+        assert_eq!(audit::verify(store.conn()).unwrap(), None);
+
+        store.sign_report(&report_id, "Dr. Test").unwrap();
+        assert!(store.save_drafts(&report_id, &meta(), &[], &facts).is_err(), "signed Berichte take no drafts");
+
+        store.erase_patient(&p.id).unwrap();
+        for table in ["section_draft", "draft_sentence", "report_citation"] {
             let n: i64 = store.conn().query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap();
             assert_eq!(n, 0, "{table} cascades on erasure");
         }

@@ -2,7 +2,8 @@
 //! like an out-of-memory load, `hang` never becomes ready, anything else loads for ~0.5 s and
 //! then echoes the last chat message. Every route but `/health` needs `LLAMA_API_KEY`.
 //! An extraction prompt gets one "Fakt: …" per transcript line in `verlauf`, citing that line,
-//! plus one fact with an invented token that the app has to drop.
+//! plus one fact with an invented token that the app has to drop. A Bericht draft prompt gets one
+//! "Entwurf: …" sentence per fact (at most three) plus one citing a fact that doesn't exist.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -67,7 +68,13 @@ fn handle(stream: TcpStream, key: &str, alias: &str, ready: bool) {
         let msgs = req["messages"].as_array().cloned().unwrap_or_default();
         let last = msgs.last().and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
         let system = msgs.first().and_then(|m| m["content"].as_str()).unwrap_or("");
-        let content = if system.contains("Verlaufsdokumentation") { extraction(&last) } else { format!("Echo: {last}") };
+        let content = if system.contains("Verlaufsdokumentation") {
+            extraction(&last)
+        } else if system.contains("Gutachter") {
+            draft(&last)
+        } else {
+            format!("Echo: {last}")
+        };
         (200, json!({"model": alias, "choices": [{"message": {"role": "assistant", "content": content}}], "usage": {"prompt_tokens": 5, "completion_tokens": 3}}))
     } else {
         (404, json!({"error": {"message": "not found"}}))
@@ -90,4 +97,16 @@ fn extraction(user: &str) -> String {
         facts.push(json!({"section": "verlauf", "text": "[PERSON_99] erfunden", "segments": first["segments"]}));
     }
     format!("```json\n{}\n```", json!({"facts": facts}))
+}
+
+/// Answer to a Bericht draft request: `[F3] (Befund) text` lines become cited sentences.
+fn draft(user: &str) -> String {
+    let mut sentences = Vec::new();
+    for line in user.lines().filter(|l| l.starts_with("[F")).take(3) {
+        let Some((num, rest)) = line[2..].split_once(']') else { continue };
+        let text = rest.split_once(") ").map(|(_, t)| t).unwrap_or(rest).trim();
+        sentences.push(json!({"text": format!("Entwurf: {text}"), "facts": [num.parse::<u64>().unwrap_or(0)]}));
+    }
+    sentences.push(json!({"text": "Ohne Beleg erfunden.", "facts": [999]}));
+    json!({"sentences": sentences}).to_string()
 }

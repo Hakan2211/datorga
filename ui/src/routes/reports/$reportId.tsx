@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -12,17 +12,21 @@ import {
   CornerDownLeft,
   Download,
   FileSignature,
+  Sparkles,
   Plus,
   TextSelect,
   Trash2,
   XCircle,
 } from 'lucide-react'
+import type { ApplyMode } from '@/bindings/ApplyMode'
 import type { Diagnosis } from '@/bindings/Diagnosis'
 import type { FactEdit } from '@/bindings/FactEdit'
 import type { SectionDef } from '@/bindings/SectionDef'
+import type { SectionDraft } from '@/bindings/SectionDraft'
 import type { SourceSegment } from '@/bindings/SourceSegment'
 import { Addenda } from '@/components/addenda'
 import { FactDraftCard } from '@/components/fact-draft'
+import { DraftDialog, DraftProposal, DraftSources, ReportDraftCard } from '@/components/report-draft'
 import { Page, PageHeader } from '@/components/app-shell'
 import { StatusBadge, formatDate } from '@/components/bits'
 import { RichField } from '@/components/rich-field'
@@ -33,7 +37,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { api, errorMessage, q, type ReportView } from '@/lib/api'
-import { appendParagraph, estimatePages, parseDiagnoses, sectionText } from '@/lib/report'
+import { appendParagraph, estimatePages, isBlank, parseDiagnoses, sectionText } from '@/lib/report'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/reports/$reportId')({ component: ReportEditorPage })
@@ -117,9 +121,9 @@ function ReportEditor({ view }: { view: ReportView }) {
     [report.id],
   )
 
-  // The server appends applied facts, so edits still waiting for their debounce go first.
-  const applyFacts = useCallback(
-    async (edits: FactEdit[]) => {
+  // The server writes AI text into sections, so edits still waiting for their debounce go first.
+  const flushThen = useCallback(
+    async (write: () => Promise<{ sections: { key: string; body: string }[] }>) => {
       const waiting = Object.entries(queued.current)
       for (const [key] of waiting) {
         clearTimeout(timers.current[key])
@@ -127,13 +131,30 @@ function ReportEditor({ view }: { view: ReportView }) {
       }
       await Promise.all(waiting.map(([key, body]) => api.saveSection(report.id, key, body)))
       for (const [key] of waiting) markDirty(key, false)
-      const updated = await api.applyFacts(report.id, edits)
+      const updated = await write()
       setBodies(Object.fromEntries(updated.sections.map((s) => [s.key, s.body])))
       void qc.invalidateQueries({ queryKey: ['checklist', report.id] })
       void qc.invalidateQueries({ queryKey: ['reports'] })
     },
     [qc, report.id, markDirty],
   )
+  const applyFacts = useCallback((edits: FactEdit[]) => flushThen(() => api.applyFacts(report.id, edits)), [flushThen, report.id])
+
+  // Bericht drafting from the episode's applied Sitzungsnotiz facts.
+  const drafting = !isNote && !readOnly && !!application
+  const draftable = useMemo(() => template.sections.filter((s) => s.field === 'prose' && s.ai_allowed), [template.sections])
+  const drafts = useQuery({ ...q.reportDrafts(report.id), enabled: !isNote })
+  const templates = useQuery({ ...q.templates(), enabled: !isNote })
+  const noteSections = templates.data?.find((tp) => tp.key === 'sitzungsnotiz')?.sections ?? []
+  const [draftKeys, setDraftKeys] = useState<string[] | null>(null)
+  const applyDraft = async (d: SectionDraft, mode: ApplyMode) => {
+    await flushThen(() => api.applyDraft(report.id, d.id, mode))
+    void qc.invalidateQueries({ queryKey: ['reportDrafts', report.id] })
+    toast.success(t('draft.applied'))
+  }
+  const rejectDraft = async (d: SectionDraft) => {
+    qc.setQueryData(q.reportDrafts(report.id).queryKey, await api.rejectDraft(report.id, d.id))
+  }
 
   const pages = useMemo(
     () => estimatePages(template.sections.map((s) => sectionText(s.field, bodies[s.key] ?? ''))),
@@ -193,17 +214,61 @@ function ReportEditor({ view }: { view: ReportView }) {
                 onApply={applyFacts}
               />
             )}
-            {template.sections.map((s) => (
-              <SectionEditor
-                key={s.key}
-                def={s}
-                body={bodies[s.key] ?? ''}
-                readOnly={readOnly}
-                active={isNote && !readOnly && s.key === activeKey}
-                onFocus={() => setActiveKey(s.key)}
-                onChange={(b) => update(s.key, b)}
+            {drafting && (
+              <ReportDraftCard
+                reportId={report.id}
+                sections={draftable}
+                isEmpty={(key) => isBlank(bodies[key] ?? '')}
+                onDraft={setDraftKeys}
               />
-            ))}
+            )}
+            {template.sections.map((s) => {
+              const canDraft = drafting && draftable.some((d) => d.key === s.key)
+              const proposal = drafts.data?.find((d) => d.section_key === s.key && d.status === 'proposed')
+              const applied = drafts.data?.filter((d) => d.section_key === s.key && d.status === 'applied') ?? []
+              return (
+                <SectionEditor
+                  key={s.key}
+                  def={s}
+                  body={bodies[s.key] ?? ''}
+                  readOnly={readOnly}
+                  active={isNote && !readOnly && s.key === activeKey}
+                  onFocus={() => setActiveKey(s.key)}
+                  onChange={(b) => update(s.key, b)}
+                  action={
+                    canDraft && (
+                      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setDraftKeys([s.key])}>
+                        <Sparkles className="size-3.5" /> {t('draft.section')}
+                      </Button>
+                    )
+                  }
+                  above={
+                    proposal &&
+                    !readOnly && (
+                      <DraftProposal
+                        draft={proposal}
+                        sectionEmpty={isBlank(bodies[s.key] ?? '')}
+                        noteSections={noteSections}
+                        onApply={(mode) => applyDraft(proposal, mode)}
+                        onReject={() => rejectDraft(proposal)}
+                      />
+                    )
+                  }
+                  below={applied.map((d) => (
+                    <DraftSources key={d.id} draft={d} noteSections={noteSections} />
+                  ))}
+                />
+              )
+            })}
+            {draftKeys && (
+              <DraftDialog
+                reportId={report.id}
+                patientId={patient.id}
+                keys={draftKeys}
+                sections={draftable}
+                onClose={() => setDraftKeys(null)}
+              />
+            )}
             {isNote && readOnly && <Addenda reportId={report.id} addenda={report.addenda} noteSigner={report.signed_by} />}
           </div>
           <aside className="space-y-4">
@@ -235,6 +300,9 @@ function SectionEditor({
   active = false,
   onFocus,
   onChange,
+  action,
+  above,
+  below,
 }: {
   def: SectionDef
   body: string
@@ -242,6 +310,12 @@ function SectionEditor({
   active?: boolean
   onFocus?: () => void
   onChange: (body: string) => void
+  /** Next to the heading (e.g. "Entwurf…"). */
+  action?: ReactNode
+  /** Between the hints and the editor (e.g. an AI proposal). */
+  above?: ReactNode
+  /** Under the editor (e.g. sources of applied AI text). */
+  below?: ReactNode
 }) {
   const { t } = useTranslation()
   const [showHints, setShowHints] = useState(true)
@@ -251,10 +325,13 @@ function SectionEditor({
       onFocusCapture={onFocus}
       className={cn('scroll-mt-6 space-y-2 border-l-2 border-transparent pl-3 -ml-3.5', active && 'border-primary/60')}
     >
-      <h2 className="font-serif text-[17px] leading-snug font-semibold">
-        {def.number && <span className="mr-1.5 text-primary">{def.number}.</span>}
-        {def.heading}
-      </h2>
+      <div className="flex items-start justify-between gap-3">
+        <h2 className="font-serif text-[17px] leading-snug font-semibold">
+          {def.number && <span className="mr-1.5 text-primary">{def.number}.</span>}
+          {def.heading}
+        </h2>
+        {action}
+      </div>
       {def.hints.length > 0 && (
         <div className="rounded-md bg-muted/60 px-3 py-2 text-[13px] text-muted-foreground">
           <button
@@ -279,11 +356,13 @@ function SectionEditor({
           <CircleSlash className="size-3.5" /> {t('report.noAi')}
         </p>
       )}
+      {above}
       {def.field === 'prose' ? (
         <RichField value={body} onChange={onChange} placeholder={t('report.placeholder')} readOnly={readOnly} />
       ) : (
         <DiagnosesEditor body={body} onChange={onChange} readOnly={readOnly} />
       )}
+      {below}
     </section>
   )
 }
