@@ -7,7 +7,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use thera_capture::power::{self, KeepAwake};
 use thera_capture::system::{self, ProcessJob};
 use thera_capture::{InputDevice, Recorder};
@@ -16,10 +16,12 @@ use thera_core::backup::{self, BackupSummary, Unlocked};
 use thera_core::consent::{self, ConsentText};
 use thera_core::crypto::{self, KeyStore, MasterKey, Unlock};
 use thera_core::domain::*;
+use thera_core::extract;
 use thera_core::llm::{self, Endpoint, LlmConfig, ProviderId, ProviderInfo, RemoteModel};
 use thera_core::local::{self, Fit, Gpu, Hardware, LlamaServer, Recommendation};
 use thera_core::models::ModelInfo;
 use thera_core::pii::{self, CheckItem};
+use thera_core::pseudo::EntityKind;
 use thera_core::render;
 use thera_core::store::Store;
 use thera_core::stt::{self, WhisperCli};
@@ -1275,6 +1277,141 @@ async fn llm_test(app: AppHandle, provider: ProviderId) -> CmdResult<LlmTestResu
     .await
 }
 
+// ---------- fact extraction (Phase 2) ----------
+
+fn provider_str(id: ProviderId) -> String {
+    serde_json::to_value(id).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
+}
+
+/// The provider chosen in Settings and its model.
+fn active_llm(state: &AppState) -> CmdResult<(ProviderId, String)> {
+    let config = state.with(|s| s.llm_config())?;
+    let id = config.active.ok_or_else(|| CmdError::Other("Kein KI-Anbieter gewählt (Einstellungen → KI-Entwürfe)".into()))?;
+    let model = config.settings(id).model.filter(|m| !m.is_empty()).ok_or_else(|| CmdError::Other("Kein Modell gewählt".into()))?;
+    Ok((id, model))
+}
+
+/// Exactly what an extraction for this note would send, built from the current transcript and terms.
+fn prepare_extraction(s: &Store, report_id: &str) -> thera_core::Result<(extract::Prepared, Vec<SourceSegment>, Vec<String>)> {
+    let view = report_view(s, report_id)?;
+    if view.report.kind != "sitzungsnotiz" {
+        return Err(thera_core::Error::Invalid("Fakten gibt es nur für Sitzungsnotizen".into()));
+    }
+    let dict = s.pseudo_dictionary(&view.patient.id)?;
+    let prepared = extract::prepare(&view.template, &view.segments, dict, extract::CHUNK_CHARS)?;
+    let sections = extract::target_sections(&view.template).iter().map(|d| d.key.clone()).collect();
+    Ok((prepared, view.segments, sections))
+}
+
+#[derive(Serialize)]
+struct ExtractPreview {
+    #[serde(flatten)]
+    preview: extract::Preview,
+    terms: Vec<PseudoTerm>,
+    provider: Option<ProviderInfo>,
+    model: Option<String>,
+}
+
+/// The redaction preview: the pseudonymized text per request and the token table (local only).
+#[tauri::command]
+fn extract_preview(state: State<'_, AppState>, report_id: String) -> CmdResult<ExtractPreview> {
+    let (prepared, _, _) = state.with(|s| prepare_extraction(s, &report_id))?;
+    let report = state.with(|s| s.report(&report_id))?;
+    let terms = state.with(|s| s.pseudo_terms(&report.patient_id))?;
+    let config = state.with(|s| s.llm_config())?;
+    let provider = config.active.map(llm::provider);
+    let model = config.active.and_then(|id| config.settings(id).model).filter(|m| !m.is_empty());
+    Ok(ExtractPreview { preview: prepared.preview(), terms, provider, model })
+}
+
+#[tauri::command]
+fn pseudo_term_add(state: State<'_, AppState>, patient_id: String, kind: EntityKind, text: String) -> CmdResult<PseudoTerm> {
+    state.with(|s| s.add_pseudo_term(&patient_id, kind, &text))
+}
+
+#[tauri::command]
+fn pseudo_term_remove(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.with(|s| s.remove_pseudo_term(&id))
+}
+
+#[tauri::command]
+fn note_facts(state: State<'_, AppState>, report_id: String) -> CmdResult<Vec<NoteFact>> {
+    state.with(|s| s.note_facts(&report_id))
+}
+
+#[derive(Clone, Serialize)]
+struct ExtractProgress {
+    report_id: String,
+    /// `loading` (local model starting) or `running`.
+    stage: &'static str,
+    done: usize,
+    total: usize,
+}
+
+#[derive(Serialize)]
+struct ExtractResult {
+    facts: Vec<NoteFact>,
+    dropped: usize,
+    chunks: usize,
+}
+
+/// Sends the previewed text to the active provider, one request per chunk, and stores the
+/// checked facts. `digest` must match the preview the therapist saw; nothing is stored if any
+/// request fails.
+#[tauri::command]
+async fn extract_run(app: AppHandle, report_id: String, digest: String) -> CmdResult<ExtractResult> {
+    let events = app.clone();
+    blocking(app, move |state| {
+        let (provider, model) = active_llm(state)?;
+        let (prepared, segments, sections) = state.with(|s| prepare_extraction(s, &report_id))?;
+        if prepared.digest != digest {
+            return Err(CmdError::Other("Der Text hat sich seit der Vorschau geändert. Bitte die Vorschau erneut prüfen.".into()));
+        }
+        let total = prepared.chunks.len();
+        let progress = |stage, done| {
+            let _ = events.emit("extract-progress", ExtractProgress { report_id: report_id.clone(), stage, done, total });
+        };
+        if provider == ProviderId::Local {
+            progress("loading", 0);
+        }
+        let (ep, _) = llm_endpoint(state, provider)?;
+        let opts = llm::ChatOptions { temperature: 0.1, max_tokens: 4096, timeout: std::time::Duration::from_secs(900) };
+        let keys: Vec<&str> = sections.iter().map(String::as_str).collect();
+        let (mut facts, mut dropped, mut answered_by) = (Vec::new(), 0, model.clone());
+        for (i, chunk) in prepared.chunks.iter().enumerate() {
+            progress("running", i);
+            let result = llm::chat(&ep, &model, &[(llm::Role::System, &prepared.system), (llm::Role::User, &chunk.user)], &opts);
+            state.with(|s| s.log_llm_call("llm.extract", provider, &model, result.as_ref().map_err(|_| "error")))?;
+            let completion = result?;
+            let parsed = extract::parse(&completion.text, &chunk.range, &keys, &prepared.map)?;
+            facts.extend(parsed.facts);
+            dropped += parsed.dropped;
+            answered_by = completion.model;
+        }
+        progress("running", total);
+        let meta = ExtractionMeta {
+            provider: provider_str(provider),
+            model: answered_by,
+            prompt_hash: prepared.prompt_hash.clone(),
+            chunks: total,
+            dropped,
+        };
+        let facts = state.with(|s| s.save_extraction(&report_id, &meta, &facts, &segments))?;
+        Ok(ExtractResult { facts, dropped, chunks: total })
+    })
+    .await
+}
+
+#[tauri::command]
+fn note_facts_reject(state: State<'_, AppState>, report_id: String, ids: Vec<String>) -> CmdResult<Vec<NoteFact>> {
+    state.with(|s| s.reject_facts(&report_id, &ids))
+}
+
+#[tauri::command]
+fn note_facts_apply(state: State<'_, AppState>, report_id: String, facts: Vec<FactEdit>) -> CmdResult<Report> {
+    state.with(|s| s.apply_facts(&report_id, &facts))
+}
+
 // ---------- local models (Phase 2) ----------
 
 /// Loading 15 GB from a slow disk can take minutes.
@@ -1505,6 +1642,13 @@ pub fn run() {
             llm_key_set,
             llm_models,
             llm_test,
+            extract_preview,
+            extract_run,
+            pseudo_term_add,
+            pseudo_term_remove,
+            note_facts,
+            note_facts_reject,
+            note_facts_apply,
             local_overview,
             local_model_download,
             local_model_import,

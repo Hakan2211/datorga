@@ -58,6 +58,10 @@ str_enum!(
     /// A confirmed transcript is read-only; confirming deletes the audio.
     TranscriptStatus { Draft => "draft", Confirmed => "confirmed" }
 );
+str_enum!(
+    /// An extracted fact: waiting for review, dismissed, or appended to the note.
+    FactStatus { Proposed => "proposed", Rejected => "rejected", Applied => "applied" }
+);
 str_enum!(JobStatus { Queued => "queued", Running => "running", Done => "done", Failed => "failed", Cancelled => "cancelled" });
 str_enum!(
     /// Who speaks in a segment. Session recordings stay `unknown` until diarization exists.
@@ -226,6 +230,8 @@ pub struct Job {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SourceSegment {
+    /// `transcript_segment.id`: what a fact cites.
+    pub segment_id: String,
     pub source_id: String,
     pub role: Speaker,
     #[ts(type = "number")]
@@ -313,6 +319,61 @@ pub struct AuditEvent {
     pub meta_json: String,
     pub prev_hash: String,
     pub hash: String,
+}
+
+/// A term the therapist added to the pseudonymizer for one patient (redaction preview).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PseudoTerm {
+    pub id: String,
+    pub patient_id: String,
+    pub kind: crate::pseudo::EntityKind,
+    pub text: String,
+    pub created_at: String,
+}
+
+/// A fact the model extracted from a session's transcript, with the segments it cites.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct NoteFact {
+    pub id: String,
+    pub extraction_id: String,
+    pub section_key: String,
+    pub text: String,
+    pub status: FactStatus,
+    /// Text or section changed by the therapist before applying.
+    pub edited: bool,
+    pub applied_at: Option<String>,
+    pub citations: Vec<FactCitation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FactCitation {
+    pub segment_id: String,
+    pub source_id: String,
+    #[ts(type = "number")]
+    pub start_ms: i64,
+    pub text: String,
+}
+
+/// The therapist's version of a fact when applying it.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FactEdit {
+    pub id: String,
+    pub section_key: String,
+    pub text: String,
+}
+
+/// Provenance of one extraction run (PLAN Â§5: model, provider, prompt version and hash).
+#[derive(Debug, Clone)]
+pub struct ExtractionMeta {
+    pub provider: String,
+    pub model: String,
+    pub prompt_hash: String,
+    pub chunks: usize,
+    pub dropped: usize,
 }
 
 pub fn new_id() -> String {

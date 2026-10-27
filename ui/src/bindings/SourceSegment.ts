@@ -4,4 +4,8 @@ import type { Speaker } from "./Speaker";
 /**
  * What every downstream stage consumes, whatever the capture mode (PLAN §6).
  */
-export type SourceSegment = { source_id: string, role: Speaker, start_ms: number, end_ms: number, text: string, };
+export type SourceSegment = { 
+/**
+ * `transcript_segment.id`: what a fact cites.
+ */
+segment_id: string, source_id: string, role: Speaker, start_ms: number, end_ms: number, text: string, };

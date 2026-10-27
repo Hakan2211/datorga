@@ -18,9 +18,11 @@ import {
   XCircle,
 } from 'lucide-react'
 import type { Diagnosis } from '@/bindings/Diagnosis'
+import type { FactEdit } from '@/bindings/FactEdit'
 import type { SectionDef } from '@/bindings/SectionDef'
 import type { SourceSegment } from '@/bindings/SourceSegment'
 import { Addenda } from '@/components/addenda'
+import { FactDraftCard } from '@/components/fact-draft'
 import { Page, PageHeader } from '@/components/app-shell'
 import { StatusBadge, formatDate } from '@/components/bits'
 import { RichField } from '@/components/rich-field'
@@ -115,6 +117,24 @@ function ReportEditor({ view }: { view: ReportView }) {
     [report.id],
   )
 
+  // The server appends applied facts, so edits still waiting for their debounce go first.
+  const applyFacts = useCallback(
+    async (edits: FactEdit[]) => {
+      const waiting = Object.entries(queued.current)
+      for (const [key] of waiting) {
+        clearTimeout(timers.current[key])
+        delete queued.current[key]
+      }
+      await Promise.all(waiting.map(([key, body]) => api.saveSection(report.id, key, body)))
+      for (const [key] of waiting) markDirty(key, false)
+      const updated = await api.applyFacts(report.id, edits)
+      setBodies(Object.fromEntries(updated.sections.map((s) => [s.key, s.body])))
+      void qc.invalidateQueries({ queryKey: ['checklist', report.id] })
+      void qc.invalidateQueries({ queryKey: ['reports'] })
+    },
+    [qc, report.id, markDirty],
+  )
+
   const pages = useMemo(
     () => estimatePages(template.sections.map((s) => sectionText(s.field, bodies[s.key] ?? ''))),
     [bodies, template.sections],
@@ -165,6 +185,14 @@ function ReportEditor({ view }: { view: ReportView }) {
               </p>
             )}
             <p className="text-sm text-muted-foreground">{template.intro}</p>
+            {isNote && !readOnly && view.segments.length > 0 && (
+              <FactDraftCard
+                reportId={report.id}
+                patientId={patient.id}
+                sections={template.sections.filter((s) => s.field === 'prose' && s.ai_allowed)}
+                onApply={applyFacts}
+              />
+            )}
             {template.sections.map((s) => (
               <SectionEditor
                 key={s.key}
@@ -521,7 +549,11 @@ function TranscriptPicker({
               {segments.map((seg, i) => {
                 const part = picked?.index === i ? picked.text : null
                 return (
-                <li key={`${seg.source_id}:${seg.start_ms}`} className="group flex items-start gap-2 rounded px-1.5 py-1 hover:bg-muted/60">
+                <li
+                  key={seg.segment_id}
+                  data-segment-id={seg.segment_id}
+                  className="group flex items-start gap-2 rounded px-1.5 py-1 transition-shadow hover:bg-muted/60"
+                >
                   <span className="flex-1">
                     <span className="mr-1.5 text-[11px] text-muted-foreground">{t(`note.role.${seg.role}`)}</span>
                     <span data-segment={i} className={cn(used.has(i) && 'text-muted-foreground')}>

@@ -1,6 +1,8 @@
 //! Stand-in for `llama-server` in tests. Behaviour depends on the model file name: `crash` exits
 //! like an out-of-memory load, `hang` never becomes ready, anything else loads for ~0.5 s and
 //! then echoes the last chat message. Every route but `/health` needs `LLAMA_API_KEY`.
+//! An extraction prompt gets one "Fakt: …" per transcript line in `verlauf`, citing that line,
+//! plus one fact with an invented token that the app has to drop.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -62,12 +64,30 @@ fn handle(stream: TcpStream, key: &str, alias: &str, ready: bool) {
         (200, json!({"data": [{"id": alias}]}))
     } else if path == "/v1/chat/completions" {
         let req: Value = serde_json::from_slice(&body).unwrap();
-        let last = req["messages"].as_array().and_then(|m| m.last()).and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
-        (200, json!({"model": alias, "choices": [{"message": {"role": "assistant", "content": format!("Echo: {last}")}}], "usage": {"prompt_tokens": 5, "completion_tokens": 3}}))
+        let msgs = req["messages"].as_array().cloned().unwrap_or_default();
+        let last = msgs.last().and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
+        let system = msgs.first().and_then(|m| m["content"].as_str()).unwrap_or("");
+        let content = if system.contains("Verlaufsdokumentation") { extraction(&last) } else { format!("Echo: {last}") };
+        (200, json!({"model": alias, "choices": [{"message": {"role": "assistant", "content": content}}], "usage": {"prompt_tokens": 5, "completion_tokens": 3}}))
     } else {
         (404, json!({"error": {"message": "not found"}}))
     };
     let reply = reply.to_string();
     let mut w = stream;
     let _ = write!(w, "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len());
+}
+
+/// Answer to an extraction request: `[S12] (Diktat, 00:05) text` lines become facts.
+fn extraction(user: &str) -> String {
+    let mut facts = Vec::new();
+    for line in user.lines().filter(|l| l.starts_with("[S")) {
+        let Some((num, rest)) = line[2..].split_once(']') else { continue };
+        let text = rest.split_once(") ").map(|(_, t)| t).unwrap_or(rest).trim();
+        let short: String = text.chars().take(80).collect();
+        facts.push(json!({"section": "verlauf", "text": format!("Fakt: {short}"), "segments": [num.parse::<u64>().unwrap_or(0)]}));
+    }
+    if let Some(first) = facts.first().cloned() {
+        facts.push(json!({"section": "verlauf", "text": "[PERSON_99] erfunden", "segments": first["segments"]}));
+    }
+    format!("```json\n{}\n```", json!({"facts": facts}))
 }

@@ -32,6 +32,11 @@ import type { RemoteModel } from '@/bindings/RemoteModel'
 import type { Fit } from '@/bindings/Fit'
 import type { Hardware } from '@/bindings/Hardware'
 import type { Recommendation } from '@/bindings/Recommendation'
+import type { EntityKind } from '@/bindings/EntityKind'
+import type { FactEdit } from '@/bindings/FactEdit'
+import type { NoteFact } from '@/bindings/NoteFact'
+import type { Preview } from '@/bindings/Preview'
+import type { PseudoTerm } from '@/bindings/PseudoTerm'
 
 export type InitResult = {
   status: 'ready' | 'recovery_required' | 'new'
@@ -75,6 +80,10 @@ export type SttOverview = {
 
 export type LlmOverview = { config: LlmConfig; providers: (ProviderInfo & { has_key: boolean })[] }
 export type LlmTestResult = { model: string; latency_ms: number; answer: string }
+/** Redaction preview: the outgoing text, the local token table and where it would go. */
+export type ExtractPreview = Preview & { terms: PseudoTerm[]; provider: ProviderInfo | null; model: string | null }
+export type ExtractResult = { facts: NoteFact[]; dropped: number; chunks: number }
+export type ExtractProgress = { report_id: string; stage: 'loading' | 'running'; done: number; total: number }
 
 export type LocalModelView = {
   id: string
@@ -172,6 +181,15 @@ export const api = {
   llmModels: (provider: ProviderId) => invoke<RemoteModel[]>('llm_models', { provider }),
   testLlm: (provider: ProviderId) => invoke<LlmTestResult>('llm_test', { provider }),
 
+  extractPreview: (reportId: string) => invoke<ExtractPreview>('extract_preview', { reportId }),
+  extractRun: (reportId: string, digest: string) => invoke<ExtractResult>('extract_run', { reportId, digest }),
+  addPseudoTerm: (patientId: string, kind: EntityKind, text: string) =>
+    invoke<PseudoTerm>('pseudo_term_add', { patientId, kind, text }),
+  removePseudoTerm: (id: string) => invoke<void>('pseudo_term_remove', { id }),
+  noteFacts: (reportId: string) => invoke<NoteFact[]>('note_facts', { reportId }),
+  rejectFacts: (reportId: string, ids: string[]) => invoke<NoteFact[]>('note_facts_reject', { reportId, ids }),
+  applyFacts: (reportId: string, facts: FactEdit[]) => invoke<Report>('note_facts_apply', { reportId, facts }),
+
   local: () => invoke<LocalOverview>('local_overview'),
   downloadLocalModel: (id: string) => invoke<void>('local_model_download', { id }),
   importLocalModel: (id: string, path: string) => invoke<void>('local_model_import', { id, path }),
@@ -226,6 +244,7 @@ export const q = {
         query.state.data?.models.some((m) => m.transfer && !m.transfer.error) ? 500 : false,
     }),
   llm: () => queryOptions({ queryKey: ['llm'], queryFn: api.llm }),
+  noteFacts: (reportId: string) => queryOptions({ queryKey: ['noteFacts', reportId], queryFn: () => api.noteFacts(reportId) }),
   // Polled during a download/import and while a model loads (`busy`: a request may be loading one).
   local: (busy = false) =>
     queryOptions({

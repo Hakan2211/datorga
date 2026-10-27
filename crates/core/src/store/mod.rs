@@ -12,6 +12,7 @@ use crate::stt;
 use crate::consent;
 use crate::crypto::{self, MasterKey, RecoveryKey};
 use crate::domain::*;
+use crate::pseudo::{Dictionary, EntityKind};
 use crate::templates::{self, Template};
 use crate::{Error, Result};
 
@@ -28,6 +29,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V4__session_note.sql"),
     include_str!("migrations/V5__report_addendum.sql"),
     include_str!("migrations/V6__export_state.sql"),
+    include_str!("migrations/V7__extraction.sql"),
 ];
 
 pub struct Store {
@@ -836,7 +838,7 @@ impl Store {
     /// The pipeline's input for a session: confirmed transcripts only, in recording order.
     pub fn source_segments(&self, session_id: &str) -> Result<Vec<SourceSegment>> {
         let mut stmt = self.conn.prepare(
-            "SELECT src.id, src.kind, seg.start_ms, seg.end_ms, seg.text
+            "SELECT src.id, src.kind, seg.start_ms, seg.end_ms, seg.text, seg.id
              FROM transcript_segment seg
              JOIN transcript t ON t.id = seg.transcript_id
              JOIN session_source src ON src.id = t.source_id
@@ -846,6 +848,7 @@ impl Store {
         let rows = stmt.query_map([session_id], |r| {
             let kind: SourceKind = parse_col(r, 1)?;
             Ok(SourceSegment {
+                segment_id: r.get(5)?,
                 source_id: r.get(0)?,
                 role: if kind == SourceKind::Dictation { Speaker::Therapist } else { Speaker::Unknown },
                 start_ms: r.get(2)?,
@@ -899,6 +902,251 @@ impl Store {
         })?;
         tx.commit()?;
         self.report(&id)
+    }
+
+    // ---------- pseudonymization terms ----------
+
+    pub fn pseudo_terms(&self, patient_id: &str) -> Result<Vec<PseudoTerm>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, patient_id, kind, text, created_at FROM pseudo_term WHERE patient_id = ?1 ORDER BY created_at, text",
+        )?;
+        let rows = stmt.query_map([patient_id], |r| {
+            Ok(PseudoTerm {
+                id: r.get(0)?,
+                patient_id: r.get(1)?,
+                kind: entity_kind(r, 2)?,
+                text: r.get(3)?,
+                created_at: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// The therapist marks a word the pseudonymizer missed. The audit entry holds the kind only.
+    pub fn add_pseudo_term(&self, patient_id: &str, kind: EntityKind, text: &str) -> Result<PseudoTerm> {
+        self.patient(patient_id)?;
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if text.chars().count() < 2 {
+            return Err(Error::Invalid("Der Begriff ist zu kurz".into()));
+        }
+        if self.pseudo_terms(patient_id)?.iter().any(|t| t.text.to_lowercase() == text.to_lowercase()) {
+            return Err(Error::Invalid("Der Begriff ist bereits eingetragen".into()));
+        }
+        let term = PseudoTerm { id: new_id(), patient_id: patient_id.into(), kind, text, created_at: now() };
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO pseudo_term (id, patient_id, kind, text, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![term.id, term.patient_id, entity_kind_str(kind), term.text, term.created_at],
+        )?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "pseudo_term.add", entity_type: "patient", entity_id: Some(patient_id),
+            meta: json!({ "kind": kind }),
+        })?;
+        tx.commit()?;
+        Ok(term)
+    }
+
+    pub fn remove_pseudo_term(&self, id: &str) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let patient_id: String = tx
+            .query_row("SELECT patient_id FROM pseudo_term WHERE id = ?1", [id], |r| r.get(0))
+            .optional()?
+            .ok_or_else(|| Error::NotFound(format!("term {id}")))?;
+        tx.execute("DELETE FROM pseudo_term WHERE id = ?1", [id])?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "pseudo_term.remove", entity_type: "patient", entity_id: Some(&patient_id), meta: json!({}),
+        })?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Patient record + the therapist's terms: what the pseudonymizer knows about this patient.
+    pub fn pseudo_dictionary(&self, patient_id: &str) -> Result<Dictionary> {
+        let mut dict = Dictionary::from_patient(&self.patient(patient_id)?);
+        for t in self.pseudo_terms(patient_id)? {
+            dict.add(t.kind, &t.text);
+        }
+        Ok(dict)
+    }
+
+    // ---------- fact extraction ----------
+
+    /// A Sitzungsnotiz that can still take content (not signed).
+    fn editable_note(&self, report_id: &str) -> Result<Report> {
+        let report = self.report(report_id)?;
+        if report.kind != "sitzungsnotiz" {
+            return Err(Error::Invalid("Fakten gibt es nur für Sitzungsnotizen".into()));
+        }
+        if matches!(report.status, ReportStatus::Signed | ReportStatus::Exported) {
+            return Err(Error::Invalid("Die Notiz ist unterschrieben und schreibgeschützt".into()));
+        }
+        Ok(report)
+    }
+
+    pub fn note_facts(&self, report_id: &str) -> Result<Vec<NoteFact>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, extraction_id, section_key, text, status, edited, applied_at FROM note_fact
+             WHERE report_id = ?1 ORDER BY seq",
+        )?;
+        let mut facts: Vec<NoteFact> = stmt
+            .query_map([report_id], |r| {
+                Ok(NoteFact {
+                    id: r.get(0)?,
+                    extraction_id: r.get(1)?,
+                    section_key: r.get(2)?,
+                    text: r.get(3)?,
+                    status: parse_col(r, 4)?,
+                    edited: r.get(5)?,
+                    applied_at: r.get(6)?,
+                    citations: vec![],
+                })
+            })?
+            .collect::<std::result::Result<_, _>>()?;
+        let mut stmt = self.conn.prepare(
+            "SELECT c.fact_id, seg.id, t.source_id, seg.start_ms, seg.text
+             FROM fact_citation c
+             JOIN note_fact f ON f.id = c.fact_id
+             JOIN transcript_segment seg ON seg.id = c.segment_id
+             JOIN transcript t ON t.id = seg.transcript_id
+             JOIN session_source src ON src.id = t.source_id
+             WHERE f.report_id = ?1 ORDER BY src.started_at, seg.idx",
+        )?;
+        let rows = stmt.query_map([report_id], |r| {
+            Ok((r.get::<_, String>(0)?, FactCitation { segment_id: r.get(1)?, source_id: r.get(2)?, start_ms: r.get(3)?, text: r.get(4)? }))
+        })?;
+        for row in rows {
+            let (fact_id, c) = row?;
+            if let Some(f) = facts.iter_mut().find(|f| f.id == fact_id) {
+                f.citations.push(c);
+            }
+        }
+        Ok(facts)
+    }
+
+    /// Stores a run's facts. Earlier proposals that weren't applied are replaced; applied ones stay.
+    /// `segments` are the segments the run saw: `DraftFact::segments` index into them.
+    pub fn save_extraction(
+        &self,
+        report_id: &str,
+        meta: &ExtractionMeta,
+        facts: &[crate::extract::DraftFact],
+        segments: &[SourceSegment],
+    ) -> Result<Vec<NoteFact>> {
+        self.editable_note(report_id)?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM note_fact WHERE report_id = ?1 AND status != 'applied'", [report_id])?;
+        let id = new_id();
+        tx.execute(
+            "INSERT INTO extraction (id, report_id, provider, model, prompt_version, prompt_hash, chunks, dropped, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![id, report_id, meta.provider, meta.model, crate::extract::PROMPT_VERSION, meta.prompt_hash,
+                    meta.chunks as i64, meta.dropped as i64, now()],
+        )?;
+        let mut seq: i64 =
+            tx.query_row("SELECT COALESCE(MAX(seq), 0) FROM note_fact WHERE report_id = ?1", [report_id], |r| r.get(0))?;
+        for f in facts {
+            seq += 1;
+            let fact_id = new_id();
+            tx.execute(
+                "INSERT INTO note_fact (id, extraction_id, report_id, seq, section_key, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![fact_id, id, report_id, seq, f.section, f.text],
+            )?;
+            for &i in &f.segments {
+                let seg = segments.get(i).ok_or_else(|| Error::Invalid(format!("Zitat auf unbekannten Abschnitt {i}")))?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO fact_citation (fact_id, segment_id) VALUES (?1, ?2)",
+                    params![fact_id, seg.segment_id],
+                )?;
+            }
+        }
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "note.extract", entity_type: "report", entity_id: Some(report_id),
+            meta: json!({
+                "extraction_id": id, "provider": meta.provider, "model": meta.model,
+                "prompt_version": crate::extract::PROMPT_VERSION, "prompt_hash": meta.prompt_hash,
+                "chunks": meta.chunks, "facts": facts.len(), "dropped": meta.dropped,
+            }),
+        })?;
+        tx.commit()?;
+        self.note_facts(report_id)
+    }
+
+    /// Dismisses proposed facts (they stay stored as `rejected`, with their citations).
+    pub fn reject_facts(&self, report_id: &str, ids: &[String]) -> Result<Vec<NoteFact>> {
+        self.editable_note(report_id)?;
+        let tx = self.conn.unchecked_transaction()?;
+        for id in ids {
+            tx.execute(
+                "UPDATE note_fact SET status = 'rejected' WHERE id = ?1 AND report_id = ?2 AND status = 'proposed'",
+                params![id, report_id],
+            )?;
+        }
+        tx.commit()?;
+        self.note_facts(report_id)
+    }
+
+    /// Appends the chosen facts, as the therapist edited them, to their sections as bullet lists.
+    /// An empty section becomes `ai`; one that already holds the therapist's text becomes `mixed`.
+    pub fn apply_facts(&self, report_id: &str, edits: &[FactEdit]) -> Result<Report> {
+        let report = self.editable_note(report_id)?;
+        if edits.is_empty() {
+            return Err(Error::Invalid("Keine Fakten ausgewählt".into()));
+        }
+        let current = self.note_facts(report_id)?;
+        let mut by_section: Vec<(String, Vec<String>)> = Vec::new();
+        let mut cleaned = Vec::with_capacity(edits.len());
+        let mut edited = 0;
+        for e in edits {
+            let f = current
+                .iter()
+                .find(|f| f.id == e.id && f.status == FactStatus::Proposed)
+                .ok_or_else(|| Error::Invalid("Der Fakt ist nicht mehr offen".into()))?;
+            let text = e.text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if text.is_empty() {
+                return Err(Error::Invalid("Ein Fakt ist leer".into()));
+            }
+            if !report.sections.iter().any(|s| s.key == e.section_key) {
+                return Err(Error::NotFound(format!("section {}", e.section_key)));
+            }
+            let changed = text != f.text || e.section_key != f.section_key;
+            edited += changed as usize;
+            match by_section.iter_mut().find(|(k, _)| *k == e.section_key) {
+                Some((_, items)) => items.push(text.clone()),
+                None => by_section.push((e.section_key.clone(), vec![text.clone()])),
+            }
+            cleaned.push((e, text, changed));
+        }
+
+        let ts = now();
+        let tx = self.conn.unchecked_transaction()?;
+        for (e, text, changed) in &cleaned {
+            tx.execute(
+                "UPDATE note_fact SET status = 'applied', applied_at = ?3, section_key = ?4, text = ?5, edited = ?6
+                 WHERE id = ?1 AND report_id = ?2",
+                params![e.id, report_id, ts, e.section_key, text, changed],
+            )?;
+        }
+        for (key, items) in &by_section {
+            let section = report.sections.iter().find(|s| &s.key == key).expect("checked above");
+            let list: String = items.iter().map(|t| format!("<li><p>{}</p></li>", escape_html(t))).collect();
+            let (body, origin) = if crate::pii::plain_text(&section.body).trim().is_empty() {
+                (format!("<ul>{list}</ul>"), SectionOrigin::Ai)
+            } else {
+                let origin = if section.origin == SectionOrigin::Ai { SectionOrigin::Ai } else { SectionOrigin::Mixed };
+                (format!("{}<ul>{list}</ul>", section.body), origin)
+            };
+            tx.execute(
+                "UPDATE report_section SET body = ?3, origin = ?4, edited_at = ?5 WHERE report_id = ?1 AND key = ?2",
+                params![report_id, key, body, origin.as_str(), ts],
+            )?;
+        }
+        tx.execute("UPDATE report SET updated_at = ?2 WHERE id = ?1", params![report_id, ts])?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "note.facts_apply", entity_type: "report", entity_id: Some(report_id),
+            meta: json!({ "facts": edits.len(), "edited": edited, "sections": by_section.len() }),
+        })?;
+        tx.commit()?;
+        self.report(report_id)
     }
 
     // ---------- reports ----------
@@ -1261,8 +1509,22 @@ fn dictation_html(segments: &[SourceSegment]) -> String {
         .iter()
         .map(|s| s.text.trim())
         .filter(|t| !t.is_empty())
-        .map(|t| format!("<p>{}</p>", t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")))
+        .map(|t| format!("<p>{}</p>", escape_html(t)))
         .collect()
+}
+
+fn escape_html(t: &str) -> String {
+    t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+fn entity_kind(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<EntityKind> {
+    let s: String = r.get(idx)?;
+    serde_json::from_value(serde_json::Value::String(s))
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(idx, rusqlite::types::Type::Text, Box::new(e)))
+}
+
+fn entity_kind_str(k: EntityKind) -> String {
+    serde_json::to_value(k).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
 }
 
 fn parse_col<T: std::str::FromStr<Err = Error>>(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<T> {
@@ -1550,6 +1812,106 @@ mod tests {
         store.erase_patient(&p.id).unwrap();
         assert!(store.transcript(&t.id).is_err(), "erasure cascades to transcripts");
         assert!(store.job(&job.id).is_err(), "and jobs");
+    }
+
+    #[test]
+    fn pseudo_terms_extend_the_dictionary() {
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let t = store.add_pseudo_term(&p.id, EntityKind::Person, "  Tante   Gerda ").unwrap();
+        assert_eq!(t.text, "Tante Gerda");
+        assert!(store.add_pseudo_term(&p.id, EntityKind::Ort, "tante gerda").is_err(), "case-insensitive duplicate");
+        assert!(store.add_pseudo_term(&p.id, EntityKind::Ort, "x").is_err(), "too short");
+        store.add_pseudo_term(&p.id, EntityKind::Arbeitgeber, "Bäckerei Korn").unwrap();
+        assert_eq!(store.pseudo_terms(&p.id).unwrap().len(), 2);
+
+        let mut ps = crate::pseudo::Pseudonymizer::new(store.pseudo_dictionary(&p.id).unwrap());
+        let out = ps.pseudonymize("Anna Beispiel und Tante Gerda arbeiten in der Bäckerei Korn.").unwrap();
+        assert!(!["Anna", "Beispiel", "Gerda", "Korn"].iter().any(|w| out.get().contains(w)), "{}", out.get());
+
+        store.remove_pseudo_term(&t.id).unwrap();
+        assert_eq!(store.pseudo_terms(&p.id).unwrap().len(), 1);
+        let events = audit::list(store.conn(), 50).unwrap();
+        assert!(events.iter().all(|e| !e.meta_json.contains("Gerda") && !e.meta_json.contains("Korn")));
+        store.erase_patient(&p.id).unwrap();
+        let left: i64 = store.conn().query_row("SELECT COUNT(*) FROM pseudo_term", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0, "erasure removes the terms");
+    }
+
+    #[test]
+    fn extracted_facts_are_cited_reviewed_and_applied() {
+        use crate::extract::DraftFact;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let s = session(&store, &p);
+        let src = recorded_dictation(&store, &s, dir.path());
+        let job = store.enqueue_transcription(&src.id).unwrap();
+        store.claim_next_job().unwrap();
+        let t = store
+            .finish_transcription(&job.id, "e", "m", &[seg(0, "Schläft schlecht."), seg(61_000, "Hausaufgabe Schlaftagebuch.")])
+            .unwrap();
+        store.confirm_transcript(&t.id).unwrap();
+        let note = store.create_session_note(&s.id).unwrap();
+        let segs = store.source_segments(&s.id).unwrap();
+        let meta = ExtractionMeta { provider: "local".into(), model: "qwen3-8b".into(), prompt_hash: "abc".into(), chunks: 1, dropped: 2 };
+        let draft = |section: &str, text: &str, segments: Vec<usize>| DraftFact { section: section.into(), text: text.into(), segments };
+
+        let facts = store
+            .save_extraction(&note.id, &meta, &[
+                draft("verlauf", "Schlafstörungen", vec![0]),
+                draft("vereinbarungen", "Schlaftagebuch führen", vec![0, 1]),
+                draft("befund", "müde", vec![0]),
+            ], &segs)
+            .unwrap();
+        assert_eq!(facts.len(), 3);
+        assert!(facts.iter().all(|f| f.status == FactStatus::Proposed));
+        assert_eq!(facts[1].citations.iter().map(|c| c.start_ms).collect::<Vec<_>>(), vec![0, 61_000]);
+        assert_eq!(facts[1].citations[1].text, "Hausaufgabe Schlaftagebuch.");
+        assert!(store.save_extraction(&note.id, &meta, &[draft("verlauf", "x", vec![5])], &segs).is_err(), "unknown segment");
+        assert_eq!(store.note_facts(&note.id).unwrap().len(), 3, "a failed save changes nothing");
+
+        let facts = store.reject_facts(&note.id, &[facts[2].id.clone()]).unwrap();
+        assert_eq!(facts[2].status, FactStatus::Rejected);
+
+        // The therapist already wrote something in "verlauf"; "vereinbarungen" is empty.
+        store.save_section(&note.id, "verlauf", "<p>Eigene Notiz</p>").unwrap();
+        let edit = |f: &NoteFact, text: &str| FactEdit { id: f.id.clone(), section_key: f.section_key.clone(), text: text.into() };
+        assert!(store.apply_facts(&note.id, &[edit(&facts[2], "müde")]).is_err(), "rejected facts can't be applied");
+        assert!(store.apply_facts(&note.id, &[FactEdit { section_key: "nope".into(), ..edit(&facts[0], "a") }]).is_err());
+        let report = store
+            .apply_facts(&note.id, &[edit(&facts[0], "Schlafstörungen <seit Mai>"), edit(&facts[1], "Schlaftagebuch führen")])
+            .unwrap();
+        let section = |k: &str| report.sections.iter().find(|s| s.key == k).unwrap().clone();
+        assert_eq!(section("verlauf").body, "<p>Eigene Notiz</p><ul><li><p>Schlafstörungen &lt;seit Mai&gt;</p></li></ul>");
+        assert_eq!(section("verlauf").origin, SectionOrigin::Mixed);
+        assert_eq!(section("vereinbarungen").body, "<ul><li><p>Schlaftagebuch führen</p></li></ul>");
+        assert_eq!(section("vereinbarungen").origin, SectionOrigin::Ai);
+        let facts = store.note_facts(&note.id).unwrap();
+        assert!(facts[0].edited && facts[0].status == FactStatus::Applied && facts[0].applied_at.is_some());
+        assert!(!facts[1].edited);
+        assert!(store.apply_facts(&note.id, &[edit(&facts[0], "noch mal")]).is_err(), "applied only once");
+
+        // A new run replaces open and rejected proposals but keeps what was applied.
+        let facts = store.save_extraction(&note.id, &meta, &[draft("risiko", "keine Suizidalität berichtet", vec![0])], &segs).unwrap();
+        assert_eq!(facts.iter().map(|f| f.status).collect::<Vec<_>>(), vec![FactStatus::Applied, FactStatus::Applied, FactStatus::Proposed]);
+
+        let events = audit::list(store.conn(), 50).unwrap();
+        let extract = events.iter().filter(|e| e.action == "note.extract").last().unwrap(); // list is newest first
+        assert!(extract.meta_json.contains("\"model\":\"qwen3-8b\"") && extract.meta_json.contains("\"facts\":3"));
+        assert!(events.iter().any(|e| e.action == "note.facts_apply"));
+        assert!(events.iter().all(|e| !e.meta_json.contains("Schlaf") && !e.meta_json.contains("Suizid")), "no fact text in the audit log");
+        assert_eq!(audit::verify(store.conn()).unwrap(), None);
+
+        store.sign_report(&note.id, "Dr. Test").unwrap();
+        assert!(store.save_extraction(&note.id, &meta, &[], &segs).is_err(), "signed notes take no new facts");
+        assert!(store.apply_facts(&note.id, &[edit(&facts[2], "x")]).is_err());
+
+        store.erase_patient(&p.id).unwrap();
+        for table in ["note_fact", "fact_citation", "extraction"] {
+            let n: i64 = store.conn().query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap();
+            assert_eq!(n, 0, "{table} cascades on erasure");
+        }
     }
 
     #[test]

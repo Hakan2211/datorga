@@ -1,8 +1,8 @@
-# thera: session handoff (2026-10-27, Phase 2: slices 11–12 done)
+# thera: session handoff (2026-10-27, Phase 2: slices 11–13 done)
 
 Start a new session with: *"Read docs/HANDOFF.md and continue with the next step."*
 
-**State at end of session (2026-10-27):** Phase 1 is done (slices 1–10). Phase 2 has started. The user decided (PLAN-AMENDMENTS §9): OpenRouter/Requesty + own endpoint, chosen model, the therapist's own key, only pseudonymized text leaves the machine, local models with hardware-based recommendation; ChatGPT/OpenCode subscription deferred. **Slice 11 (LLM provider layer) is done** and verified in the real app against a mock endpoint. It isn't tested against a real OpenRouter/Requesty key yet (none on the dev box). **Slice 12 (local models) is done** and verified with the real llama-server on the dev box GPU. Next step: **slice 13, fact extraction per session** (see Next steps 12).
+**State at end of session (2026-10-27):** Phase 1 is done (slices 1–10). Phase 2 has started. The user decided (PLAN-AMENDMENTS §9): OpenRouter/Requesty + own endpoint, chosen model, the therapist's own key, only pseudonymized text leaves the machine, local models with hardware-based recommendation; ChatGPT/OpenCode subscription deferred. **Slice 11 (LLM provider layer) is done** and verified in the real app against a mock endpoint. It isn't tested against a real OpenRouter/Requesty key yet (none on the dev box). **Slice 12 (local models) is done** and verified with the real llama-server on the dev box GPU. **Slice 13 (fact extraction → Sitzungsnotiz draft) is done**, verified in the real app against a mock endpoint (egress checked) and the real Qwen3 8B. Next step: **slice 14, Bericht drafting per section** (see Next steps 12).
 
 On the next start of the dev-box app you'll see **"Notfall-Kit fehlt"**: the DB predates the kit, so it was never confirmed. Create a new key there and save/print the kit.
 
@@ -252,6 +252,29 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
   - audit `llm.test` with provider `local`, no text
 - Not done: Mistral Small and Qwen3 14B were not downloaded or run (only their hashes are pinned); no CPU-only measurement; whisper-cli is not in the job object yet.
 
+**Built (slice 13, 2026-10-27): fact extraction → Sitzungsnotiz draft (Phase 2)**
+- `core::extract`:
+  - `system_prompt(template)` from the resolved note template (prose sections with `ai_allowed`, their hints), German rules: only what's in the transcript, cite segment numbers, split mixed segments across sections, negated findings count ("Suizidgedanken verneint" → risiko), no diagnoses/ICD/medication, keep placeholders and relationships, JSON only. `PROMPT_VERSION = extract-2026.1`; `prompt_hash` = SHA-256 of version + prompt.
+  - `prepare(template, segments, dict, budget)`: one pseudonymizer for the whole session (a name the rules find in one chunk is tokenized in every chunk), segments as `[S12] (Diktat|Sitzung, mm:ss) text`, chunked at `CHUNK_CHARS` = 24k chars (fits a 16k-context local model). `digest` = SHA-256 of all outgoing messages.
+  - `parse(answer, chunk range, sections, map)`: strips `<think>` and code fences, accepts `{"facts": [...]}` or a bare array, citations as `3`/`"S3"`/`"[S3]"`. Dropped and counted: unknown section, empty or > 600 chars, ICD-code pattern, no citation or one outside the chunk, tokens the model invented. Duplicates removed, tokens restored locally.
+- Migration V7: `pseudo_term` (per patient, kind + text, cascade on erasure), `extraction` (provider, model, prompt version/hash, chunks, dropped), `note_fact` (`proposed`/`rejected`/`applied`, `edited`), `fact_citation` → `transcript_segment.id`. `SourceSegment` now carries `segment_id`.
+- Store: `pseudo_terms`/`add_pseudo_term`/`remove_pseudo_term`, `pseudo_dictionary` (patient record + terms), `note_facts` (with cited segment time + text), `save_extraction` (replaces open/rejected proposals, keeps applied ones), `reject_facts`, `apply_facts` (appends `<ul>` bullets per section; empty section → origin `ai`, otherwise `mixed`; signed notes refused). Audit: `pseudo_term.add/remove` (kind only), `note.extract` (provider/model/prompt hash/counts), `note.facts_apply` (counts), `llm.extract` per request. Never text or terms.
+- App: `extract_preview` (outgoing messages, local token table, terms, provider/model), `extract_run(report_id, digest)` (refuses if the text changed since the preview; one `llm::chat` per chunk; nothing stored if any request fails; `extract-progress` events: `loading` for the local model, then chunk n of m), `pseudo_term_add/remove`, `note_facts`, `note_facts_reject`, `note_facts_apply`.
+- UI (`components/fact-draft.tsx`, in the note editor above the sections while unsigned and a confirmed transcript exists):
+  - "KI-Vorschläge aus der Abschrift": no provider → link to Settings
+  - "Fakten vorschlagen…" opens "Vorschau: was gesendet wird": target + model, US-intermediary warning, token table (local only), the outgoing text with placeholders highlighted. Selecting a word there fills "Eigene Begriffe für diese Person"; adding one re-runs the preview. Local provider: says the text stays on the machine.
+  - proposals grouped by section: checkbox (default on), editable text, section select, ✕ to reject, timestamp chips (tooltip = segment text; click scrolls the transcript sidebar to the line and highlights it). "N Punkte übernehmen" flushes pending autosaves, then applies; "Alle verwerfen". Applied facts stay listed with their sources ("übernommene Punkte mit Quellen").
+- `thera-fake-llama` answers extraction prompts (one fact per line + one invented token).
+- Tests: 132 core unit (+ extract: prompt has no tokens and resolves method hints, chunking, cross-chunk tokenization + global numbering + stable digest, parse checks, citation range, clock; store: terms + erasure, save/reject/apply/re-run/sign/audit/erasure). UI typecheck + vitest green.
+- E2E in the real debug app (isolated data dir + keychain user `e2e-extract`, removed afterwards), TTS dictation through the Scarlett, transcript corrected before confirming:
+  - no provider → hint; mock endpoint (custom provider, 127.0.0.1:8765) logging request bodies
+  - preview: patient name and date tokenized, "Schwester Gerda" still plain → selecting "Gerda" fills the term field → added → `Schwester [PERSON_2]`
+  - mock request body: no Anna/Beispiel/Gerda/birth date/appointment date; tokens + numbered segments present; one request
+  - invented `[PERSON_99]` and an "F32.1" fact dropped (toast says 2 dropped); restored names in the facts
+  - citation chip highlights the transcript line; uncheck one, edit one, move one to Befund, apply 3 → bullets in the editor without reload, origins `mixed`/`ai`, statuses + `edited` right; audit has no text, chain intact
+  - **real Qwen3 8B** (GPU): first prompt version missed the denied suicidality, filed mood under Verlauf and turned "Ihre Schwester [PERSON_2]" into "Frau Gerda". After adding the split/negation/relationship rules: 8 facts, all in the right sections, 11.4 s including model load.
+- Not done: no E2E with a session long enough to need several chunks (unit-tested only); no real cloud provider run; the prompt was tuned on one synthetic dictation (slice 15's eval set should cover it); session recordings still have no speaker separation, so the model can't tell patient from therapist there.
+
 ## Current limitations
 
 - ~~Database is unencrypted~~ Encrypted SQLCipher build is live (2026-10-27): Strawberry Perl, LLVM, CMake installed, `LIBCLANG_PATH` set. Old plain DB backed up to `%APPDATA%\de.datorga.thera.plain-backup-20261027` (delete once not needed). A10's technical gates (encryption, recovery kit, verified backup) are done. Before real patients: legal review of the consent text and a restore test on the therapist's own machine.
@@ -266,7 +289,8 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
 - Closing the laptop lid during a recording still sleeps if Windows is configured to. What the audio stream does after resume is untested.
 - Backups are manual (reminder banner, no automatic schedule) and always full.
 - Vorlagen upload is a placeholder card.
-- Sitzungsnotiz: no AI drafting (Phase 2: fact extraction from `source_segments`). A note exported before a Nachtrag lacks it until exported again (now flagged "neu exportieren"). Partial insert works within one segment only, not across segments.
+- Sitzungsnotiz: AI proposals exist (slice 13), but facts are appended as bullets: merging them into existing prose is up to the therapist. A note exported before a Nachtrag lacks it until exported again (now flagged "neu exportieren"). Partial insert works within one segment only, not across segments.
+- Fact extraction runs one request per 24k-character chunk without a cancel button; a long session on a CPU-only laptop may take minutes. Facts from different chunks aren't merged, so the same point can come twice.
 
 ## Next steps (in order)
 
@@ -308,8 +332,8 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
 12. **Phase 2** (decisions and slices: PLAN-AMENDMENTS §9):
    - ~~slice 11, LLM provider layer~~ **done**
    - ~~slice 12, local models~~ **done** (hardware probe, GGUF catalog + recommendation, hash-checked download/import, llama-server sidecar in a kill-on-close job object, provider `local`)
-   - **NEXT → slice 13:** fact extraction per session with segment citations + redaction preview → Sitzungsnotiz draft. Works with any provider incl. `local`; long sessions need chunking for 16k context.
-   - slice 14: Bericht drafting per section; store model/provider/prompt hash
+   - ~~slice 13, fact extraction per session~~ **done** (redaction preview with per-patient terms, cited facts, review + apply into the note)
+   - **NEXT → slice 14:** Bericht drafting per section from the applied facts of the episode's sessions (`note_fact` + `fact_citation` give the sentence → segment trail for `report_citation`); store model/provider/prompt hash; reuse `extract_preview`'s dialog for the redaction preview
    - slice 15: eval set
    - deferred: using a ChatGPT/OpenCode subscription (reasons in PLAN-AMENDMENTS §9). An endpoint with an API key already works as "Eigener Endpunkt".
 ## Open questions for the therapist
