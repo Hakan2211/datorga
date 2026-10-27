@@ -5,4 +5,8 @@ export type Session = { id: string, patient_id: string, episode_id: string | nul
 /**
  * The session's Sitzungsnotiz, if one was started.
  */
-note_id: string | null, note_status: ReportStatus | null, };
+note_id: string | null, note_status: ReportStatus | null, 
+/**
+ * The note got a Nachtrag after its last export: the exported file lacks it.
+ */
+note_export_outdated: boolean, };

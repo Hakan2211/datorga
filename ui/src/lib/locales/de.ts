@@ -218,6 +218,10 @@ export const de = {
   },
   note: {
     title: 'Sitzungsnotiz',
+    exportOutdated: 'neu exportieren',
+    exportOutdatedHint: 'Nach dem letzten Export kam ein Nachtrag hinzu; die exportierte Datei enthält ihn nicht.',
+    exportOutdatedSince:
+      'Seit dem letzten Export ({{date}}) kam ein Nachtrag hinzu. Bitte erneut exportieren, damit die Datei ihn enthält.',
     create: 'Sitzungsnotiz anlegen',
     open: 'Sitzungsnotiz öffnen',
     none: 'Noch keine Notiz für diese Sitzung.',

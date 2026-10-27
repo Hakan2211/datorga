@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { AlertTriangle, ClipboardList, FileText, Mic, NotebookPen, Square, X } from 'lucide-react'
 import type { SourceKind } from '@/bindings/SourceKind'
 import { Page, PageHeader } from '@/components/app-shell'
-import { StatusBadge, formatDate } from '@/components/bits'
+import { ExportOutdatedBadge, StatusBadge, formatDate } from '@/components/bits'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -82,6 +82,7 @@ function NoteCard({ view }: { view: SessionView }) {
         <CardTitle className="flex items-center gap-3 text-base">
           {t('note.title')}
           {session.note_status && <StatusBadge status={session.note_status} />}
+          <ExportOutdatedBadge show={session.note_export_outdated} />
         </CardTitle>
         {session.note_id ? (
           <Button asChild size="sm">

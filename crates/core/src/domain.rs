@@ -155,6 +155,8 @@ pub struct Session {
     /// The session's Sitzungsnotiz, if one was started.
     pub note_id: Option<String>,
     pub note_status: Option<ReportStatus>,
+    /// The note got a Nachtrag after its last export: the exported file lacks it.
+    pub note_export_outdated: bool,
 }
 
 /// One capture within a session, with its audio metadata.
@@ -259,6 +261,9 @@ pub struct Report {
     pub updated_at: String,
     pub signed_at: Option<String>,
     pub signed_by: Option<String>,
+    pub exported_at: Option<String>,
+    /// Exported, but a Nachtrag was added afterwards: export again so the file contains it.
+    pub export_outdated: bool,
     pub sections: Vec<ReportSection>,
     /// Nachträge to a signed Sitzungsnotiz, oldest first.
     pub addenda: Vec<ReportAddendum>,

@@ -10,7 +10,7 @@ import type { Episode } from '@/bindings/Episode'
 import type { Method } from '@/bindings/Method'
 import type { Setting } from '@/bindings/Setting'
 import { Page, PageHeader } from '@/components/app-shell'
-import { StatusBadge, formatDate } from '@/components/bits'
+import { ExportOutdatedBadge, StatusBadge, formatDate } from '@/components/bits'
 import { ConsentCard } from '@/components/consent-card'
 import { PatientFormDialog } from '@/components/patient-form'
 import {
@@ -290,6 +290,7 @@ function SessionsCard({ patientId, episodeId }: { patientId: string; episodeId?:
                 {s.note_status && (
                   <span className="ml-3">
                     {t('sessions.note')}: <StatusBadge status={s.note_status} />
+                    <ExportOutdatedBadge show={s.note_export_outdated} />
                   </span>
                 )}
               </span>

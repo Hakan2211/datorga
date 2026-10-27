@@ -27,6 +27,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V3__transcription.sql"),
     include_str!("migrations/V4__session_note.sql"),
     include_str!("migrations/V5__report_addendum.sql"),
+    include_str!("migrations/V6__export_state.sql"),
 ];
 
 pub struct Store {
@@ -863,15 +864,15 @@ impl Store {
     // ---------- reports ----------
 
     pub fn report(&self, id: &str) -> Result<Report> {
-        let mut report = self
+        let (mut report, exported_addenda) = self
             .conn
             .query_row(
                 "SELECT id, patient_id, episode_id, application_id, session_id, template_key, template_version, kind,
-                        status, created_at, updated_at, signed_at, signed_by
+                        status, created_at, updated_at, signed_at, signed_by, exported_at, exported_addenda
                  FROM report WHERE id = ?1",
                 [id],
                 |r| {
-                    Ok(Report {
+                    let report = Report {
                         id: r.get(0)?,
                         patient_id: r.get(1)?,
                         episode_id: r.get(2)?,
@@ -885,9 +886,12 @@ impl Store {
                         updated_at: r.get(10)?,
                         signed_at: r.get(11)?,
                         signed_by: r.get(12)?,
+                        exported_at: r.get(13)?,
+                        export_outdated: false,
                         sections: vec![],
                         addenda: vec![],
-                    })
+                    };
+                    Ok((report, r.get::<_, Option<i64>>(14)?))
                 },
             )
             .optional()?
@@ -906,6 +910,8 @@ impl Store {
                 Ok(ReportAddendum { id: r.get(0)?, seq: r.get(1)?, body: r.get(2)?, created_at: r.get(3)?, signed_by: r.get(4)? })
             })?
             .collect::<std::result::Result<_, _>>()?;
+        report.export_outdated =
+            report.status == ReportStatus::Exported && report.addenda.len() as i64 > exported_addenda.unwrap_or(0);
         Ok(report)
     }
 
@@ -1014,7 +1020,12 @@ impl Store {
 
     pub fn mark_exported(&self, report_id: &str, format: &str, sha256: &str) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute("UPDATE report SET status = 'exported' WHERE id = ?1 AND status = 'signed'", [report_id])?;
+        tx.execute(
+            "UPDATE report SET status = 'exported', exported_at = ?2,
+                exported_addenda = (SELECT count(*) FROM report_addendum WHERE report_id = ?1)
+             WHERE id = ?1 AND status IN ('signed', 'exported')",
+            params![report_id, now()],
+        )?;
         audit::append(&tx, Entry {
             actor: ACTOR, action: "report.export", entity_type: "report", entity_id: Some(report_id),
             meta: json!({ "format": format, "sha256": sha256 }),
@@ -1061,7 +1072,8 @@ const CONSENT_SELECT: &str = "SELECT id, patient_id, kind, scope, text_version, 
 const EPISODE_SELECT: &str =
     "SELECT id, patient_id, method, age_group, setting, stage, started_at, ended_at FROM episode";
 const SESSION_SELECT: &str = "SELECT s.id, s.patient_id, s.episode_id, s.scheduled_at, s.started_at, s.ended_at,
-    s.duration_s, s.modality, s.status, n.id, n.status
+    s.duration_s, s.modality, s.status, n.id, n.status,
+    n.status = 'exported' AND (SELECT count(*) FROM report_addendum x WHERE x.report_id = n.id) > COALESCE(n.exported_addenda, 0)
     FROM session s LEFT JOIN report n ON n.session_id = s.id AND n.kind = 'sitzungsnotiz'";
 
 const JOB_SELECT: &str =
@@ -1199,6 +1211,7 @@ fn row_to_session(r: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
             Some(_) => Some(parse_col(r, 10)?),
             None => None,
         },
+        note_export_outdated: r.get::<_, Option<bool>>(11)?.unwrap_or(false),
     })
 }
 
@@ -1553,6 +1566,34 @@ mod tests {
         assert_eq!(audit::verify(store.conn()).unwrap(), None);
         store.erase_patient(&p.id).unwrap();
         assert!(store.report(&note.id).is_err(), "erasure removes the note");
+    }
+
+    #[test]
+    fn nachtrag_after_export_marks_the_export_outdated_until_exported_again() {
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let s = store
+            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: None, scheduled_at: None, modality: None })
+            .unwrap();
+        let note = store.create_session_note(&s.id).unwrap();
+        store.save_section(&note.id, "verlauf", "<p>Original</p>").unwrap();
+        store.sign_report(&note.id, "M. Muster").unwrap();
+        let outdated = |store: &Store| (store.report(&note.id).unwrap().export_outdated, store.session(&s.id).unwrap().note_export_outdated);
+
+        store.add_addendum(&note.id, "<p>Vor dem Export</p>", "M. Muster").unwrap();
+        assert_eq!(outdated(&store), (false, false), "signed but never exported");
+        store.mark_exported(&note.id, "pdf", "abc").unwrap();
+        let r = store.report(&note.id).unwrap();
+        assert!(r.exported_at.is_some());
+        assert_eq!(outdated(&store), (false, false), "export contains the first Nachtrag");
+
+        store.add_addendum(&note.id, "<p>Nach dem Export</p>", "M. Muster").unwrap();
+        assert_eq!(outdated(&store), (true, true));
+        assert_eq!(store.list_sessions(Some(&p.id)).unwrap()[0].note_export_outdated, true);
+
+        store.mark_exported(&note.id, "docx", "def").unwrap();
+        assert_eq!(outdated(&store), (false, false), "exported again");
+        assert_eq!(store.report(&note.id).unwrap().status, ReportStatus::Exported);
     }
 
     #[test]

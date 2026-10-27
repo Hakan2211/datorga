@@ -19,6 +19,17 @@ export function StatusBadge({ status }: { status: ReportStatus }) {
   )
 }
 
+/** The note got a Nachtrag after its last export: the file lacks it. */
+export function ExportOutdatedBadge({ show }: { show: boolean }) {
+  const { t } = useTranslation()
+  if (!show) return null
+  return (
+    <Badge variant="outline" className="ml-2 border-warning font-normal text-warning" title={t('note.exportOutdatedHint')}>
+      {t('note.exportOutdated')}
+    </Badge>
+  )
+}
+
 export function formatDate(iso: string | null | undefined, withTime = false): string {
   if (!iso) return '—'
   const d = new Date(iso.length === 10 ? `${iso}T00:00:00` : iso)

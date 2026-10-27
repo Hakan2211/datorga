@@ -7,7 +7,11 @@ export type Report = { id: string, patient_id: string, episode_id: string | null
 /**
  * Set for a Sitzungsnotiz.
  */
-session_id: string | null, template_key: string, template_version: string, kind: string, status: ReportStatus, created_at: string, updated_at: string, signed_at: string | null, signed_by: string | null, sections: Array<ReportSection>, 
+session_id: string | null, template_key: string, template_version: string, kind: string, status: ReportStatus, created_at: string, updated_at: string, signed_at: string | null, signed_by: string | null, exported_at: string | null, 
+/**
+ * Exported, but a Nachtrag was added afterwards: export again so the file contains it.
+ */
+export_outdated: boolean, sections: Array<ReportSection>, 
 /**
  * Nachträge to a signed Sitzungsnotiz, oldest first.
  */

@@ -443,6 +443,12 @@ function ExportCard({ view }: { view: ReportView }) {
   return (
     <Card>
       <CardContent className="grid gap-2 pt-5">
+        {view.report.export_outdated && (
+          <p className="flex items-start gap-2 text-sm text-warning">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+            {t('note.exportOutdatedSince', { date: formatDate(view.report.exported_at, true) })}
+          </p>
+        )}
         <Button variant="outline" onClick={() => exportAs.mutate('pdf')} disabled={exportAs.isPending}>
           <Download /> {t('report.exportPdf')}
         </Button>

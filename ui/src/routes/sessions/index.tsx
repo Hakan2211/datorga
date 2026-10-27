@@ -2,7 +2,7 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Page, PageHeader } from '@/components/app-shell'
-import { StatusBadge, formatDate } from '@/components/bits'
+import { ExportOutdatedBadge, StatusBadge, formatDate } from '@/components/bits'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -50,7 +50,10 @@ function Sessions() {
                       <TableCell className="text-muted-foreground">{t(`sessions.status.${s.status}`, s.status)}</TableCell>
                       <TableCell>
                         {s.note_status ? (
-                          <StatusBadge status={s.note_status} />
+                          <>
+                            <StatusBadge status={s.note_status} />
+                            <ExportOutdatedBadge show={s.note_export_outdated} />
+                          </>
                         ) : (
                           <span className="text-muted-foreground">{t('sessions.noNote')}</span>
                         )}
