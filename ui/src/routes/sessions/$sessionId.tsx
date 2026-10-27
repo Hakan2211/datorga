@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { AlertTriangle, FileText, Mic, NotebookPen, Square, X } from 'lucide-react'
+import { AlertTriangle, ClipboardList, FileText, Mic, NotebookPen, Square, X } from 'lucide-react'
 import type { SourceKind } from '@/bindings/SourceKind'
 import { Page, PageHeader } from '@/components/app-shell'
-import { formatDate } from '@/components/bits'
+import { StatusBadge, formatDate } from '@/components/bits'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -37,6 +37,7 @@ function SessionPage() {
         }
       />
       <Page>
+        <NoteCard view={view.data} />
         <CapturePanel view={view.data} />
         <Card>
           <CardHeader>
@@ -56,6 +57,51 @@ function SessionPage() {
         </Card>
       </Page>
     </>
+  )
+}
+
+function NoteCard({ view }: { view: SessionView }) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const navigate = useNavigate()
+  const { session, sources } = view
+  const create = useMutation({
+    mutationFn: () => api.createSessionNote(session.id),
+    onSuccess: (note) => {
+      void qc.invalidateQueries({ queryKey: ['session', session.id] })
+      void qc.invalidateQueries({ queryKey: ['sessions'] })
+      void navigate({ to: '/reports/$reportId', params: { reportId: note.id } })
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+  const unconfirmed = sources.some((s) => s.transcript?.status === 'draft' || jobActive(s.job))
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        <CardTitle className="flex items-center gap-3 text-base">
+          {t('note.title')}
+          {session.note_status && <StatusBadge status={session.note_status} />}
+        </CardTitle>
+        {session.note_id ? (
+          <Button asChild size="sm">
+            <Link to="/reports/$reportId" params={{ reportId: session.note_id }}>
+              <ClipboardList /> {t('note.open')}
+            </Link>
+          </Button>
+        ) : (
+          <Button size="sm" onClick={() => create.mutate()} disabled={create.isPending}>
+            <ClipboardList /> {t('note.create')}
+          </Button>
+        )}
+      </CardHeader>
+      {(!session.note_id || unconfirmed) && (
+        <CardContent className="space-y-1 text-sm text-muted-foreground">
+          {!session.note_id && <p>{t('note.none')} {t('note.prefillHint')}</p>}
+          {unconfirmed && <p>{t('note.unconfirmed')}</p>}
+        </CardContent>
+      )}
+    </Card>
   )
 }
 

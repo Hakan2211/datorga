@@ -22,6 +22,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V1__spine.sql"),
     include_str!("migrations/V2__capture.sql"),
     include_str!("migrations/V3__transcription.sql"),
+    include_str!("migrations/V4__session_note.sql"),
 ];
 
 pub struct Store {
@@ -326,7 +327,7 @@ impl Store {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'bericht', ?7, ?7)",
             params![report_id, episode.patient_id, episode_id, app_id, template.key, template.version, ts],
         )?;
-        let ctx = templates::Context { method: episode.method, age_group: episode.age_group, kind };
+        let ctx = templates::Context { method: episode.method, age_group: episode.age_group, kind: Some(kind) };
         for s in template.resolve(&ctx).sections {
             tx.execute(
                 "INSERT INTO report_section (id, report_id, key) VALUES (?1, ?2, ?3)",
@@ -359,13 +360,12 @@ impl Store {
         )?;
         audit::append(&tx, Entry { actor: ACTOR, action: "session.create", entity_type: "session", entity_id: Some(&id), meta: json!({}) })?;
         tx.commit()?;
-        let mut stmt = self.conn.prepare(&format!("{SESSION_SELECT} WHERE id = ?1"))?;
-        Ok(stmt.query_row([&id], row_to_session)?)
+        self.session(&id)
     }
 
     pub fn list_sessions(&self, patient_id: Option<&str>) -> Result<Vec<Session>> {
         let mut stmt = self.conn.prepare(&format!(
-            "{SESSION_SELECT} WHERE (?1 IS NULL OR patient_id = ?1) ORDER BY COALESCE(scheduled_at, started_at) DESC"
+            "{SESSION_SELECT} WHERE (?1 IS NULL OR s.patient_id = ?1) ORDER BY COALESCE(s.scheduled_at, s.started_at) DESC"
         ))?;
         let rows = stmt.query_map([patient_id], row_to_session)?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -373,7 +373,7 @@ impl Store {
 
     pub fn session(&self, id: &str) -> Result<Session> {
         self.conn
-            .query_row(&format!("{SESSION_SELECT} WHERE id = ?1"), [id], row_to_session)
+            .query_row(&format!("{SESSION_SELECT} WHERE s.id = ?1"), [id], row_to_session)
             .optional()?
             .ok_or_else(|| Error::NotFound(format!("session {id}")))
     }
@@ -740,14 +740,59 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    // ---------- Sitzungsnotiz ----------
+
+    /// The session's note, created on first call (later calls return it unchanged). Sections
+    /// marked `dictation` start with the therapist's confirmed dictation; session recordings are
+    /// not copied in, since they hold the patient's words too and the therapist picks from them.
+    pub fn create_session_note(&self, session_id: &str) -> Result<Report> {
+        let session = self.session(session_id)?;
+        if let Some(id) = session.note_id {
+            return self.report(&id);
+        }
+        let template = self.template(templates::SESSION_NOTE_KEY)?;
+        let template = match &session.episode_id {
+            Some(ep) => {
+                let ep = self.episode(ep)?;
+                template.resolve(&templates::Context { method: ep.method, age_group: ep.age_group, kind: None })
+            }
+            None => template,
+        };
+        let dictated: Vec<_> =
+            self.source_segments(session_id)?.into_iter().filter(|s| s.role == Speaker::Therapist).collect();
+        let dictation = dictation_html(&dictated);
+
+        let tx = self.conn.unchecked_transaction()?;
+        let id = new_id();
+        let ts = now();
+        tx.execute(
+            "INSERT INTO report (id, patient_id, episode_id, session_id, template_key, template_version, kind, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'sitzungsnotiz', ?7, ?7)",
+            params![id, session.patient_id, session.episode_id, session_id, template.key, template.version, ts],
+        )?;
+        for s in &template.sections {
+            let body = if s.dictation { dictation.as_str() } else { "" };
+            tx.execute(
+                "INSERT INTO report_section (id, report_id, key, body) VALUES (?1, ?2, ?3, ?4)",
+                params![new_id(), id, s.key, body],
+            )?;
+        }
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "report.create", entity_type: "report", entity_id: Some(&id),
+            meta: json!({ "kind": "sitzungsnotiz", "session_id": session_id, "prefilled": !dictation.is_empty() }),
+        })?;
+        tx.commit()?;
+        self.report(&id)
+    }
+
     // ---------- reports ----------
 
     pub fn report(&self, id: &str) -> Result<Report> {
         let mut report = self
             .conn
             .query_row(
-                "SELECT id, patient_id, episode_id, application_id, template_key, template_version, kind, status,
-                        created_at, updated_at, signed_at, signed_by
+                "SELECT id, patient_id, episode_id, application_id, session_id, template_key, template_version, kind,
+                        status, created_at, updated_at, signed_at, signed_by
                  FROM report WHERE id = ?1",
                 [id],
                 |r| {
@@ -756,14 +801,15 @@ impl Store {
                         patient_id: r.get(1)?,
                         episode_id: r.get(2)?,
                         application_id: r.get(3)?,
-                        template_key: r.get(4)?,
-                        template_version: r.get(5)?,
-                        kind: r.get(6)?,
-                        status: parse_col(r, 7)?,
-                        created_at: r.get(8)?,
-                        updated_at: r.get(9)?,
-                        signed_at: r.get(10)?,
-                        signed_by: r.get(11)?,
+                        session_id: r.get(4)?,
+                        template_key: r.get(5)?,
+                        template_version: r.get(6)?,
+                        kind: r.get(7)?,
+                        status: parse_col(r, 8)?,
+                        created_at: r.get(9)?,
+                        updated_at: r.get(10)?,
+                        signed_at: r.get(11)?,
+                        signed_by: r.get(12)?,
                         sections: vec![],
                     })
                 },
@@ -779,6 +825,7 @@ impl Store {
         Ok(report)
     }
 
+    /// The Berichte queue. Sitzungsnotizen are reached through their session.
     pub fn list_reports(&self, status: Option<ReportStatus>) -> Result<Vec<ReportSummary>> {
         let mut stmt = self.conn.prepare(
             "SELECT r.id, r.patient_id, p.first_name || ' ' || p.last_name, p.chiffre, e.method, a.kind, a.seq,
@@ -787,7 +834,7 @@ impl Store {
              JOIN patient p ON p.id = r.patient_id
              LEFT JOIN episode e ON e.id = r.episode_id
              LEFT JOIN application a ON a.id = r.application_id
-             WHERE (?1 IS NULL OR r.status = ?1)
+             WHERE r.kind = 'bericht' AND (?1 IS NULL OR r.status = ?1)
              ORDER BY r.updated_at DESC",
         )?;
         let rows = stmt.query_map([status.map(|s| s.as_str())], |r| {
@@ -893,8 +940,9 @@ const CONSENT_SELECT: &str = "SELECT id, patient_id, kind, scope, text_version, 
     note FROM consent";
 const EPISODE_SELECT: &str =
     "SELECT id, patient_id, method, age_group, setting, stage, started_at, ended_at FROM episode";
-const SESSION_SELECT: &str = "SELECT id, patient_id, episode_id, scheduled_at, started_at, ended_at, duration_s,
-    modality, status FROM session";
+const SESSION_SELECT: &str = "SELECT s.id, s.patient_id, s.episode_id, s.scheduled_at, s.started_at, s.ended_at,
+    s.duration_s, s.modality, s.status, n.id, n.status
+    FROM session s LEFT JOIN report n ON n.session_id = s.id AND n.kind = 'sitzungsnotiz'";
 
 const JOB_SELECT: &str =
     "SELECT id, kind, source_id, status, progress, attempts, last_error, created_at, updated_at FROM job";
@@ -1026,7 +1074,22 @@ fn row_to_session(r: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
         duration_s: r.get(6)?,
         modality: r.get(7)?,
         status: r.get(8)?,
+        note_id: r.get(9)?,
+        note_status: match r.get::<_, Option<String>>(10)? {
+            Some(_) => Some(parse_col(r, 10)?),
+            None => None,
+        },
     })
+}
+
+/// Dictated segments as TipTap paragraphs, one per segment.
+fn dictation_html(segments: &[SourceSegment]) -> String {
+    segments
+        .iter()
+        .map(|s| s.text.trim())
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("<p>{}</p>", t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")))
+        .collect()
 }
 
 fn parse_col<T: std::str::FromStr<Err = Error>>(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<T> {
@@ -1277,6 +1340,62 @@ mod tests {
         store.erase_patient(&p.id).unwrap();
         assert!(store.transcript(&t.id).is_err(), "erasure cascades to transcripts");
         assert!(store.job(&job.id).is_err(), "and jobs");
+    }
+
+    #[test]
+    fn session_note_is_one_per_session_prefilled_from_dictation_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let ep = store
+            .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Tp, age_group: AgeGroup::Adult, setting: Setting::Einzel })
+            .unwrap();
+        let s = store
+            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: Some(ep.id.clone()), scheduled_at: None, modality: None })
+            .unwrap();
+        assert_eq!((s.note_id.as_deref(), s.note_status), (None, None));
+
+        // A confirmed dictation (prefilled) and a draft one (ignored).
+        for (texts, confirm) in [(&["Thema: Konflikt mit <Chef> & Kollegen.", "  "][..], true), (&["Entwurf."][..], false)] {
+            let src = recorded_dictation(&store, &s, dir.path());
+            let job = store.enqueue_transcription(&src.id).unwrap();
+            store.claim_next_job().unwrap();
+            let segs: Vec<_> = texts.iter().enumerate().map(|(i, t)| seg(i as i64 * 1000, t)).collect();
+            let t = store.finish_transcription(&job.id, "e", "m", &segs).unwrap();
+            if confirm {
+                store.confirm_transcript(&t.id).unwrap();
+            }
+        }
+
+        let note = store.create_session_note(&s.id).unwrap();
+        assert_eq!((note.kind.as_str(), note.session_id.as_deref()), ("sitzungsnotiz", Some(s.id.as_str())));
+        assert_eq!(note.sections.len(), 5);
+        let body = |k: &str| note.sections.iter().find(|x| x.key == k).unwrap().body.clone();
+        assert_eq!(body("verlauf"), "<p>Thema: Konflikt mit &lt;Chef&gt; &amp; Kollegen.</p>");
+        assert_eq!(body("befund"), "");
+
+        assert_eq!(store.create_session_note(&s.id).unwrap().id, note.id, "one note per session");
+        let s2 = store.session(&s.id).unwrap();
+        assert_eq!((s2.note_id.as_deref(), s2.note_status), (Some(note.id.as_str()), Some(ReportStatus::Draft)));
+        assert_eq!(store.list_sessions(Some(&p.id)).unwrap()[0].note_id.as_deref(), Some(note.id.as_str()));
+        assert!(store.list_reports(None).unwrap().is_empty(), "notes stay out of the Berichte queue");
+
+        // Only the required section blocks signing; the name may appear (internal record).
+        let t = store.template(&note.template_key).unwrap();
+        store.save_section(&note.id, "verlauf", "").unwrap();
+        let blocking = |r: &Report| crate::pii::checklist(r, &t, &p).into_iter().filter(|c| !c.ok && c.severity == "block").count();
+        assert_eq!(blocking(&store.report(&note.id).unwrap()), 1);
+        store.save_section(&note.id, "verlauf", "<p>Frau Beispiel berichtet vom Wochenende.</p>").unwrap();
+        assert_eq!(blocking(&store.report(&note.id).unwrap()), 0);
+        store.sign_report(&note.id, "M. Muster").unwrap();
+        assert_eq!(store.session(&s.id).unwrap().note_status, Some(ReportStatus::Signed));
+        assert!(store.save_section(&note.id, "befund", "<p>x</p>").is_err());
+
+        let events = audit::list(store.conn(), 50).unwrap();
+        assert!(events.iter().all(|e| !e.meta_json.contains("Konflikt")), "no note text in the audit log");
+        assert_eq!(audit::verify(store.conn()).unwrap(), None);
+        store.erase_patient(&p.id).unwrap();
+        assert!(store.report(&note.id).is_err(), "erasure removes the note");
     }
 
     #[test]

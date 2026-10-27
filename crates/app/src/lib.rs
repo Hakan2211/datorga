@@ -638,6 +638,12 @@ fn session_create(state: State<'_, AppState>, input: SessionInput) -> CmdResult<
     state.with(|s| s.create_session(input))
 }
 
+/// Creates the session's Sitzungsnotiz (or returns the existing one).
+#[tauri::command]
+fn session_note_create(state: State<'_, AppState>, session_id: String) -> CmdResult<Report> {
+    state.with(|s| s.create_session_note(&session_id))
+}
+
 #[tauri::command]
 fn templates_list(state: State<'_, AppState>) -> CmdResult<Vec<Template>> {
     state.with(|s| s.list_templates())
@@ -653,6 +659,9 @@ struct ReportView {
     patient: Patient,
     episode: Option<Episode>,
     application: Option<Application>,
+    /// Sitzungsnotiz only: its session and the confirmed transcript segments to pick from.
+    session: Option<Session>,
+    segments: Vec<SourceSegment>,
 }
 
 fn report_view(s: &Store, id: &str) -> thera_core::Result<ReportView> {
@@ -663,11 +672,20 @@ fn report_view(s: &Store, id: &str) -> thera_core::Result<ReportView> {
         (Some(ep), Some(app_id)) => s.list_applications(&ep.id)?.into_iter().find(|a| &a.id == app_id),
         _ => None,
     };
+    let session = report.session_id.as_deref().map(|id| s.session(id)).transpose()?;
+    let segments = match &session {
+        Some(sess) => s.source_segments(&sess.id)?,
+        None => vec![],
+    };
     let mut template = s.template(&report.template_key)?;
-    if let (Some(ep), Some(app)) = (&episode, &application) {
-        template = template.resolve(&Context { method: ep.method, age_group: ep.age_group, kind: app.kind });
+    if let Some(ep) = &episode {
+        // A Bericht resolves for its application kind; a Sitzungsnotiz has none.
+        let kind = application.as_ref().map(|a| a.kind);
+        if kind.is_some() || session.is_some() {
+            template = template.resolve(&Context { method: ep.method, age_group: ep.age_group, kind });
+        }
     }
-    Ok(ReportView { report, template, patient, episode, application })
+    Ok(ReportView { report, template, patient, episode, application, session, segments })
 }
 
 #[tauri::command]
@@ -718,7 +736,15 @@ fn report_export(state: State<'_, AppState>, id: String, format: String, path: S
     state.with(|s| {
         let v = report_view(s, &id)?;
         let practice = s.setting("practice_header")?.and_then(|v| v.as_str().map(str::to_string));
-        let doc = render::build_doc(&v.report, &v.template, &v.patient, v.episode.as_ref(), v.application.as_ref(), practice);
+        let doc = render::build_doc(
+            &v.report,
+            &v.template,
+            &v.patient,
+            v.episode.as_ref(),
+            v.application.as_ref(),
+            v.session.as_ref(),
+            practice,
+        );
         let bytes = match format.as_str() {
             "pdf" => render::pdf(&doc)?,
             "docx" => render::docx(&doc)?,
@@ -808,6 +834,7 @@ pub fn run() {
             application_create,
             sessions_list,
             session_create,
+            session_note_create,
             templates_list,
             reports_list,
             report_get,

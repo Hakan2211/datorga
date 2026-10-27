@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { estimatePages, parseDiagnoses, plainText, sectionText } from './report'
+import { appendParagraph, estimatePages, parseDiagnoses, plainText, sectionText } from './report'
 
 describe('report helpers', () => {
   it('strips TipTap html', () => {
@@ -14,5 +14,11 @@ describe('report helpers', () => {
 
   it('estimates pages like the core checklist', () => {
     expect(estimatePages(['x'.repeat(6600)])).toBe(2)
+  })
+
+  it('appends transcript text as an escaped paragraph', () => {
+    expect(appendParagraph('', ' Konflikt mit <Chef> & Team ')).toBe('<p>Konflikt mit &lt;Chef&gt; &amp; Team</p>')
+    expect(appendParagraph('<p>a</p>', 'b')).toBe('<p>a</p><p>b</p>')
+    expect(appendParagraph('<p>a</p>', '  ')).toBe('<p>a</p>')
   })
 })

@@ -34,3 +34,9 @@ export function sectionText(field: FieldKind, body: string): string {
 export function estimatePages(texts: string[]): number {
   return texts.reduce((n, t) => n + [...t].length, 0) / CHARS_PER_PAGE
 }
+
+/** Appends plain text as a new paragraph to a TipTap section body. */
+export function appendParagraph(html: string, text: string): string {
+  const escaped = text.trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return escaped ? `${html}<p>${escaped}</p>` : html
+}

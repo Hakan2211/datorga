@@ -3,4 +3,8 @@ import type { AgeGroup } from "./AgeGroup";
 import type { ApplicationKind } from "./ApplicationKind";
 import type { Method } from "./Method";
 
-export type Context = { method: Method, age_group: AgeGroup, kind: ApplicationKind, };
+export type Context = { method: Method, age_group: AgeGroup, 
+/**
+ * `None` outside an application (Sitzungsnotiz): kind-restricted entries are dropped.
+ */
+kind: ApplicationKind | null, };

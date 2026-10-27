@@ -7,7 +7,7 @@ use typst::foundations::{Dict, IntoValue};
 use typst_as_lib::typst_kit_options::TypstKitFontOptions;
 use typst_as_lib::TypstEngine;
 
-use crate::domain::{Application, ApplicationKind, Diagnosis, Episode, Patient, Report};
+use crate::domain::{Application, ApplicationKind, Diagnosis, Episode, Patient, Report, Session};
 use crate::pii::DiagnosesBody;
 use crate::templates::{FieldKind, Template};
 use crate::{Error, Result};
@@ -44,13 +44,17 @@ pub fn build_doc(
     patient: &Patient,
     episode: Option<&Episode>,
     application: Option<&Application>,
+    session: Option<&Session>,
     practice: Option<String>,
 ) -> RenderDoc {
+    let body_of = |key: &str| report.sections.iter().find(|s| s.key == key).map(|s| s.body.as_str()).unwrap_or("");
     let sections = template
         .sections
         .iter()
+        // Optional sections left empty are omitted (Sitzungsnotiz); PTV 3 sections always print.
+        .filter(|def| def.required || !crate::pii::section_text(def.field, body_of(&def.key)).is_empty())
         .map(|def| {
-            let body = report.sections.iter().find(|s| s.key == def.key).map(|s| s.body.as_str()).unwrap_or("");
+            let body = body_of(&def.key);
             let (diagnoses, html) = match def.field {
                 FieldKind::Prose => (vec![], body.to_string()),
                 FieldKind::Diagnoses => {
@@ -62,16 +66,22 @@ pub fn build_doc(
         })
         .collect();
 
-    let subtitle = match application.map(|a| (a.kind, a.seq)) {
-        Some((ApplicationKind::Erstantrag, _)) => "Bericht zum Erstantrag".to_string(),
-        Some((ApplicationKind::Umwandlung, _)) => "Bericht zum Umwandlungsantrag".to_string(),
-        Some((ApplicationKind::Fortfuehrung, n)) => format!("Bericht Nr. {n} zum Fortführungsantrag"),
-        None => template.title.clone(),
+    let (title, subtitle) = if let Some(s) = session {
+        let when = s.scheduled_at.as_deref().or(s.started_at.as_deref()).unwrap_or(&report.created_at);
+        (template.title.clone(), format!("Sitzung vom {}", german_date(when)))
+    } else {
+        let subtitle = match application.map(|a| (a.kind, a.seq)) {
+            Some((ApplicationKind::Erstantrag, _)) => "Bericht zum Erstantrag".to_string(),
+            Some((ApplicationKind::Umwandlung, _)) => "Bericht zum Umwandlungsantrag".to_string(),
+            Some((ApplicationKind::Fortfuehrung, n)) => format!("Bericht Nr. {n} zum Fortführungsantrag"),
+            None => template.title.clone(),
+        };
+        ("Bericht an die Gutachterin / den Gutachter".to_string(), subtitle)
     };
     let date_src = report.signed_at.as_deref().unwrap_or(&report.updated_at);
 
     RenderDoc {
-        title: "Bericht an die Gutachterin / den Gutachter".into(),
+        title,
         subtitle,
         chiffre: patient.chiffre.clone().unwrap_or_else(|| "—".into()),
         method: episode.map(|e| e.method.as_str().to_string()),
@@ -229,9 +239,9 @@ mod tests {
         let t = store.template(&report.template_key).unwrap().resolve(&Context {
             method: ep.method,
             age_group: ep.age_group,
-            kind: app.kind,
+            kind: Some(app.kind),
         });
-        (build_doc(&report, &t, &p, Some(&ep), Some(&app), Some("Praxis Muster · Musterstr. 1".into())), report)
+        (build_doc(&report, &t, &p, Some(&ep), Some(&app), None, Some("Praxis Muster · Musterstr. 1".into())), report)
     }
 
     #[test]
@@ -244,6 +254,26 @@ mod tests {
         if let Ok(dir) = std::env::var("THERA_RENDER_OUT") {
             std::fs::write(format!("{dir}/bericht-test.pdf"), &pdf).unwrap();
         }
+    }
+
+    #[test]
+    fn session_note_has_own_title_and_skips_empty_optional_sections() {
+        let store = Store::open_in_memory().unwrap();
+        let p = store
+            .create_patient(PatientInput { first_name: "Anna".into(), last_name: "Beispiel".into(), ..Default::default() })
+            .unwrap();
+        let s = store
+            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: None, scheduled_at: Some("2026-10-27T09:00:00Z".into()), modality: None })
+            .unwrap();
+        let note = store.create_session_note(&s.id).unwrap();
+        store.save_section(&note.id, "risiko", "<p>Keine Suizidalität</p>").unwrap();
+        let note = store.report(&note.id).unwrap();
+        let t = store.template(&note.template_key).unwrap();
+        let doc = build_doc(&note, &t, &p, None, None, Some(&store.session(&s.id).unwrap()), None);
+        assert_eq!((doc.title.as_str(), doc.subtitle.as_str()), ("Sitzungsnotiz", "Sitzung vom 27.10.2026"));
+        let headings: Vec<_> = doc.sections.iter().map(|s| s.heading.as_str()).collect();
+        assert_eq!(headings, ["Inhalt und Verlauf der Sitzung", "Risikoeinschätzung"]);
+        assert!(pdf(&doc).unwrap().starts_with(b"%PDF"));
     }
 
     #[test]

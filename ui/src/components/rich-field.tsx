@@ -36,6 +36,13 @@ export function RichField({
     editor?.setEditable(!readOnly)
   }, [editor, readOnly])
 
+  // Text inserted from outside (e.g. from a transcript). Own edits already match `value`.
+  useEffect(() => {
+    if (editor && value !== (editor.isEmpty ? '' : editor.getHTML())) {
+      editor.commands.setContent(value, { emitUpdate: false })
+    }
+  }, [editor, value])
+
   const state = useEditorState({
     editor,
     selector: ({ editor }) => ({

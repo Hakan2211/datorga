@@ -21,6 +21,7 @@ import type { Session } from '@/bindings/Session'
 import type { SessionInput } from '@/bindings/SessionInput'
 import type { SessionSource } from '@/bindings/SessionSource'
 import type { SourceKind } from '@/bindings/SourceKind'
+import type { SourceSegment } from '@/bindings/SourceSegment'
 import type { Template } from '@/bindings/Template'
 import type { Transcript } from '@/bindings/Transcript'
 
@@ -36,6 +37,9 @@ export type ReportView = {
   patient: Patient
   episode: Episode | null
   application: Application | null
+  /** Sitzungsnotiz only: its session and the confirmed transcript segments to pick from. */
+  session: Session | null
+  segments: SourceSegment[]
 }
 
 export type SourceView = SessionSource & { job: Job | null; transcript: Transcript | null }
@@ -94,6 +98,7 @@ export const api = {
   sessions: (patientId?: string) => invoke<Session[]>('sessions_list', { patientId: patientId ?? null }),
   createSession: (input: SessionInput) => invoke<Session>('session_create', { input }),
   session: (id: string) => invoke<SessionView>('session_get', { id }),
+  createSessionNote: (sessionId: string) => invoke<Report>('session_note_create', { sessionId }),
 
   audioDevices: () => invoke<InputDevice[]>('audio_devices'),
   startRecording: (sessionId: string, kind: SourceKind, deviceId: string | null) =>

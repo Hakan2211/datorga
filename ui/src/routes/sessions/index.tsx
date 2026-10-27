@@ -1,9 +1,8 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { Mic } from 'lucide-react'
 import { Page, PageHeader } from '@/components/app-shell'
-import { formatDate } from '@/components/bits'
+import { StatusBadge, formatDate } from '@/components/bits'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -24,9 +23,6 @@ function Sessions() {
     <>
       <PageHeader title={t('sessions.title')} />
       <Page>
-        <p className="flex items-center gap-2 rounded-md bg-accent px-4 py-3 text-sm text-accent-foreground">
-          <Mic className="size-4" /> {t('sessions.comingSoon')}
-        </p>
         <Card>
           <CardContent className="pt-2">
             {sessions.data?.length === 0 ? (
@@ -38,6 +34,7 @@ function Sessions() {
                     <TableHead>{t('sessions.date')}</TableHead>
                     <TableHead>{t('patients.title')}</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>{t('sessions.note')}</TableHead>
                     <TableHead />
                   </TableRow>
                 </TableHeader>
@@ -51,6 +48,13 @@ function Sessions() {
                         </Link>
                       </TableCell>
                       <TableCell className="text-muted-foreground">{t(`sessions.status.${s.status}`, s.status)}</TableCell>
+                      <TableCell>
+                        {s.note_status ? (
+                          <StatusBadge status={s.note_status} />
+                        ) : (
+                          <span className="text-muted-foreground">{t('sessions.noNote')}</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-right">
                         <Button asChild size="sm" variant="ghost">
                           <Link to="/sessions/$sessionId" params={{ sessionId: s.id }}>

@@ -3,4 +3,12 @@ import type { FieldKind } from "./FieldKind";
 import type { Hint } from "./Hint";
 import type { When } from "./When";
 
-export type SectionDef = { key: string, number: string | null, heading: string, field: FieldKind, ai_allowed: boolean, when: When, hints: Array<Hint>, };
+export type SectionDef = { key: string, number: string | null, heading: string, field: FieldKind, ai_allowed: boolean, 
+/**
+ * An empty required section blocks signing.
+ */
+required: boolean, 
+/**
+ * Receives the therapist's confirmed dictation when the document is created.
+ */
+dictation: boolean, when: When, hints: Array<Hint>, };

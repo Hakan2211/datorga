@@ -119,13 +119,18 @@ pub fn checklist(report: &Report, template: &Template, patient: &Patient) -> Vec
         total += text.chars().count();
         let label = def.number.clone().unwrap_or_else(|| def.key.clone());
 
-        items.push(CheckItem {
-            key: format!("filled:{}", def.key),
-            ok: !text.is_empty(),
-            severity: "block".into(),
-            message: format!("Abschnitt {label} ausgefüllt"),
-            section_key: Some(def.key.clone()),
-        });
+        if def.required {
+            items.push(CheckItem {
+                key: format!("filled:{}", def.key),
+                ok: !text.is_empty(),
+                severity: "block".into(),
+                message: match &def.number {
+                    Some(n) => format!("Abschnitt {n} ausgefüllt"),
+                    None => format!("{} ausgefüllt", def.heading),
+                },
+                section_key: Some(def.key.clone()),
+            });
+        }
         if template.rules.pseudonymized {
             let hits = find_identifiers(&text, &ids);
             items.push(CheckItem {

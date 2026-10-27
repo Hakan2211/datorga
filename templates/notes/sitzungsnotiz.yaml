@@ -1,0 +1,63 @@
+# Sitzungsnotiz: Verlaufsdokumentation einer Sitzung (§ 630f BGB, § 9 Berufsordnung).
+# One per session. Internal record (patient file), not sent to the Gutachter, so not pseudonymized.
+# Its sections later feed the per-session fact extraction for the Bericht (PLAN-AMENDMENTS §4).
+key: sitzungsnotiz
+version: "2026.1"
+title: Sitzungsnotiz
+source: Verlaufsdokumentation (§ 630f BGB)
+rules:
+  keyword_style_allowed: true
+  signature_required: true
+intro: >-
+  Zeitnah nach der Sitzung dokumentieren. Stichworte genügen. Pflicht ist nur der Verlauf, die übrigen
+  Abschnitte bei Relevanz. Nach der Unterschrift ist die Notiz schreibgeschützt.
+sections:
+  - key: verlauf
+    heading: Inhalt und Verlauf der Sitzung
+    field: prose
+    dictation: true
+    hints:
+      - text: Anliegen und Themen der Sitzung, wesentliche Schilderungen der Patientin oder des Patienten
+      - text: Veränderungen seit der letzten Sitzung (Symptomatik, Lebenssituation, Ereignisse)
+      - text: Angaben von Eltern und Bezugspersonen, falls einbezogen
+        when: { age: [kjp] }
+
+  - key: befund
+    heading: Aktueller psychischer Befund
+    field: prose
+    required: false
+    hints:
+      - text: Stimmung, Affekt, Antrieb, Kontakt- und Beziehungsverhalten, Auffälligkeiten, nur Veränderungen
+      - text: Ggf. Ergebnisse von Fragebögen oder Verlaufsmessungen
+
+  - key: interventionen
+    heading: Interventionen
+    field: prose
+    required: false
+    hints:
+      - text: >-
+          Eingesetzte Methoden (z. B. Verhaltensanalyse, Psychoedukation, kognitive Umstrukturierung,
+          Exposition, Kompetenztraining), Besprechung der Hausaufgaben
+        when: { method: [VT] }
+      - text: Klärungen, Konfrontationen und Deutungen, Arbeit am Fokus bzw. am zentralen Konflikt
+        when: { method: [TP, AP] }
+      - text: Beziehungsgeschehen (Übertragung, Gegenübertragung), Abwehr und Widerstand
+        when: { method: [TP, AP] }
+
+  - key: risiko
+    heading: Risikoeinschätzung
+    field: prose
+    required: false
+    hints:
+      - text: Suizidalität, Selbst- oder Fremdgefährdung, wenn angesprochen oder auffällig, mit Einschätzung und vereinbarten Maßnahmen
+      - text: Hinweise auf Kindeswohlgefährdung
+        when: { age: [kjp] }
+
+  - key: vereinbarungen
+    heading: Vereinbarungen und Planung
+    field: prose
+    required: false
+    hints:
+      - text: Hausaufgaben und Übungen bis zur nächsten Sitzung
+        when: { method: [VT] }
+      - text: Absprachen, offene Punkte, Themen für die nächste Sitzung

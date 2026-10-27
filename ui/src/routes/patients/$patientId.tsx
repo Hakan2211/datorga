@@ -10,7 +10,7 @@ import type { Episode } from '@/bindings/Episode'
 import type { Method } from '@/bindings/Method'
 import type { Setting } from '@/bindings/Setting'
 import { Page, PageHeader } from '@/components/app-shell'
-import { formatDate } from '@/components/bits'
+import { StatusBadge, formatDate } from '@/components/bits'
 import { ConsentCard } from '@/components/consent-card'
 import { PatientFormDialog } from '@/components/patient-form'
 import {
@@ -287,6 +287,11 @@ function SessionsCard({ patientId, episodeId }: { patientId: string; episodeId?:
               <span>
                 {formatDate(s.scheduled_at ?? s.started_at, true)}
                 <span className="ml-3 text-muted-foreground">{t(`sessions.status.${s.status}`, s.status)}</span>
+                {s.note_status && (
+                  <span className="ml-3">
+                    {t('sessions.note')}: <StatusBadge status={s.note_status} />
+                  </span>
+                )}
               </span>
               <Button asChild size="sm" variant="ghost">
                 <Link to="/sessions/$sessionId" params={{ sessionId: s.id }}>

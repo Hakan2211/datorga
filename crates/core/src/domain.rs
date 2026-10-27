@@ -152,6 +152,9 @@ pub struct Session {
     pub duration_s: Option<i64>,
     pub modality: Option<String>,
     pub status: String,
+    /// The session's Sitzungsnotiz, if one was started.
+    pub note_id: Option<String>,
+    pub note_status: Option<ReportStatus>,
 }
 
 /// One capture within a session, with its audio metadata.
@@ -246,6 +249,8 @@ pub struct Report {
     pub patient_id: String,
     pub episode_id: Option<String>,
     pub application_id: Option<String>,
+    /// Set for a Sitzungsnotiz.
+    pub session_id: Option<String>,
     pub template_key: String,
     pub template_version: String,
     pub kind: String,

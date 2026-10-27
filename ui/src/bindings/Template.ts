@@ -3,4 +3,8 @@ import type { ApplicationKind } from "./ApplicationKind";
 import type { Rules } from "./Rules";
 import type { SectionDef } from "./SectionDef";
 
-export type Template = { key: string, version: string, title: string, source: string | null, report_kinds: Array<ApplicationKind>, rules: Rules, intro: string, sections: Array<SectionDef>, };
+export type Template = { key: string, version: string, title: string, source: string | null, 
+/**
+ * Application kinds a Bericht template serves; empty for the Sitzungsnotiz.
+ */
+report_kinds: Array<ApplicationKind>, rules: Rules, intro: string, sections: Array<SectionDef>, };

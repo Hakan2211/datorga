@@ -4,9 +4,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { save } from '@tauri-apps/plugin-dialog'
 import { toast } from 'sonner'
-import { AlertTriangle, CheckCircle2, ChevronDown, CircleSlash, Download, FileSignature, Plus, Trash2, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronDown, CircleSlash, CornerDownLeft, Download, FileSignature, Plus, Trash2, XCircle } from 'lucide-react'
 import type { Diagnosis } from '@/bindings/Diagnosis'
 import type { SectionDef } from '@/bindings/SectionDef'
+import type { SourceSegment } from '@/bindings/SourceSegment'
 import { Page, PageHeader } from '@/components/app-shell'
 import { StatusBadge, formatDate } from '@/components/bits'
 import { RichField } from '@/components/rich-field'
@@ -17,7 +18,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { api, errorMessage, q, type ReportView } from '@/lib/api'
-import { estimatePages, parseDiagnoses, sectionText } from '@/lib/report'
+import { appendParagraph, estimatePages, parseDiagnoses, sectionText } from '@/lib/report'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/reports/$reportId')({ component: ReportEditorPage })
@@ -35,8 +36,11 @@ const SAVE_DELAY_MS = 700
 function ReportEditor({ view }: { view: ReportView }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
-  const { report, template, patient, episode, application } = view
+  const { report, template, patient, episode, application, session } = view
   const readOnly = report.status === 'signed' || report.status === 'exported'
+  const isNote = report.kind === 'sitzungsnotiz'
+  // Target for text picked from the transcript: the section last focused.
+  const [activeKey, setActiveKey] = useState(() => template.sections[0]?.key ?? '')
 
   const [bodies, setBodies] = useState<Record<string, string>>(() =>
     Object.fromEntries(report.sections.map((s) => [s.key, s.body])),
@@ -103,9 +107,11 @@ function ReportEditor({ view }: { view: ReportView }) {
     [bodies, template.sections],
   )
 
-  const subtitle = application
-    ? `${t(`enums.kind.${application.kind}`)}${application.kind === 'fortfuehrung' ? ` Nr. ${application.seq}` : ''}`
-    : template.title
+  const subtitle = isNote
+    ? `${template.title} · ${formatDate(session?.scheduled_at ?? session?.started_at ?? report.created_at)}`
+    : application
+      ? `${t(`enums.kind.${application.kind}`)}${application.kind === 'fortfuehrung' ? ` Nr. ${application.seq}` : ''}`
+      : template.title
 
   return (
     <>
@@ -125,6 +131,11 @@ function ReportEditor({ view }: { view: ReportView }) {
               {patient.chiffre ?? t('patients.noChiffre')}
             </Badge>
             {episode && <span>· {t(`enums.method.${episode.method}`)}, {t(`enums.age_group.${episode.age_group}`)}</span>}
+            {session && (
+              <Link to="/sessions/$sessionId" params={{ sessionId: session.id }} className="hover:underline">
+                · {t('note.session')} {formatDate(session.scheduled_at ?? session.started_at, true)}
+              </Link>
+            )}
             <span className="text-xs">· {template.source}</span>
           </span>
         }
@@ -137,7 +148,7 @@ function ReportEditor({ view }: { view: ReportView }) {
           <div className="space-y-6">
             {readOnly && (
               <p className="rounded-md bg-success/10 px-4 py-2 text-sm text-success">
-                {t('report.readOnly')} {t('report.signedBy')} {report.signed_by}, {formatDate(report.signed_at, true)}
+                {t(isNote ? 'note.readOnly' : 'report.readOnly')} {t('report.signedBy')} {report.signed_by}, {formatDate(report.signed_at, true)}
               </p>
             )}
             <p className="text-sm text-muted-foreground">{template.intro}</p>
@@ -147,6 +158,8 @@ function ReportEditor({ view }: { view: ReportView }) {
                 def={s}
                 body={bodies[s.key] ?? ''}
                 readOnly={readOnly}
+                active={isNote && !readOnly && s.key === activeKey}
+                onFocus={() => setActiveKey(s.key)}
                 onChange={(b) => update(s.key, b)}
               />
             ))}
@@ -155,6 +168,15 @@ function ReportEditor({ view }: { view: ReportView }) {
             <div className="sticky top-6 space-y-4">
               <LengthMeter pages={pages} target={template.rules.target_pages} />
               <ChecklistCard reportId={report.id} readOnly={readOnly} busy={pending > 0} />
+              {isNote && !readOnly && (
+                <TranscriptPicker
+                  segments={view.segments}
+                  sections={template.sections.filter((s) => s.field === 'prose')}
+                  target={activeKey}
+                  onTarget={setActiveKey}
+                  onInsert={(key, text) => update(key, appendParagraph(bodies[key] ?? '', text))}
+                />
+              )}
               <ExportCard view={view} />
             </div>
           </aside>
@@ -168,17 +190,25 @@ function SectionEditor({
   def,
   body,
   readOnly,
+  active = false,
+  onFocus,
   onChange,
 }: {
   def: SectionDef
   body: string
   readOnly: boolean
+  active?: boolean
+  onFocus?: () => void
   onChange: (body: string) => void
 }) {
   const { t } = useTranslation()
   const [showHints, setShowHints] = useState(true)
   return (
-    <section id={`section-${def.key}`} className="scroll-mt-6 space-y-2">
+    <section
+      id={`section-${def.key}`}
+      onFocusCapture={onFocus}
+      className={cn('scroll-mt-6 space-y-2 border-l-2 border-transparent pl-3 -ml-3.5', active && 'border-primary/60')}
+    >
       <h2 className="font-serif text-[17px] leading-snug font-semibold">
         {def.number && <span className="mr-1.5 text-primary">{def.number}.</span>}
         {def.heading}
@@ -374,7 +404,11 @@ function ExportCard({ view }: { view: ReportView }) {
   const qc = useQueryClient()
   const exportAs = useMutation({
     mutationFn: async (format: 'pdf' | 'docx') => {
-      const base = `Bericht-${view.patient.chiffre ?? 'ohne-Chiffre'}-${view.application?.kind ?? 'bericht'}`
+      const chiffre = view.patient.chiffre ?? 'ohne-Chiffre'
+      const day = (view.session?.scheduled_at ?? view.session?.started_at ?? view.report.created_at).slice(0, 10)
+      const base = view.session
+        ? `Sitzungsnotiz-${chiffre}-${day}`
+        : `Bericht-${chiffre}-${view.application?.kind ?? 'bericht'}`
       const path = await save({
         defaultPath: `${base}.${format}`,
         filters: [{ name: format.toUpperCase(), extensions: [format] }],
@@ -401,6 +435,79 @@ function ExportCard({ view }: { view: ReportView }) {
         <Button variant="outline" onClick={() => exportAs.mutate('docx')} disabled={exportAs.isPending}>
           <Download /> {t('report.exportDocx')}
         </Button>
+      </CardContent>
+    </Card>
+  )
+}
+
+/** Confirmed transcript of the note's session; each segment can be appended to a section. */
+function TranscriptPicker({
+  segments,
+  sections,
+  target,
+  onTarget,
+  onInsert,
+}: {
+  segments: SourceSegment[]
+  sections: SectionDef[]
+  target: string
+  onTarget: (key: string) => void
+  onInsert: (key: string, text: string) => void
+}) {
+  const { t } = useTranslation()
+  const [used, setUsed] = useState<ReadonlySet<number>>(new Set())
+  const key = sections.some((s) => s.key === target) ? target : (sections[0]?.key ?? '')
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm">{t('note.transcript')}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {segments.length === 0 ? (
+          <p className="text-[13px] text-muted-foreground">{t('note.transcriptEmpty')}</p>
+        ) : (
+          <>
+            <div className="space-y-1.5">
+              <Label className="text-xs">{t('note.insertInto')}</Label>
+              <Select value={key} onValueChange={onTarget}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {sections.map((s) => (
+                    <SelectItem key={s.key} value={s.key}>
+                      {s.heading}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <ul className="max-h-[50vh] space-y-1 overflow-y-auto text-[13px]">
+              {segments.map((seg, i) => (
+                <li key={`${seg.source_id}:${seg.start_ms}`} className="group flex items-start gap-2 rounded px-1.5 py-1 hover:bg-muted/60">
+                  <span className="flex-1">
+                    <span className="mr-1.5 text-[11px] text-muted-foreground">{t(`note.role.${seg.role}`)}</span>
+                    <span className={cn(used.has(i) && 'text-muted-foreground')}>{seg.text}</span>
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-6 shrink-0"
+                    title={t('note.insert')}
+                    aria-label={t('note.insert')}
+                    onClick={() => {
+                      onInsert(key, seg.text)
+                      setUsed((u) => new Set(u).add(i))
+                    }}
+                  >
+                    <CornerDownLeft className="size-3.5" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
       </CardContent>
     </Card>
   )

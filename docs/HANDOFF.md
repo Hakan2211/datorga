@@ -1,4 +1,4 @@
-# thera: session handoff (2026-10-27, after slice 3)
+# thera: session handoff (2026-10-27, after slice 4)
 
 Start a new session with: *"Read docs/HANDOFF.md and continue with the next step."*
 
@@ -50,6 +50,33 @@ Start a new session with: *"Read docs/HANDOFF.md and continue with the next step
 - Tests: 80 core unit, 4 sidecar tests against a fake `whisper-cli` (`thera-fake-whisper` bin in core: args, progress, cancel, silence, cleanup), ignored `real_whisper` test. E2E in the real app: hash-checked import (+ wrong file rejected), real HF download (small-q5_1, 18 s), Scarlett dictation of TTS German → 3 correct segments, edit, confirm → audio dir gone, audit text-free and chain intact, hard kill mid-job → WAV wiped on relaunch, job resumed (attempt 2) and finished.
 - Speed (dev box i7-12700K, CPU, 8 threads, turbo-q5_0): 15.7 s audio in 9.2 s incl. model load.
 
+**Built (slice 4, 2026-10-27): Sitzungsnotiz**
+- Template `templates/notes/sitzungsnotiz.yaml` (key `sitzungsnotiz`, Verlaufsdokumentation § 630f BGB). It has five sections:
+  - Inhalt und Verlauf (required)
+  - Aktueller psychischer Befund
+  - Interventionen
+  - Risikoeinschätzung
+  - Vereinbarungen und Planung
+
+  Hints are filtered by method and age (VT methods/Hausaufgaben vs. TP/AP Übertragung/Abwehr, KJP Bezugspersonen/Kindeswohl).
+- Template schema: `report_kinds` defaults to empty. `SectionDef.required` (default true; only required sections block signing) and `SectionDef.dictation` (receives confirmed dictation on creation). `Context.kind` is now `Option` (`None` = note, kind-restricted entries dropped).
+- Migration V4: unique index, one `report` of kind `sitzungsnotiz` per `session_id`. `Report.session_id`, `Session.note_id`/`note_status` (LEFT JOIN).
+- Store: `create_session_note(session_id)` is idempotent. It pre-fills `dictation` sections from **confirmed dictation** segments only (escaped `<p>` per segment). Session recordings are not copied in, since they contain the patient's words; the therapist picks from them. Audit `report.create` holds kind/session/prefilled, no text. `list_reports` returns Berichte only.
+- Export: `build_doc(..., session, ...)` titles a note "Sitzungsnotiz / Sitzung vom …" and omits empty optional sections.
+- App: `session_note_create`. `report_get` returns `session` + `segments` (confirmed transcript) for notes.
+- UI:
+  - Session page: note card (anlegen/öffnen + status, hint if transcripts are unconfirmed).
+  - Notes open in the existing editor (`/reports/$id`), which shows a back-link to the session and highlights the active section. The sidebar has an "Abschrift" picker: choose a target section (defaults to the last focused one), then ↵ appends the segment.
+  - `RichField` now syncs outside value changes.
+  - Note status badge in the sessions list and on the patient page.
+- Tests: 83 core (+ note lifecycle, hint filter, note render), Vitest 4. E2E in the real app covered:
+  - real TTS dictation via Scarlett → transcribe → confirm → create note → Verlauf pre-filled
+  - insert segment into Interventionen, typing still works, persisted after reload
+  - sign, then read-only with the picker hidden
+  - PDF/DOCX export
+  - fresh TP note: TP hints, empty Verlauf blocks signing, idempotent create
+  - note not in Berichte queue, audit chain intact
+
 ## Current limitations
 
 - ~~Database is unencrypted~~ Encrypted SQLCipher build is live (2026-10-27): Strawberry Perl, LLVM, CMake installed, `LIBCLANG_PATH` set. Old plain DB backed up to `%APPDATA%\de.datorga.thera.plain-backup-20261027` (delete once not needed). Still: fake patients only until the recovery-kit PDF exists.
@@ -61,6 +88,7 @@ Start a new session with: *"Read docs/HANDOFF.md and continue with the next step
 - No printable consent form yet (the therapist notes the signed paper form in the consent note).
 - Capture lacks a disk-space guard and keep-awake (laptop sleep during long sessions).
 - Vorlagen upload is a placeholder card.
+- Sitzungsnotiz: no amendment ("Nachtrag") after signing yet. § 630f wants later corrections to be visible with the original kept, so a signed note is simply read-only for now. The sidebar highlights "Berichte" while a note is open (shared `/reports` route). Segment picker inserts whole segments (no partial selection). No AI drafting (Phase 2: fact extraction from `source_segments`).
 
 ## Next steps (in order)
 
@@ -73,17 +101,22 @@ Start a new session with: *"Read docs/HANDOFF.md and continue with the next step
    - ~~transcript viewer~~ **done** (edit per segment, confirm)
    - ~~audio auto-delete after the transcript is confirmed~~ **done**
    - open: disk-space guard + keep-awake for capture; GPU decision; optional audio playback in the viewer; diarization for session recordings (PLAN §4.3)
-3. **NEXT → Sitzungsnotiz** form per session (can prefill from `Store::source_segments`).
-4. **Vorlagen module**:
-   - upload old Berichte/forms (PDF/DOCX → text)
-   - redaction review, stored as style exemplars
+3. ~~**Sitzungsnotiz** form per session~~ **done** (slice 4).
+4. **NEXT → Sitzungsnotiz follow-ups** (gaps from slice 4):
+   - **Nachtrag** after signing (§ 630f BGB): signed original stays visible and unchanged, addenda are appended with date/time and their own signature, audited.
+   - Sidebar: highlight "Sitzungen" (not "Berichte") while a note is open, e.g. give notes their own route or set the active nav item from the document kind.
+   - Transcript panel: insert a **selected part** of a segment, not only whole segments (Whisper sometimes returns a long dictation as one segment).
 5. **Recovery-kit PDF** (printable emergency key).
-6. **Phase 2:** LLM adapter (OpenAI-compatible, EU default, US-intermediary warning), per-session fact extraction with citations, Bericht drafting from facts + style exemplars, eval set.
+6. **Vorlagen module: deferred** until the therapist hands over material. She will supply old **Sitzungen and Berichte** later, and she must be able to **upload them herself in the app** (no developer-side import):
+   - upload old Berichte, old session notes and her forms (PDF/DOCX → text)
+   - redaction review (pseudonymizer `detect()` spans), stored as style exemplars
+   - the "Vorlagen" placeholder card stays until then
+7. **Phase 2:** LLM adapter (OpenAI-compatible, EU default, US-intermediary warning), per-session fact extraction with citations, Bericht drafting from facts + style exemplars, eval set.
 
 ## Open questions for the therapist
 
 - Exact **Chiffre** format (app suggests surname initial + DDMMYY).
-- 5–10 anonymized old Berichte + her style preferences (Phase 0 eval + first style exemplars).
+- 5–10 anonymized old Berichte and old Sitzungen + her style preferences (she brings them later and uploads them herself) (Phase 0 eval + first style exemplars).
 - Laptop specs (CPU, RAM, GPU) for local models: decides turbo-q5_0 vs. small and CPU vs. GPU build. Which report kinds matter most.
 
 ## Handy commands

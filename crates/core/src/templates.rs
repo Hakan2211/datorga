@@ -10,7 +10,11 @@ use crate::{Error, Result};
 const BUILTIN: &[&str] = &[
     include_str!("../../../templates/ptv3/erst-umwandlung.yaml"),
     include_str!("../../../templates/ptv3/fortfuehrung.yaml"),
+    include_str!("../../../templates/notes/sitzungsnotiz.yaml"),
 ];
+
+/// Template of the per-session note (Verlaufsdokumentation).
+pub const SESSION_NOTE_KEY: &str = "sitzungsnotiz";
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -19,6 +23,8 @@ pub struct Template {
     pub version: String,
     pub title: String,
     pub source: Option<String>,
+    /// Application kinds a Bericht template serves; empty for the Sitzungsnotiz.
+    #[serde(default)]
     pub report_kinds: Vec<ApplicationKind>,
     pub rules: Rules,
     #[serde(default)]
@@ -61,6 +67,12 @@ pub struct SectionDef {
     pub field: FieldKind,
     #[serde(default = "yes")]
     pub ai_allowed: bool,
+    /// An empty required section blocks signing.
+    #[serde(default = "yes")]
+    pub required: bool,
+    /// Receives the therapist's confirmed dictation when the document is created.
+    #[serde(default)]
+    pub dictation: bool,
     #[serde(default)]
     pub when: When,
     #[serde(default)]
@@ -92,7 +104,8 @@ pub struct When {
 pub struct Context {
     pub method: Method,
     pub age_group: AgeGroup,
-    pub kind: ApplicationKind,
+    /// `None` outside an application (Sitzungsnotiz): kind-restricted entries are dropped.
+    pub kind: Option<ApplicationKind>,
 }
 
 impl When {
@@ -100,7 +113,11 @@ impl When {
         fn ok<T: PartialEq>(list: &Option<Vec<T>>, v: &T) -> bool {
             list.as_ref().is_none_or(|l| l.is_empty() || l.contains(v))
         }
-        ok(&self.method, &ctx.method) && ok(&self.age, &ctx.age_group) && ok(&self.kind, &ctx.kind)
+        let kind_ok = match ctx.kind {
+            Some(k) => ok(&self.kind, &k),
+            None => self.kind.as_ref().is_none_or(|l| l.is_empty()),
+        };
+        ok(&self.method, &ctx.method) && ok(&self.age, &ctx.age_group) && kind_ok
     }
 }
 
@@ -170,7 +187,7 @@ mod tests {
 
     #[test]
     fn vt_adult_erstantrag() {
-        let t = erst().resolve(&Context { method: Method::Vt, age_group: AgeGroup::Adult, kind: ApplicationKind::Erstantrag });
+        let t = erst().resolve(&Context { method: Method::Vt, age_group: AgeGroup::Adult, kind: Some(ApplicationKind::Erstantrag) });
         let keys: Vec<_> = t.sections.iter().map(|s| s.number.clone().unwrap()).collect();
         assert_eq!(keys, ["1", "2", "3", "4", "5", "6"]);
         let h4 = hints(&t, "lebensgeschichte_modell");
@@ -182,12 +199,27 @@ mod tests {
 
     #[test]
     fn tp_kjp_umwandlung_has_section_7_and_bezugspersonen() {
-        let t = erst().resolve(&Context { method: Method::Tp, age_group: AgeGroup::Kjp, kind: ApplicationKind::Umwandlung });
+        let t = erst().resolve(&Context { method: Method::Tp, age_group: AgeGroup::Kjp, kind: Some(ApplicationKind::Umwandlung) });
         assert_eq!(t.sections.len(), 7);
         assert!(hints(&t, "lebensgeschichte_modell").iter().any(|h| h.contains("Abwehrmechanismen")));
         assert!(hints(&t, "soziodemographie")[0].contains("Geschwisterzahl"));
         assert!(hints(&t, "diagnose").iter().any(|h| h.contains("neurosenpsychologische")));
         assert!(hints(&t, "behandlungsplan_prognose").iter().any(|h| h.contains("Einbeziehung der Bezugspersonen")));
+    }
+
+    #[test]
+    fn session_note_hints_follow_method_and_age() {
+        let note = builtin().unwrap().into_iter().find(|t| t.key == SESSION_NOTE_KEY).unwrap();
+        let vt = note.resolve(&Context { method: Method::Vt, age_group: AgeGroup::Adult, kind: None });
+        assert_eq!(vt.sections.len(), 5);
+        let required: Vec<_> = vt.sections.iter().filter(|s| s.required).map(|s| s.key.as_str()).collect();
+        assert_eq!(required, ["verlauf"]);
+        assert!(vt.sections.iter().find(|s| s.key == "verlauf").unwrap().dictation);
+        assert!(hints(&vt, "interventionen").iter().any(|h| h.contains("Exposition")));
+        assert!(!hints(&vt, "risiko").iter().any(|h| h.contains("Kindeswohl")));
+        let tp = note.resolve(&Context { method: Method::Tp, age_group: AgeGroup::Kjp, kind: None });
+        assert!(hints(&tp, "interventionen").iter().any(|h| h.contains("Übertragung")));
+        assert!(hints(&tp, "risiko").iter().any(|h| h.contains("Kindeswohl")));
     }
 
     #[test]
