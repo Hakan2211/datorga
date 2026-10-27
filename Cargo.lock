@@ -5588,6 +5588,7 @@ dependencies = [
  "docx-rs",
  "getrandom 0.3.4",
  "hex",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

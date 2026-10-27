@@ -17,7 +17,7 @@ Start a new session with: *"Read docs/HANDOFF.md and continue with the next step
   - PTV 3 templates as YAML, filtered by VT/TP/AP, adult/KJP and application kind
   - PII/Chiffre checklist
   - PDF (typst) + DOCX export
-  - 43 tests
+  - 51 tests + compile-fail doctest
 - `crates/app`: Tauri 2 shell, thin commands over core.
 - `ui/`: TanStack Start (SPA) + shadcn/ui + Tailwind + TipTap, German UI:
   - patients (Chiffre suggestion), treatment cases, applications, sessions list
@@ -39,9 +39,7 @@ Start a new session with: *"Read docs/HANDOFF.md and continue with the next step
    - `cargo test -p thera-core` (runs the "unreadable without key" test)
    - `npm run app:build`
    - rerun `npm run shortcut`
-1. **Pseudonymizer** `core::pseudo`:
-   - token map (names, places, employers, dates) with round-trip restore
-   - `Pseudonymized<T>` type so cloud calls can't receive raw text
+1. ~~**Pseudonymizer** `core::pseudo`~~ **done**: patient record + confirmed dictionary + rules (dates with day, `Frau/Herr X`, `GmbH/AG/e.V.`, `Firma X`, PLZ+Ort, street+number) become `[PERSON_n]`/`[ORT_n]`/`[ARBEITGEBER_n]`/`[DATUM_n]`, exact round-trip restore, stable tokens across texts, fail-closed residual check. `Pseudonymized<T>` has a private constructor (compile-fail doctest). `detect()` returns char-offset spans for the future redaction review. Not wired into the UI yet: the first consumer is the Phase 2 LLM adapter / Vorlagen redaction.
 2. **Consent + dictation**:
    - consent records and `consent_recording` flag gating Record vs. "Zusammenfassung diktieren"
    - cpal recording (crash-safe chunks)

@@ -4,6 +4,7 @@ pub mod audit;
 pub mod crypto;
 pub mod domain;
 pub mod pii;
+pub mod pseudo;
 pub mod render;
 pub mod store;
 pub mod templates;
