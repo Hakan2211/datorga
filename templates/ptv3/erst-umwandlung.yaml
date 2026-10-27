@@ -1,0 +1,125 @@
+# KBV Muster PTV 3 (4.2017): Leitfaden zum Erstellen des Berichts an die Gutachterin oder den Gutachter
+# Bericht zum Erst- oder Umwandlungsantrag.
+key: ptv3-erst-umwandlung
+version: "2017.04"
+title: Bericht an die Gutachterin / den Gutachter (Erst- oder Umwandlungsantrag)
+source: KBV Muster PTV 3 (4.2017)
+report_kinds: [erstantrag, umwandlung]
+rules:
+  target_pages: 2
+  keyword_style_allowed: true
+  signature_required: true
+  pseudonymized: true
+intro: >-
+  Persönlich und in freier Form nach der vorgegebenen Gliederung erstellen, mit Datum und Unterschrift.
+  Auf die für das Verständnis der psychischen Störung und deren Ursachen sowie die für die Behandlung
+  relevanten Informationen begrenzen. Unterpunkte nur bei Relevanz abhandeln. Angaben können
+  stichwortartig erfolgen. Relevante biografische Faktoren im Rahmen des funktionalen Bedingungsmodells (VT)
+  bzw. der Psychodynamik (TP, AP) darstellen. Umfang i.d.R. zwei Seiten.
+sections:
+  - key: soziodemographie
+    number: "1"
+    heading: Relevante soziodemographische Daten
+    field: prose
+    hints:
+      - text: Aktuell ausgeübter Beruf, Familienstand, Zahl der Kinder
+        when: { age: [adult] }
+      - text: >-
+          Angaben zur Lebenssituation, zu Kindergarten oder zu Schulart, ggf. Schulabschluss und Arbeitsstelle,
+          Geschwisterzahl und -position, zum Alter und Beruf der Eltern und ggf. der primären Betreuungspersonen
+        when: { age: [kjp] }
+
+  - key: symptomatik_befund
+    number: "2"
+    heading: Symptomatik und psychischer Befund
+    field: prose
+    hints:
+      - text: Von der Patientin oder dem Patienten geschilderte Symptomatik mit Angaben zu Schwere und Verlauf
+      - text: Diesbezügliche Angaben von Eltern und Bezugspersonen, Informationen aus der Schule
+        when: { age: [kjp] }
+      - text: Auffälligkeiten bei der Kontaktaufnahme, der Interaktion und bezüglich des Erscheinungsbildes
+      - text: Psychischer Befund
+      - text: Krankheitsverständnis der Patientin oder des Patienten
+        when: { age: [adult] }
+      - text: Krankheitsverständnis der relevanten Bezugspersonen
+        when: { age: [kjp] }
+      - text: Ergebnisse psychodiagnostischer Testverfahren
+
+  - key: somatik
+    number: "3"
+    heading: Somatischer Befund / Konsiliarbericht
+    field: prose
+    hints:
+      - text: Somatische Befunde (ggf. einschließlich Suchtmittelkonsum)
+      - text: Ggf. aktuelle psychopharmakologische Medikation (nur von der Therapeutin bestätigte Angaben)
+      - text: >-
+          Psychotherapeutische, psychosomatische sowie kinder- und jugendpsychiatrische bzw. psychiatrische
+          Vorbehandlungen (falls vorhanden Berichte beifügen)
+
+  - key: lebensgeschichte_modell
+    number: "4"
+    heading: >-
+      Behandlungsrelevante Angaben zur Lebensgeschichte (ggf. auch zur Lebensgeschichte der Bezugspersonen),
+      zur Krankheitsanamnese, zum funktionalen Bedingungsmodell (VT) bzw. zur Psychodynamik (TP, AP)
+    field: prose
+    hints:
+      - text: >-
+          Funktionales Bedingungsmodell: Verhaltensanalyse, prädisponierende, auslösende und aufrechterhaltende
+          Bedingungen und kurze Beschreibung des übergeordneten Störungsmodells (Makroanalyse)
+        when: { method: [VT] }
+      - text: >-
+          Psychodynamik: auslösende Situation, intrapsychische Konfliktebene und aktualisierte intrapsychische
+          Konflikte, Abwehrmechanismen, strukturelle Ebene, dysfunktionale Beziehungsmuster
+        when: { method: [TP, AP] }
+      - text: Lebensgeschichte der Bezugspersonen, soweit behandlungsrelevant
+        when: { age: [kjp] }
+
+  - key: diagnose
+    number: "5"
+    heading: Diagnose zum Zeitpunkt der Antragstellung
+    field: diagnoses
+    ai_allowed: false
+    hints:
+      - text: ICD-10-Diagnose/n mit Angabe der Diagnosesicherheit
+      - text: Psychodynamische bzw. neurosenpsychologische Diagnose
+        when: { method: [TP, AP] }
+      - text: Differenzialdiagnostische Angaben, falls erforderlich
+
+  - key: behandlungsplan_prognose
+    number: "6"
+    heading: Behandlungsplan und Prognose
+    field: prose
+    hints:
+      - text: Beschreibung der konkreten, mit der Patientin oder dem Patienten reflektierten Therapieziele
+      - text: Ggf. auch Beschreibung der Therapieziele, die mit den Bezugspersonen vereinbart wurden
+        when: { age: [kjp] }
+      - text: >-
+          Individueller krankheitsbezogener Behandlungsplan, auch unter Berücksichtigung evtl. vorausgegangener
+          ambulanter und stationärer Behandlungen, sowie Angaben zu den im individuellen Fall geplanten
+          Behandlungstechniken und -methoden
+      - text: Angaben zur geplanten Einbeziehung der Bezugspersonen
+        when: { age: [kjp] }
+      - text: >-
+          Begründung des Settings (Einzel- oder Gruppentherapie oder Kombinationsbehandlung), der Sitzungszahl
+          sowie der Behandlungsfrequenz und ggf. kurze Darstellung des Gruppenkonzepts; bei
+          Kombinationsbehandlung zusätzlich kurze Angaben zum abgestimmten Gesamtbehandlungsplan
+      - text: Kooperation mit anderen Berufsgruppen
+      - text: >-
+          Prognose unter Berücksichtigung von Motivation, Umstellungsfähigkeit, inneren und äußeren
+          Veränderungshindernissen
+      - text: Prognose auch bezüglich der Bezugspersonen
+        when: { age: [kjp] }
+
+  - key: umwandlung
+    number: "7"
+    heading: Zusätzlich erforderliche Angaben bei einem Umwandlungsantrag
+    field: prose
+    when: { kind: [umwandlung] }
+    hints:
+      - text: >-
+          Bisheriger Behandlungsverlauf, Veränderung der Symptomatik und Ergebnis in Bezug auf die Erreichung
+          bzw. Nichterreichung der Therapieziele
+      - text: Auch bezüglich der begleitenden Arbeit mit den Bezugspersonen
+        when: { age: [kjp] }
+      - text: Begründung der Notwendigkeit der Umwandlung der Kurzzeittherapie in eine Langzeittherapie
+      - text: Weitere Ergebnisse psychodiagnostischer Testverfahren
