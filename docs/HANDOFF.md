@@ -28,22 +28,18 @@ Start a new session with: *"Read docs/HANDOFF.md and continue with the next step
 
 ## Current limitations
 
-- **Database is unencrypted** (`plain-sqlite` dev feature). The SQLCipher build needs Strawberry Perl. Use fake patients only.
+- ~~Database is unencrypted~~ Encrypted SQLCipher build is live (2026-10-27): Strawberry Perl, LLVM, CMake installed, `LIBCLANG_PATH` set. Old plain DB backed up to `%APPDATA%\de.datorga.thera.plain-backup-20261027` (delete once not needed). Still: fake patients only until the recovery-kit PDF exists.
 - No recording, dictation, transcription or AI drafting yet.
 - Vorlagen upload is a placeholder card.
 
 ## Next steps (in order)
 
-0. **Install tools** (user): `winget install StrawberryPerl.StrawberryPerl LLVM.LLVM`. Then switch to the encrypted build:
-   - wipe dev data (see README)
-   - `cargo test -p thera-core` (runs the "unreadable without key" test)
-   - `npm run app:build`
-   - rerun `npm run shortcut`
+0. ~~**Install tools + encrypted build**~~ **done**.
 1. ~~**Pseudonymizer** `core::pseudo`~~ **done**: patient record + confirmed dictionary + rules (dates with day, `Frau/Herr X`, `GmbH/AG/e.V.`, `Firma X`, PLZ+Ort, street+number) become `[PERSON_n]`/`[ORT_n]`/`[ARBEITGEBER_n]`/`[DATUM_n]`, exact round-trip restore, stable tokens across texts, fail-closed residual check. `Pseudonymized<T>` has a private constructor (compile-fail doctest). `detect()` returns char-offset spans for the future redaction review. Not wired into the UI yet: the first consumer is the Phase 2 LLM adapter / Vorlagen redaction.
 2. **Consent + dictation**:
    - consent records and `consent_recording` flag gating Record vs. "Zusammenfassung diktieren"
    - cpal recording (crash-safe chunks)
-   - local whisper-rs transcription
+   - local transcription via a whisper.cpp **sidecar** (Tauri `externalBin`, separate process), not in-process whisper-rs
    - transcript viewer
    - audio auto-delete after the transcript is confirmed
 3. **Sitzungsnotiz** form per session.
