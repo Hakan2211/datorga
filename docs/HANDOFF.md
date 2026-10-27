@@ -2,6 +2,10 @@
 
 Start a new session with: *"Read docs/HANDOFF.md and continue with the next step."*
 
+**State at end of session (2026-10-27):** everything is committed and pushed to `main`. The release app (desktop shortcut) and installers were rebuilt from `4ffeb59` (later commits are docs only). Next step: **Recovery-kit PDF** (see Next steps 5).
+
+Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Test") and two Nachträge. Nachträge can't be deleted; only erasing the test patient removes them. The 12:03 session's two recordings belong to the user and are untranscribed: don't confirm transcripts there (that deletes the audio).
+
 ## Accomplished
 
 **Planning**
@@ -109,7 +113,14 @@ Start a new session with: *"Read docs/HANDOFF.md and continue with the next step
    - open: disk-space guard + keep-awake for capture; GPU decision; optional audio playback in the viewer; diarization for session recordings (PLAN §4.3)
 3. ~~**Sitzungsnotiz** form per session~~ **done** (slice 4).
 4. ~~**Sitzungsnotiz follow-ups**~~ **done**: Nachtrag, sidebar highlight, partial transcript insert.
-5. **NEXT → Recovery-kit PDF** (printable emergency key).
+5. **NEXT → Recovery-kit PDF** ("Notfall-Kit", PLAN-AMENDMENTS C5; gate for real patient data, A10). What exists:
+   - `crates/core/src/crypto.rs`: `RecoveryKey` (`generate`/`display`/`parse`), `wrap`/`unwrap` (AES-GCM), `unlock_or_init` writes `master.wrapped` on first run and returns `Unlock::Created { recovery }`; `recover()` restores the keychain entry.
+   - `crates/app/src/lib.rs`: `app_init` returns `recovery_key` **once** (first run only), `app_recover` takes it back. The UI shows it in `components/unlock-gate.tsx`. The key is never stored, so it can't be shown again later.
+   - To build:
+     - a printable PDF (Typst, like `render/`) with the recovery key (+ QR optional), date, device/app hint and instructions for what to do when the keychain is lost, offered on the first-run screen (save/print before continuing, with a "I have stored it safely" confirmation);
+     - since the key can't be re-shown: a Settings action "Neuen Notfallschlüssel erstellen" that generates a new recovery key, re-wraps the master key into `master.wrapped` atomically (write temp + rename) and produces a new PDF; the old printed key stops working (say so); audit entry without the key;
+     - tests: re-wrap then `recover()` with new key works and old key fails; E2E of first run on the dev box needs isolation: the data dir comes from Tauri `app_data_dir()` (known-folder API, not the `APPDATA` env var) and the keychain entry `de.datorga.thera`/`master-key` is shared, so an existing entry skips first run. Add a debug-only override for both (e.g. `THERA_DATA_DIR` + a different keyring user), never touch the real entry.
+   - The dev box's DB was created before this; use the Settings action to get a printable kit for it.
 6. **Vorlagen module: deferred** until the therapist hands over material. She will supply old **Sitzungen and Berichte** later, and she must be able to **upload them herself in the app** (no developer-side import):
    - upload old Berichte, old session notes and her forms (PDF/DOCX → text)
    - redaction review (pseudonymizer `detect()` spans), stored as style exemplars
