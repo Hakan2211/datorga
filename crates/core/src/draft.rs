@@ -8,6 +8,7 @@
 //! employer) is dropped rather than restored: those names must not reach the Gutachter either.
 
 use std::sync::LazyLock;
+use std::time::Duration;
 
 use regex::Regex;
 use serde::Deserialize;
@@ -16,15 +17,21 @@ use sha2::{Digest, Sha256};
 
 use crate::domain::{AgeGroup, ApplicationKind, Method, Patient};
 use crate::extract::{citation_number, json_list, sha256, Preview, TokenView, ICD};
+use crate::llm::ChatOptions;
 use crate::pseudo::{DetectionSource, Dictionary, EntityKind, Pseudonymized, Pseudonymizer, TokenMap};
 use crate::templates::{FieldKind, SectionDef, Template};
 use crate::{Error, Result};
 
 /// Bump on any change to the prompt or the answer format.
-pub const PROMPT_VERSION: &str = "draft-2026.1";
+pub const PROMPT_VERSION: &str = "draft-2026.2";
 
 /// Fact characters per request, like `extract::CHUNK_CHARS` (fits a 16k-context local model).
 pub const FACT_CHARS: usize = 24_000;
+
+/// Request options for one section draft (the eval harness uses the same).
+pub fn chat_options() -> ChatOptions {
+    ChatOptions { temperature: 0.2, max_tokens: 2048, timeout: Duration::from_secs(900) }
+}
 
 /// Longest sentence kept.
 const MAX_SENTENCE_CHARS: usize = 500;
@@ -134,7 +141,8 @@ pub fn system_prompt(template: &Template, frame: &Frame) -> String {
          - Nur was die Fakten hergeben. Nichts ergänzen, nichts erfinden, keine Vermutungen als Tatsachen.\n\
          - Keine eigenen Bewertungen, Prognosen, Therapieziele, Begründungen oder Wirkungen, die nicht \
          ausdrücklich in den Fakten stehen. Was fehlt, ergänzt die Therapeutin selbst.\n\
-         - Jeder Satz nennt die Nummern der Fakten, auf denen er beruht (mindestens eine).\n\
+         - Ein Eintrag pro Satz. Jeder Satz nennt im Feld \"facts\" die Nummern der Fakten, auf denen er \
+         beruht (mindestens eine). Keine Nummern wie [F1] in den Text schreiben.\n\
          - {style}{length} Fachsprache, auf Deutsch.\n\
          - Die Person heißt durchgehend \"Pat.\". Keine Namen, keine Anrede.\n\
          - Andere Personen nur über ihre Rolle (die Schwester, der Partner, die Vorgesetzte), keine Orte \
@@ -296,9 +304,19 @@ pub fn prepare(
 
 static TOKEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[(PERSON|ORT|ARBEITGEBER|DATUM)_\d+\]").expect("valid regex"));
-// Citation markers some models write into the text as well ("… pro Woche [F1].", "(F2, F3)").
+// Citation markers some models write into the text as well ("… pro Woche [F1].", "(F2, F3)",
+// "… Fokus. [F1], [F2]"): a run of them, with the separators between them.
+const MARKER_ONE: &str = r"[\[(]F\s?\d+(?:\s*[,;]\s*F?\s?\d+)*[\])]";
 static MARKER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s*[\[(]F\s?\d+(?:\s*[,;]\s*F?\s?\d+)*[\])]").expect("valid regex"));
+    LazyLock::new(|| Regex::new(&format!(r"\s*{MARKER_ONE}(?:\s*[,;]?\s*{MARKER_ONE})*")).expect("valid regex"));
+// The end of a sentence that cites inline: "… Arbeit [F1]." or "… Arbeit. [F1, F2]".
+static CITED_END: LazyLock<Regex> = LazyLock::new(|| {
+    let run = format!(r"{MARKER_ONE}(?:\s*[,;]?\s*{MARKER_ONE})*");
+    Regex::new(&format!(r"{run}\s*[.!?]|[.!?]\s*{run}")).expect("valid regex")
+});
+static NUMBER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d+").expect("valid regex"));
+// Separators left before the end of a sentence once the markers are gone ("Zurückweisung,.").
+static DANGLING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s*[,;]+(\s*[.!?]|\s*$)").expect("valid regex"));
 
 #[derive(Deserialize)]
 struct RawSentence {
@@ -316,17 +334,45 @@ pub fn parse(answer: &str, n_facts: usize, map: &TokenMap) -> Result<Parsed> {
             out.dropped += 1;
             continue;
         };
-        match check(raw, n_facts, map) {
-            Some(s) if !out.sentences.iter().any(|t| t.text == s.text) => out.sentences.push(s),
-            Some(_) => {}
-            None => out.dropped += 1,
+        for raw in split_inline(raw) {
+            match check(raw, n_facts, map) {
+                Some(s) if !out.sentences.iter().any(|t| t.text == s.text) => out.sentences.push(s),
+                Some(_) => {}
+                None => out.dropped += 1,
+            }
         }
     }
     Ok(out)
 }
 
+/// Some models write a whole paragraph into one entry and cite inline ("… [F1]. … [F3, F4].")
+/// instead of filling `facts`. Splits it at the cited sentence ends, each part citing its own
+/// markers; a trailing part without one stays uncited (and is dropped).
+fn split_inline(raw: RawSentence) -> Vec<RawSentence> {
+    if !raw.facts.is_empty() || !MARKER.is_match(&raw.text) {
+        return vec![raw];
+    }
+    let ends: Vec<usize> = CITED_END.find_iter(&raw.text).map(|m| m.end()).collect();
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for end in ends.into_iter().chain([raw.text.len()]) {
+        let text = raw.text[start..end].trim();
+        start = end;
+        if text.is_empty() {
+            continue;
+        }
+        let facts = MARKER
+            .find_iter(text)
+            .flat_map(|m| NUMBER.find_iter(m.as_str()).map(|n| Value::String(n.as_str().to_string())).collect::<Vec<_>>())
+            .collect();
+        parts.push(RawSentence { text: text.to_string(), facts });
+    }
+    parts
+}
+
 fn check(raw: RawSentence, n_facts: usize, map: &TokenMap) -> Option<DraftSentence> {
-    let text = MARKER.replace_all(&raw.text, "").split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = MARKER.replace_all(&raw.text, "");
+    let text = DANGLING.replace_all(&text, "$1").split_whitespace().collect::<Vec<_>>().join(" ");
     if text.is_empty() || text.chars().count() > MAX_SENTENCE_CHARS || ICD.is_match(&text) {
         return None;
     }
@@ -454,6 +500,26 @@ mod tests {
     }
 
     #[test]
+    fn a_paragraph_cited_inline_is_split_into_sentences() {
+        let facts = vec![fact(1, "Verlauf", "Schläft schlecht"), fact(1, "Verlauf", "Schwester hilft"), fact(2, "Befund", "Gedrückt")];
+        let p = prepare(&bericht(), &frame(), &keys(&["symptomatik_befund"]), &facts, &patient(), Dictionary::new(), None).unwrap();
+        // Wrong closing bracket too (`}}` for `}]}`), as Qwen3 14B writes it.
+        let answer = r#"{"sentences": [{"text": "Pat. schläft schlecht [F1]. Die Schwester hilft, Stimmung gedrückt. [F2, F3] Ohne Beleg."}}"#;
+        let out = parse(answer, facts.len(), &p.map).unwrap();
+        assert_eq!(
+            out.sentences,
+            vec![
+                DraftSentence { text: "Pat. schläft schlecht.".into(), facts: vec![0] },
+                DraftSentence { text: "Die Schwester hilft, Stimmung gedrückt.".into(), facts: vec![1, 2] },
+            ]
+        );
+        assert_eq!(out.dropped, 1);
+        // With `facts` given, inline markers are only stripped.
+        let out = parse(r#"[{"text": "A [F1]. B [F2].", "facts": [3]}]"#, facts.len(), &p.map).unwrap();
+        assert_eq!(out.sentences, vec![DraftSentence { text: "A. B.".into(), facts: vec![2] }]);
+    }
+
+    #[test]
     fn parse_checks_citations_and_names() {
         let facts = vec![fact(1, "Verlauf", "Seit dem 3.5.2024 Schlafstörungen"), fact(1, "Verlauf", "Schwester Gerda hilft")];
         let mut dict = Dictionary::from_patient(&patient());
@@ -464,6 +530,8 @@ mod tests {
           {"text": "Pat.  berichtet seit dem [DATUM_1]\nSchlafstörungen.", "facts": [1]},
           {"text": "Pat. berichtet seit dem [DATUM_1] Schlafstörungen.", "facts": ["F1"]},
           {"text": "Unterstützung durch die Schwester [F2] (F1, F2).", "facts": ["[F2]", 2, 1]},
+          {"text": "Schwester hilft, auch nachts. [F1], [F2],", "facts": [1, 2]},
+          {"text": "Schwester hilft im Alltag, [F2].", "facts": [2]},
           {"text": "Unterstützung durch [PERSON_1].", "facts": [2]},
           {"text": "Verdacht auf F51.0.", "facts": [1]},
           {"text": "Ohne Beleg.", "facts": []},
@@ -479,12 +547,14 @@ mod tests {
             vec![
                 DraftSentence { text: "Pat. berichtet seit dem 3.5.2024 Schlafstörungen.".into(), facts: vec![0] },
                 DraftSentence { text: "Unterstützung durch die Schwester.".into(), facts: vec![0, 1] },
+                DraftSentence { text: "Schwester hilft, auch nachts.".into(), facts: vec![0, 1] },
+                DraftSentence { text: "Schwester hilft im Alltag.".into(), facts: vec![1] },
             ]
         );
         assert_eq!(out.dropped, 7);
         assert!(parse("[]", 2, &p.map).unwrap().sentences.is_empty());
         assert!(parse("Geht nicht.", 2, &p.map).is_err());
-        assert_eq!(html(out.sentences.iter().map(|s| s.text.as_str())), "<p>Pat. berichtet seit dem 3.5.2024 Schlafstörungen. Unterstützung durch die Schwester.</p>");
+        assert_eq!(html(out.sentences.iter().map(|s| s.text.as_str())), "<p>Pat. berichtet seit dem 3.5.2024 Schlafstörungen. Unterstützung durch die Schwester. Schwester hilft, auch nachts. Schwester hilft im Alltag.</p>");
         assert_eq!(html(["a < b & c"]), "<p>a &lt; b &amp; c</p>");
     }
 }

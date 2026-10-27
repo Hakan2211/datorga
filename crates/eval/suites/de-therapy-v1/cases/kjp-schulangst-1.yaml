@@ -1,0 +1,121 @@
+# Synthetic. VT, Kinder und Jugendliche: Erstgespräch with the mother present (dictation).
+# Tests: information from the mother and the teacher (rule "Frau X" pseudonymized); somatic
+# exclusion by the pediatrician (→ Somatik); questionnaire result (→ Befund); Kindeswohl;
+# involving the school (→ Behandlungsplan). `chunk_chars` forces several chunks to exercise
+# cross-chunk numbering and citations on a short session.
+id: kjp-schulangst-1
+title: KJP VT Schulangst, Erstgespräch mit Mutter (Diktat, mehrere Chunks)
+method: VT
+age_group: kjp
+patient: { first_name: Leon, last_name: Krüger, birth_date: "2015-05-20" }
+chunk_chars: 700
+segments:
+  - { role: therapist, text: "Erstgespräch mit Leon und seiner Mutter." }
+  - { role: therapist, text: "Die Mutter berichtet, dass Leon seit den Herbstferien morgens über Bauchschmerzen klagt und sich weigert, in die Schule zu gehen." }
+  - { role: therapist, text: "In den letzten vier Wochen hat er an neun Tagen gefehlt." }
+  - { role: therapist, text: "Die Kinderärztin hat ihn untersucht und keine organische Ursache gefunden." }
+  - { role: therapist, text: "Leon geht in die vierte Klasse einer Grundschule. Er lebt mit der Mutter und der jüngeren Schwester, die Eltern sind seit zwei Jahren getrennt." }
+  - { role: therapist, text: "Den Vater sieht er jedes zweite Wochenende." }
+  - { role: therapist, text: "Die Klassenlehrerin Frau Schmidt beschreibt ihn als still und zurückgezogen, er melde sich kaum." }
+  - { role: therapist, text: "Im Kontakt war Leon anfangs schüchtern, taute beim Malen auf und erzählte dann, dass ihn zwei Jungen in der Pause auslachen." }
+  - { role: therapist, text: "Die Mutter hat die CBCL ausgefüllt, auffällig ist der Bereich ängstlich-depressiv." }
+  - { role: therapist, text: "Keine Hinweise auf eine Kindeswohlgefährdung." }
+  - { role: therapist, text: "Psychoedukation für die Mutter zum Zusammenhang von Angst und Bauchschmerzen und dazu, wie das Zuhausebleiben die Angst aufrechterhält." }
+  - { role: therapist, text: "Mit Leon eine erste Angstleiter gebaut, ganz oben steht, allein in die Pause zu gehen." }
+  - { role: therapist, text: "Bis zum nächsten Mal führt Leon ein Mut-Tagebuch, die Mutter notiert die Schultage." }
+  - { role: therapist, text: "Mit Einverständnis der Mutter ist ein Gespräch mit der Klassenlehrerin geplant." }
+facts:
+  - id: bauchschmerzen
+    section: verlauf
+    text: Seit den Herbstferien morgens Bauchschmerzen und Weigerung, in die Schule zu gehen (Angabe der Mutter).
+    match: ["bauch", "schul"]
+    segments: [2]
+    bericht: [symptomatik_befund]
+  - id: fehltage
+    section: verlauf
+    text: In den letzten vier Wochen an neun Tagen gefehlt.
+    match: ["neun|9"]
+    segments: [3]
+    bericht: [symptomatik_befund]
+  - id: kinderaerztin
+    section: [verlauf, befund]
+    text: Kinderärztin fand keine organische Ursache.
+    match: ["kinderärzt|organisch|kinderarzt"]
+    segments: [4]
+    bericht: [somatik]
+  - id: schule
+    section: verlauf
+    text: Besucht die vierte Klasse einer Grundschule.
+    match: ["klasse|grundschule"]
+    segments: [5]
+    bericht: [soziodemographie]
+  - id: familie
+    section: verlauf
+    text: Lebt mit Mutter und jüngerer Schwester, Eltern seit zwei Jahren getrennt.
+    match: ["getrennt|trennung|schwester"]
+    segments: [5]
+    bericht: [soziodemographie]
+    bericht_ok: [lebensgeschichte_modell]
+  - id: vater
+    section: verlauf
+    text: Sieht den Vater jedes zweite Wochenende.
+    match: ["wochenende"]
+    segments: [6]
+    required: false
+    bericht_ok: [soziodemographie]
+  - id: lehrerin
+    section: [verlauf, befund]
+    text: Die Klassenlehrerin Frau Schmidt beschreibt ihn als still und zurückgezogen, meldet sich kaum.
+    match: ["still|zurückgezogen|meldet sich kaum|melde sich kaum"]
+    segments: [7]
+    bericht: [symptomatik_befund]
+  - id: kontakt
+    section: befund
+    text: Im Kontakt anfangs schüchtern, taute beim Malen auf.
+    match: ["schüchtern"]
+    segments: [8]
+    bericht: [symptomatik_befund]
+  - id: auslachen
+    section: verlauf
+    text: Zwei Jungen lachen ihn in der Pause aus.
+    match: ["lach"]
+    segments: [8]
+    bericht: [lebensgeschichte_modell]
+    bericht_ok: [symptomatik_befund]
+  - id: cbcl
+    section: befund
+    text: CBCL (Mutter) auffällig im Bereich ängstlich-depressiv.
+    match: ["cbcl|fragebogen"]
+    segments: [9]
+    bericht: [symptomatik_befund]
+  - id: kindeswohl
+    section: risiko
+    text: Keine Hinweise auf Kindeswohlgefährdung.
+    match: ["kindeswohl"]
+    segments: [10]
+  - id: psychoedukation
+    section: interventionen
+    text: Psychoedukation der Mutter zu Angst, Bauchschmerzen und aufrechterhaltender Rolle des Zuhausebleibens.
+    match: ["psychoedukation"]
+    segments: [11]
+    bericht_ok: [behandlungsplan_prognose, lebensgeschichte_modell]
+  - id: angstleiter
+    section: interventionen
+    text: Erste Angstleiter erstellt, oben steht allein in die Pause gehen.
+    match: ["angstleiter|angsthierarchie|hierarchie"]
+    segments: [12]
+    bericht_ok: [behandlungsplan_prognose]
+  - id: mut-tagebuch
+    section: vereinbarungen
+    text: Bis zur nächsten Sitzung Mut-Tagebuch; die Mutter notiert die Schultage.
+    match: ["tagebuch"]
+    segments: [13]
+  - id: lehrerin-gespraech
+    section: vereinbarungen
+    text: Gespräch mit der Klassenlehrerin mit Einverständnis der Mutter geplant.
+    match: ["lehrerin|schule", "gespräch|kontakt"]
+    segments: [14]
+    bericht: [behandlungsplan_prognose]
+forbid:
+  - '\bF\s?[49]\d'
+  - "schulphobie|trennungsangst"

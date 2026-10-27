@@ -1376,7 +1376,7 @@ async fn extract_run(app: AppHandle, report_id: String, digest: String) -> CmdRe
             progress("loading", 0);
         }
         let (ep, _) = llm_endpoint(state, provider)?;
-        let opts = llm::ChatOptions { temperature: 0.1, max_tokens: 4096, timeout: std::time::Duration::from_secs(900) };
+        let opts = extract::chat_options();
         let keys: Vec<&str> = sections.iter().map(String::as_str).collect();
         let (mut facts, mut dropped, mut answered_by) = (Vec::new(), 0, model.clone());
         for (i, chunk) in prepared.chunks.iter().enumerate() {
@@ -1505,7 +1505,7 @@ async fn draft_run(
             progress("loading", 0);
         }
         let (ep, _) = llm_endpoint(state, provider)?;
-        let opts = llm::ChatOptions { temperature: 0.2, max_tokens: 2048, timeout: std::time::Duration::from_secs(900) };
+        let opts = draft::chat_options();
         let (mut drafts, mut sentences, mut dropped, mut answered_by) = (Vec::new(), 0, 0, model.clone());
         for (i, section) in prepared.sections.iter().enumerate() {
             progress("running", i);

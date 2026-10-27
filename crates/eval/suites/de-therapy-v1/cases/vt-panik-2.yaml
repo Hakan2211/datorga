@@ -1,0 +1,110 @@
+# Synthetic. Same patient as vt-panik-1, next session (dictation).
+# Tests: SORKC elements vs. interventions; biography → Lebensgeschichte; alcohol reported as
+# Suchtmittelkonsum without being judged; goal and planned methods → Behandlungsplan.
+id: vt-panik-2
+title: VT Panik, 3. probatorische Sitzung (Diktat)
+method: VT
+age_group: adult
+patient: { first_name: Anna, last_name: Beispiel, birth_date: "1988-03-14" }
+terms:
+  - { kind: person, text: Gerda }
+segments:
+  - { role: therapist, text: "Dritte probatorische Sitzung mit Frau Beispiel." }
+  - { role: therapist, text: "Laut Angsttagebuch drei Panikattacken in der letzten Woche, zweimal im Bus, einmal im Supermarkt, Angststärke jeweils sieben bis acht." }
+  - { role: therapist, text: "Gedanke in der Situation: Ich falle gleich um und keiner hilft mir." }
+  - { role: therapist, text: "Sie verlässt die Situation sofort, danach sinkt die Angst schnell, was das Vermeiden verstärkt." }
+  - { role: therapist, text: "Zur Lebensgeschichte: Die Mutter war selbst sehr ängstlich und hat sie als Kind stark behütet, allein durfte sie kaum etwas unternehmen." }
+  - { role: therapist, text: "Der Vater war beruflich viel unterwegs." }
+  - { role: therapist, text: "Abends trinkt sie an den meisten Tagen zwei Gläser Wein, um runterzukommen." }
+  - { role: therapist, text: "Wir haben gemeinsam eine Verhaltensanalyse nach dem SORKC-Modell für die Situation im Bus erstellt." }
+  - { role: therapist, text: "Außerdem erste kognitive Umstrukturierung zum Gedanken umzufallen, sie schätzt die Wahrscheinlichkeit jetzt auf zwanzig statt neunzig Prozent." }
+  - { role: therapist, text: "Als Ziel formuliert sie, wieder mit der S-Bahn zur Arbeit fahren zu können." }
+  - { role: therapist, text: "Wir haben vereinbart, ab der nächsten Sitzung mit interozeptiver Exposition zu beginnen. Ich stelle einen Antrag auf Kurzzeittherapie." }
+  - { role: therapist, text: "Keine Hinweise auf Suizidalität." }
+facts:
+  - id: attacken-woche
+    section: verlauf
+    text: Laut Angsttagebuch drei Panikattacken in der letzten Woche (zweimal Bus, einmal Supermarkt).
+    match: ["drei|3", "panik|attacke"]
+    segments: [2]
+    bericht: [symptomatik_befund]
+  - id: angststaerke
+    section: verlauf
+    text: Angststärke jeweils 7–8.
+    match: ["sieben|7"]
+    segments: [2]
+    required: false
+    bericht_ok: [symptomatik_befund]
+  - id: gedanke
+    section: [verlauf, interventionen]
+    text: "Gedanke in der Situation: Ich falle gleich um und keiner hilft mir."
+    match: ["falle .*um|umfallen|umzufallen"]
+    segments: [3]
+    bericht: [lebensgeschichte_modell]
+    bericht_ok: [symptomatik_befund]
+  - id: flucht
+    section: [verlauf, interventionen]
+    text: Verlässt die Situation sofort, danach sinkt die Angst schnell, was das Vermeiden verstärkt.
+    match: ["verlässt|verlassen|flucht"]
+    segments: [4]
+    bericht: [lebensgeschichte_modell]
+    bericht_ok: [symptomatik_befund]
+  - id: mutter
+    section: verlauf
+    text: Die Mutter war selbst sehr ängstlich und hat sie als Kind stark behütet.
+    match: ["mutter", "ängstlich|behütet"]
+    segments: [5]
+    bericht: [lebensgeschichte_modell]
+  - id: vater
+    section: verlauf
+    text: Der Vater war beruflich viel unterwegs.
+    match: ["vater"]
+    segments: [6]
+    required: false
+    bericht_ok: [lebensgeschichte_modell]
+  - id: wein
+    section: [verlauf, befund]
+    text: Trinkt abends an den meisten Tagen zwei Gläser Wein, um runterzukommen.
+    match: ["wein|alkohol"]
+    segments: [7]
+    bericht: [somatik]
+    bericht_ok: [lebensgeschichte_modell]
+  - id: sorkc
+    section: interventionen
+    text: Verhaltensanalyse nach dem SORKC-Modell für die Situation im Bus.
+    match: ["sorkc|verhaltensanalyse"]
+    segments: [8]
+    bericht_ok: [lebensgeschichte_modell]
+  - id: umstrukturierung
+    section: interventionen
+    text: Erste kognitive Umstrukturierung zum Gedanken umzufallen (Wahrscheinlichkeit jetzt 20 statt 90 %).
+    match: ["umstrukturierung|wahrscheinlichkeit"]
+    segments: [9]
+  - id: ziel
+    section: [vereinbarungen, verlauf]
+    text: "Ziel: wieder mit der S-Bahn zur Arbeit fahren können."
+    match: ["ziel", "bahn"]
+    segments: [10]
+    bericht: [behandlungsplan_prognose]
+  - id: exposition
+    section: vereinbarungen
+    text: Ab der nächsten Sitzung interozeptive Exposition.
+    match: ["exposition"]
+    segments: [11]
+    bericht: [behandlungsplan_prognose]
+  - id: antrag
+    section: vereinbarungen
+    text: Antrag auf Kurzzeittherapie wird gestellt.
+    match: ["kurzzeittherapie|antrag"]
+    segments: [11]
+    bericht: [behandlungsplan_prognose]
+  - id: suizid
+    section: risiko
+    text: Keine Hinweise auf Suizidalität.
+    match: ["suizid"]
+    segments: [12]
+    bericht_ok: [symptomatik_befund]
+forbid:
+  - '\bF\s?[14]\d'
+  - "panikstörung|agoraphob"
+  - "abhängig|missbrauch|alkoholproblem"

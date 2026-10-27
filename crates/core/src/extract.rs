@@ -8,6 +8,7 @@
 
 use std::ops::Range;
 use std::sync::LazyLock;
+use std::time::Duration;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,7 @@ use sha2::{Digest, Sha256};
 use ts_rs::TS;
 
 use crate::domain::{SourceSegment, Speaker};
+use crate::llm::ChatOptions;
 use crate::pseudo::{DetectionSource, Dictionary, EntityKind, Pseudonymized, Pseudonymizer, TokenEntry, TokenMap};
 use crate::templates::{FieldKind, Template};
 use crate::{Error, Result};
@@ -26,6 +28,11 @@ pub const PROMPT_VERSION: &str = "extract-2026.1";
 /// Transcript characters per request. German runs at roughly 3–4 characters per token, so this
 /// leaves room for the prompt and the answer within a 16k context.
 pub const CHUNK_CHARS: usize = 24_000;
+
+/// Request options for one extraction chunk (the eval harness uses the same).
+pub fn chat_options() -> ChatOptions {
+    ChatOptions { temperature: 0.1, max_tokens: 4096, timeout: Duration::from_secs(900) }
+}
 
 /// Longest fact kept; anything longer is a paraphrase of the transcript, not a fact.
 const MAX_FACT_CHARS: usize = 600;
@@ -209,11 +216,58 @@ pub(crate) static ICD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b[A-TV-Z
 
 /// The list in a model answer: `{"<field>": [...]}` or a bare array, after any `<think>` block
 /// and around code fences or chatter.
+/// Fixes closing brackets that don't match what is open (`…"}}` for `…"}]}`) and adds missing
+/// ones at the end, a slip small models make. Gives up on an unterminated string (a cut-off
+/// answer stays an error rather than keeping half a sentence).
+fn repair_brackets(raw: &str) -> Option<String> {
+    let (mut out, mut open, mut in_str, mut escaped) = (String::with_capacity(raw.len() + 8), Vec::new(), false, false);
+    for c in raw.chars() {
+        if in_str {
+            out.push(c);
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => in_str = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            '{' => open.push('}'),
+            '[' => open.push(']'),
+            '}' | ']' => {
+                // Close whatever is still open inside until the matching bracket.
+                while let Some(&want) = open.last() {
+                    if want == c {
+                        break;
+                    }
+                    out.push(want);
+                    open.pop();
+                }
+                if open.pop().is_none() {
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        out.push(c);
+    }
+    if in_str {
+        return None;
+    }
+    out.extend(open.into_iter().rev());
+    Some(out)
+}
+
 pub(crate) fn json_list(answer: &str, field: &str) -> Result<Vec<Value>> {
     let answer = THINK.replace_all(answer, "");
     let invalid = || Error::Llm("Die Antwort des Modells war kein gültiges JSON".into());
     let v: Value = match (answer.find(['{', '[']), answer.rfind(['}', ']'])) {
-        (Some(a), Some(b)) if a < b => serde_json::from_str(&answer[a..=b]).map_err(|_| invalid())?,
+        (Some(a), Some(b)) if a < b => {
+            let raw = &answer[a..=b];
+            serde_json::from_str(raw).or_else(|_| repair_brackets(raw).ok_or(()).and_then(|r| serde_json::from_str(&r).map_err(|_| ()))).map_err(|_| invalid())?
+        }
         _ => return Err(invalid()),
     };
     match v {
@@ -298,6 +352,16 @@ fn check(raw: RawFact, range: &Range<usize>, sections: &[&str], map: &TokenMap) 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mismatched_brackets_are_repaired() {
+        use super::json_list;
+        let list = |a: &str| json_list(a, "sentences").map(|l| l.len());
+        assert_eq!(list(r#"{"sentences": [{"text": "a } ] b", "facts": [1]}}"#).unwrap(), 1);
+        assert_eq!(list(r#"{"sentences": [{"text": "a", "facts": [1]}, {"text": "b"]}"#).unwrap(), 2);
+        assert_eq!(list(r#"{"sentences": [{"text": "a", "facts": [1]}"#).unwrap(), 1);
+        assert!(list(r#"{"sentences": [{"text": "abgeschnit}"#).is_err());
+    }
+
     use super::*;
     use crate::domain::{AgeGroup, Method};
     use crate::templates::{self, Context};

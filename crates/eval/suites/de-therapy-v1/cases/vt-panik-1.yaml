@@ -1,0 +1,153 @@
+# Synthetic. VT, adult, probatorische Sitzung, therapist's dictation after the session.
+# Tests: patient name + birth date + "Firma X" + a per-patient term (Gerda) pseudonymized; symptoms
+# vs. Befund split; denied suicidality → Risiko; somatic findings and medication reported, not judged.
+id: vt-panik-1
+title: VT Panik, 2. probatorische Sitzung (Diktat)
+method: VT
+age_group: adult
+patient: { first_name: Anna, last_name: Beispiel, birth_date: "1988-03-14" }
+terms:
+  - { kind: person, text: Gerda }
+segments:
+  - { role: therapist, text: "Zweite probatorische Sitzung mit Frau Beispiel." }
+  - { role: therapist, text: "Frau Beispiel berichtet, dass sie seit etwa sechs Monaten Panikattacken hat, vor allem in der S-Bahn auf dem Weg zur Arbeit." }
+  - { role: therapist, text: "Die Attacken beginnen mit Herzrasen und Schwindel, sie hat dann Angst umzufallen oder die Kontrolle zu verlieren." }
+  - { role: therapist, text: "Seit drei Monaten fährt sie nur noch mit dem Auto zur Arbeit und meidet volle Supermärkte." }
+  - { role: therapist, text: "Erstmals aufgetreten sind die Attacken kurz nach dem Wechsel zur Firma Brandt Logistik, wo sie als Teamleiterin im Einkauf arbeitet." }
+  - { role: therapist, text: "Sie lebt mit ihrem Partner zusammen, keine Kinder." }
+  - { role: therapist, text: "Ihre Schwester Gerda hat ihr geraten, sich Hilfe zu suchen." }
+  - { role: therapist, text: "Vom Hausarzt wurde eine Hashimoto-Thyreoiditis festgestellt, sie nimmt L-Thyroxin. Eine kardiologische Abklärung im Frühjahr war ohne Befund." }
+  - { role: therapist, text: "Im Kontakt freundlich, etwas angespannt, Stimmung leicht gedrückt, Antrieb unauffällig." }
+  - { role: therapist, text: "Der Schlaf ist ungestört." }
+  - { role: therapist, text: "Suizidgedanken werden klar verneint." }
+  - { role: therapist, text: "Ich habe ihr den Teufelskreis der Angst erklärt, also Psychoedukation zum Zusammenspiel von Körpersymptomen und Bewertung." }
+  - { role: therapist, text: "Sie konnte das gut auf ihre letzte Attacke übertragen." }
+  - { role: therapist, text: "Hausaufgabe: Angsttagebuch mit Situation, Symptomen, Gedanken und Stärke der Angst von null bis zehn." }
+  - { role: therapist, text: "Nächstes Mal machen wir eine ausführliche Verhaltensanalyse." }
+facts:
+  - id: panik-seit
+    section: verlauf
+    text: Seit etwa sechs Monaten Panikattacken, vor allem in der S-Bahn auf dem Weg zur Arbeit.
+    match: ["panik|attacke", "sechs monat|6 monat|halbe[nm]? jahr"]
+    segments: [2]
+    bericht: [symptomatik_befund]
+  - id: panik-bahn
+    section: verlauf
+    text: Attacken vor allem in der S-Bahn.
+    match: ["bahn"]
+    segments: [2]
+    bericht: [symptomatik_befund]
+  - id: koerper
+    section: [verlauf, befund]
+    text: Attacken beginnen mit Herzrasen und Schwindel.
+    match: ["herzrasen|schwindel"]
+    segments: [3]
+    bericht: [symptomatik_befund]
+  - id: angst-umfallen
+    section: [verlauf, befund]
+    text: Angst umzufallen oder die Kontrolle zu verlieren.
+    match: ["umzufallen|umfallen|kontroll"]
+    segments: [3]
+    bericht: [symptomatik_befund]
+    bericht_ok: [lebensgeschichte_modell]
+  - id: vermeidung
+    section: verlauf
+    text: Fährt seit drei Monaten nur noch mit dem Auto zur Arbeit, meidet volle Supermärkte.
+    match: ["auto|meidet|vermeid|supermärkt"]
+    segments: [4]
+    bericht: [symptomatik_befund]
+    bericht_ok: [lebensgeschichte_modell]
+  - id: ausloeser
+    section: verlauf
+    text: Erstmals aufgetreten kurz nach dem Wechsel zur Firma Brandt Logistik.
+    match: ["wechsel|neue[nrm]? (stelle|arbeit)|brandt"]
+    segments: [5]
+    bericht: [lebensgeschichte_modell]
+    bericht_ok: [symptomatik_befund]
+  - id: beruf
+    section: verlauf
+    text: Arbeitet als Teamleiterin im Einkauf.
+    match: ["teamleit|einkauf"]
+    segments: [5]
+    bericht: [soziodemographie]
+  - id: partner
+    section: verlauf
+    text: Lebt mit ihrem Partner zusammen, keine Kinder.
+    match: ["partner"]
+    segments: [6]
+    bericht: [soziodemographie]
+  - id: schwester
+    section: verlauf
+    text: Ihre Schwester Gerda hat ihr geraten, sich Hilfe zu suchen.
+    match: ["schwester"]
+    segments: [7]
+    required: false
+  - id: hashimoto
+    section: [verlauf, befund]
+    text: Hashimoto-Thyreoiditis vom Hausarzt festgestellt.
+    match: ["hashimoto|schilddrüse|thyreo"]
+    segments: [8]
+    bericht: [somatik]
+  - id: thyroxin
+    section: [verlauf, befund]
+    text: Nimmt L-Thyroxin.
+    match: ["thyroxin"]
+    segments: [8]
+    bericht: [somatik]
+  - id: kardio
+    section: [verlauf, befund]
+    text: Kardiologische Abklärung im Frühjahr ohne Befund.
+    match: ["kardiolog"]
+    segments: [8]
+    bericht: [somatik]
+  - id: kontakt
+    section: befund
+    text: Im Kontakt freundlich, etwas angespannt.
+    match: ["angespannt"]
+    segments: [9]
+    bericht: [symptomatik_befund]
+  - id: stimmung
+    section: befund
+    text: Stimmung leicht gedrückt, Antrieb unauffällig.
+    match: ["gedrückt"]
+    segments: [9]
+    bericht: [symptomatik_befund]
+  - id: schlaf
+    section: [befund, verlauf]
+    text: Schlaf ungestört.
+    match: ["schlaf"]
+    segments: [10]
+    required: false
+    bericht_ok: [symptomatik_befund]
+  - id: suizid
+    section: risiko
+    text: Suizidgedanken klar verneint.
+    match: ["suizid"]
+    segments: [11]
+    bericht: [symptomatik_befund]
+  - id: psychoedukation
+    section: interventionen
+    text: Psychoedukation zum Teufelskreis der Angst (Körpersymptome und Bewertung).
+    match: ["psychoedukation|teufelskreis"]
+    segments: [12]
+    bericht_ok: [behandlungsplan_prognose]
+  - id: transfer
+    section: [interventionen, verlauf]
+    text: Konnte das Modell auf ihre letzte Attacke übertragen.
+    match: ["übertrag|letzte[n]? attacke"]
+    segments: [13]
+    required: false
+  - id: tagebuch
+    section: vereinbarungen
+    text: "Hausaufgabe: Angsttagebuch (Situation, Symptome, Gedanken, Angststärke 0–10)."
+    match: ["tagebuch|protokoll"]
+    segments: [14]
+  - id: naechste
+    section: vereinbarungen
+    text: Nächste Sitzung ausführliche Verhaltensanalyse.
+    match: ["verhaltensanalyse"]
+    segments: [15]
+    bericht_ok: [behandlungsplan_prognose]
+forbid:
+  - '\bF\s?4\d'
+  - "panikstörung|agoraphob"

@@ -1,0 +1,14 @@
+[package]
+name = "eval"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Golden-set harness for fact extraction and Bericht drafting (cargo run -p eval)."
+
+[dependencies]
+thera-core = { workspace = true, features = ["sqlcipher"] }
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng = "0.10"
+regex = "1"

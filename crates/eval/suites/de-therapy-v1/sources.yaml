@@ -1,0 +1,8 @@
+# Candidate per-section source mapping for drafting (Bericht section -> Sitzungsnotiz sections
+# whose facts it may draw on). Not used by the app; `cargo run -p eval -- --sources <this file>`
+# measures it against drafting without a mapping. Sections not listed get all facts.
+soziodemographie: [verlauf]
+symptomatik_befund: [verlauf, befund, risiko]
+somatik: [verlauf, befund]
+lebensgeschichte_modell: [verlauf, interventionen]
+behandlungsplan_prognose: [vereinbarungen, interventionen]

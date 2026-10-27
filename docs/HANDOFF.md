@@ -1,8 +1,8 @@
-# thera: session handoff (2026-10-27, Phase 2: slices 11–14 done)
+# thera: session handoff (2026-10-27, Phase 2: slices 11–15 done)
 
 Start a new session with: *"Read docs/HANDOFF.md and continue with the next step."*
 
-**State at end of session (2026-10-27):** Phase 1 is done (slices 1–10). Phase 2 has started. The user decided (PLAN-AMENDMENTS §9): OpenRouter/Requesty + own endpoint, chosen model, the therapist's own key, only pseudonymized text leaves the machine, local models with hardware-based recommendation; ChatGPT/OpenCode subscription deferred. **Slice 11 (LLM provider layer) is done** and verified in the real app against a mock endpoint. It isn't tested against a real OpenRouter/Requesty key yet (none on the dev box). **Slice 12 (local models) is done** and verified with the real llama-server on the dev box GPU. **Slice 13 (fact extraction → Sitzungsnotiz draft) is done**, verified in the real app against a mock endpoint (egress checked) and the real Qwen3 8B. **Slice 14 (Bericht drafting per section from applied facts) is done**, verified in the real app against a mock endpoint (egress checked) and the real Qwen3 8B. Next step: **slice 15, eval set** (see Next steps 12).
+**State at end of session (2026-10-27):** Phase 1 is done (slices 1–10). Phase 2 has started. The user decided (PLAN-AMENDMENTS §9): OpenRouter/Requesty + own endpoint, chosen model, the therapist's own key, only pseudonymized text leaves the machine, local models with hardware-based recommendation; ChatGPT/OpenCode subscription deferred. **Slice 11 (LLM provider layer) is done** and verified in the real app against a mock endpoint. It isn't tested against a real OpenRouter/Requesty key yet (none on the dev box). **Slice 12 (local models) is done** and verified with the real llama-server on the dev box GPU. **Slice 13 (fact extraction → Sitzungsnotiz draft) is done**, verified in the real app against a mock endpoint (egress checked) and the real Qwen3 8B. **Slice 14 (Bericht drafting per section from applied facts) is done**, verified in the real app against a mock endpoint (egress checked) and the real Qwen3 8B. **Slice 15 (eval set) is done**: `cargo run -p eval`, Qwen3 8B measured (14B only on the old draft prompt, no cloud model yet). Next step: see Next steps 12 (14B re-run + cloud model, then per-fact Bericht section tags).
 
 On the next start of the dev-box app you'll see **"Notfall-Kit fehlt"**: the DB predates the kit, so it was never confirmed. Create a new key there and save/print the kit.
 
@@ -298,6 +298,24 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
   - **real Qwen3 8B** (GPU, 4 sections, 12–16 s): the first prompt invented a prognosis and "reflektierte Therapieziele" and put every fact into every section. After the scope/no-evaluation rules: nothing invented, Behandlungsplan empty rather than padded, but **Somatik still gets unrelated facts** and the model wrote `[F1]` into the text (now stripped).
 - Not done: section fit with an 8B model is unreliable (the therapist's review catches it; slice 15 should measure it, and a per-section default source mapping in the template YAML, e.g. `sources: [befund, risiko]`, is the obvious next lever); no real cloud model run; existing section text isn't sent as context (so "Anhängen" may repeat what's there); no session selection (all sessions of the episode count, also for a Fortführungsbericht); style exemplars wait for the Vorlagen module.
 
+**Built (slice 15, 2026-10-27): eval set (Phase 2)**
+- `crates/eval` (bin `eval`): `cargo run -p eval -- --provider local --model qwen3-8b` (flags: `--check`, `--only extract|draft`, `--case <id>`, `--sources <yaml>`, `--runs n`, `--gguf`, `--server`, `--base-url`; remote key from `THERA_EVAL_API_KEY`). Uses the app's prompts, parsers and request options (`extract::chat_options()` / `draft::chat_options()`, now shared with the app). Local models: spawns its own `LlamaServer` from `crates/app/llama`, GGUF from `target/eval-models/` (gitignored; Qwen3 8B + 14B there, hashes match the catalog) or the app's models folder. Writes every proposal + score to `target/eval/<suite>/<time>-<model>.json`, including the raw answer on a parse error.
+- Suite `crates/eval/suites/de-therapy-v1` (synthetic only; real material belongs in the gitignored `fixtures/`, pass it with `--suite <dir>`): 6 cases (VT panic ×3 dictations, TP depression: one session recording with small talk + one dictation, KJP school anxiety with the mother, forced into several chunks via `chunk_chars`), 80 expected facts, 3 Erstantrag episodes. Each expected fact: accepted note section(s), canonical text (the drafting input), match regexes, cited segments, `required`, `bericht` (Bericht sections that should use it) and `bericht_ok` (acceptable). `forbid` regexes per case/episode catch invented content (diagnoses, prognosis, goals/setting not in the facts, names that must not reach the Gutachter). `sources.yaml` is a candidate per-section source mapping.
+- Scoring is deterministic (regex, no LLM judge). Extraction: recall, right section, citation hit, precision (proposals matching any expected fact), extras listed for review, forbidden, dropped. Drafting (input = the cases' expected facts, so it doesn't depend on the extraction run): per section precision (cited facts that belong) and recall, padding, forbidden, dropped. `--sources` also prints a model-free filter analysis.
+- `cargo test -p eval`: the suite loads, every pattern hits its own canonical text and cited segments, the gold facts score 100 %, scoring counts misses/misfiles/extras.
+- Core fixes found by the eval: draft text kept `.,,` when markers came as `[F1], [F2]` (now a marker run + dangling separators are stripped); `json_list` repairs mismatched/missing closing brackets (`…"}}` for `…"}]}`), never an unterminated string; a draft entry with inline `[Fn]` markers and no `facts` (Qwen3 14B's habit) is split into cited sentences; draft prompt says one entry per sentence, numbers only in `facts` (`draft-2026.2`). 144 core unit tests.
+- Results (3 runs each, dev box GPU):
+
+  | | extraction recall / section | drafting precision / recall | forbidden |
+  |---|---|---|---|
+  | Qwen3 8B, draft-2026.1 | 97 % / 83 % | 51 % / 48 % (4 of 23 requests invalid JSON) | 24 |
+  | Qwen3 8B, draft-2026.2 | 97 % / 84 % | 50 % / 88 % (no invalid JSON) | 17 |
+  | Qwen3 8B, 2026.2 + `sources.yaml` | – | 52 % / 93 % | 12 |
+  | Qwen3 14B, draft-2026.1 | 99 % / 93 % | 69 % / 10 % (most entries dropped: inline citations) | 2 |
+
+- Findings: extraction is good; its weak spot is the session recording (8B filed everything under Verlauf and called the male patient "Patientin": no speakers). Drafting now covers nearly everything but puts too much everywhere (Somatik and Lebensgeschichte ~31 % precision) and the 8B still invents prognoses/goals. **Decision: no per-section source mapping by note section**: it doesn't separate Bericht sections (precision +2 points; model-free it removes only 29 of 72 unrelated facts for Somatik, since somatic facts sit in Verlauf with the symptoms). The next lever is per fact (e.g. the extraction or a cheap classification step tags each fact with Bericht sections, the therapist can correct it, drafting sends only tagged facts).
+- Not done: Qwen3 14B on `draft-2026.2` (that re-run was stopped when the machine ran low on memory; the user will redo it); no cloud model (no key on the dev box); Mistral Small not downloaded.
+
 ## Current limitations
 
 - ~~Database is unencrypted~~ Encrypted SQLCipher build is live (2026-10-27): Strawberry Perl, LLVM, CMake installed, `LIBCLANG_PATH` set. Old plain DB backed up to `%APPDATA%\de.datorga.thera.plain-backup-20261027` (delete once not needed). A10's technical gates (encryption, recovery kit, verified backup) are done. Before real patients: legal review of the consent text and a restore test on the therapist's own machine.
@@ -313,7 +331,7 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
 - Backups are manual (reminder banner, no automatic schedule) and always full.
 - Vorlagen upload is a placeholder card.
 - Sitzungsnotiz: AI proposals exist (slice 13), but facts are appended as bullets: merging them into existing prose is up to the therapist. A note exported before a Nachtrag lacks it until exported again (now flagged "neu exportieren"). Partial insert works within one segment only, not across segments.
-- Bericht drafts: an 8B local model often puts facts into the wrong section (e.g. symptoms under Somatik); the therapist reviews each draft. Facts only, no style exemplars yet, no session selection.
+- Bericht drafts: an 8B local model puts many facts into the wrong section (eval: ~50 % of cited facts belong, Somatik/Lebensgeschichte ~31 %) and sometimes invents a prognosis or goals; the therapist reviews each draft. Facts only, no style exemplars yet, no session selection.
 - Fact extraction runs one request per 24k-character chunk without a cancel button; a long session on a CPU-only laptop may take minutes. Facts from different chunks aren't merged, so the same point can come twice.
 
 ## Next steps (in order)
@@ -358,7 +376,8 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
    - ~~slice 12, local models~~ **done** (hardware probe, GGUF catalog + recommendation, hash-checked download/import, llama-server sidecar in a kill-on-close job object, provider `local`)
    - ~~slice 13, fact extraction per session~~ **done** (redaction preview with per-patient terms, cited facts, review + apply into the note)
    - ~~slice 14, Bericht drafting per section~~ **done** (applied facts → cited sentences per section, "Pat." instead of the name, replace/append, provenance on the report)
-   - **NEXT → slice 15: eval set**: synthetic German sessions → expected facts (extraction) and expected section assignment (drafting), `cargo run -p eval`; measure Qwen3 8B/14B and one cloud model; use it to decide on a per-section source mapping in the template YAML
+   - ~~slice 15, eval set~~ **done** (`crates/eval`, suite `de-therapy-v1`; decided against a per-section source mapping by note section)
+   - **NEXT**: re-run `cargo run -p eval -- --provider local --model qwen3-14b --runs 3` on `draft-2026.2` (user does it), one cloud model (`THERA_EVAL_API_KEY=… cargo run -p eval -- --provider openrouter --model <id>`), then improve drafting precision per fact (Bericht section tags per fact, see slice 15 findings) and measure with the eval; add the therapist's real material as a `fixtures/` suite when she brings it
    - deferred: using a ChatGPT/OpenCode subscription (reasons in PLAN-AMENDMENTS §9). An endpoint with an API key already works as "Eigener Endpunkt".
 ## Open questions for the therapist
 
@@ -375,6 +394,9 @@ npm run app:build                     # release exe used by the desktop icon (+ 
 npm run typecheck && npm test         # UI checks
 cargo test -p thera-core              # also regenerates ui/src/bindings (ts-rs)
 cargo test -p thera-capture
+cargo test -p eval                    # golden-set consistency + scoring
+cargo run -p eval -- --check          # list the suite, no model
+cargo run -p eval -- --provider local --model qwen3-8b --runs 3   # GGUF in target/eval-models
 powershell -ExecutionPolicy Bypass -File scripts/fetch-whisper.ps1   # once per checkout: whisper.cpp sidecar
 powershell -ExecutionPolicy Bypass -File scripts/fetch-llama.ps1     # once per checkout: llama-server sidecar
 # real sidecar test (needs a model + 16 kHz mono WAV):

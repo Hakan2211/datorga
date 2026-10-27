@@ -1,0 +1,87 @@
+# Synthetic. Same patient as tp-depression-1, later session (dictation).
+# Tests: transference observation (→ Interventionen, Lebensgeschichte/Psychodynamik in the Bericht);
+# setting, hours and focus (→ Vereinbarungen, Behandlungsplan).
+id: tp-depression-2
+title: TP Depression, Folgesitzung (Diktat)
+method: TP
+age_group: adult
+patient: { first_name: Markus, last_name: Lehmann, birth_date: "1979-11-02" }
+terms:
+  - { kind: person, text: Jana }
+  - { kind: ort, text: Leipzig }
+segments:
+  - { role: therapist, text: "Sitzung mit Herrn Lehmann." }
+  - { role: therapist, text: "Stimmung etwas gebessert, er geht wieder zweimal pro Woche laufen." }
+  - { role: therapist, text: "Schläft weiterhin schlecht, wacht gegen fünf Uhr auf." }
+  - { role: therapist, text: "Kam zehn Minuten zu spät und entschuldigte sich mehrfach, er befürchtete, ich sei verärgert." }
+  - { role: therapist, text: "Darin zeigt sich in der Übertragung die Erwartung, mit eigenen Bedürfnissen zurückgewiesen zu werden, wie beim Vater." }
+  - { role: therapist, text: "Die Gedanken, nicht mehr aufwachen zu wollen, seien nicht mehr aufgetreten, er distanziert sich glaubhaft von Suizidalität." }
+  - { role: therapist, text: "Ich habe die Entschuldigungen angesprochen und mit ihm geklärt, was er von mir erwartet hatte." }
+  - { role: therapist, text: "Vereinbart: tiefenpsychologisch fundierte Kurzzeittherapie mit zunächst 24 Stunden, einmal pro Woche. Fokus ist der Konflikt zwischen dem Wunsch nach Nähe und der Angst vor Zurückweisung." }
+  - { role: therapist, text: "Die Behandlung mit Sertralin beim Psychiater läuft weiter." }
+facts:
+  - id: stimmung
+    section: [befund, verlauf]
+    text: Stimmung etwas gebessert.
+    match: ["stimmung", "besser|gebessert"]
+    segments: [2]
+    bericht: [symptomatik_befund]
+  - id: laufen
+    section: verlauf
+    text: Geht wieder zweimal pro Woche laufen.
+    match: ["lauf|jogg|sport"]
+    segments: [2]
+    required: false
+    bericht_ok: [symptomatik_befund]
+  - id: schlaf
+    section: [befund, verlauf]
+    text: Schläft weiterhin schlecht, wacht gegen fünf Uhr auf.
+    match: ["schl[aä]f|fünf|5 uhr|wacht"]
+    segments: [3]
+    bericht: [symptomatik_befund]
+  - id: entschuldigung
+    section: [verlauf, befund, interventionen]
+    text: Kam zehn Minuten zu spät, entschuldigte sich mehrfach, befürchtete Verärgerung der Therapeutin.
+    match: ["entschuldig"]
+    segments: [4]
+    bericht_ok: [lebensgeschichte_modell, symptomatik_befund]
+  - id: uebertragung
+    section: interventionen
+    text: "Übertragung: Erwartung, mit eigenen Bedürfnissen zurückgewiesen zu werden, wie beim Vater."
+    match: ["übertragung|zurückgewiesen|zurückweis"]
+    segments: [5]
+    bericht: [lebensgeschichte_modell]
+  - id: suizid
+    section: risiko
+    text: Gedanken, nicht mehr aufwachen zu wollen, nicht mehr aufgetreten; distanziert sich glaubhaft von Suizidalität.
+    match: ["suizid|nicht mehr aufgetreten|distanz"]
+    segments: [6]
+    bericht: [symptomatik_befund]
+  - id: klaerung
+    section: interventionen
+    text: Entschuldigungen angesprochen und Erwartungen an die Therapeutin geklärt.
+    match: ["angesprochen|geklärt|klärung"]
+    segments: [7]
+  - id: kzt
+    section: vereinbarungen
+    text: Tiefenpsychologisch fundierte Kurzzeittherapie mit zunächst 24 Stunden, einmal pro Woche.
+    match: ["24|kurzzeit"]
+    segments: [8]
+    bericht: [behandlungsplan_prognose]
+  - id: fokus
+    section: vereinbarungen
+    text: "Fokus: Konflikt zwischen Wunsch nach Nähe und Angst vor Zurückweisung."
+    match: ["nähe", "zurückweis|ablehnung"]
+    segments: [8]
+    bericht: [behandlungsplan_prognose]
+    bericht_ok: [lebensgeschichte_modell]
+  - id: sertralin
+    section: [verlauf, vereinbarungen]
+    text: Behandlung mit Sertralin beim Psychiater läuft weiter.
+    match: ["sertralin"]
+    segments: [9]
+    bericht: [somatik]
+    bericht_ok: [behandlungsplan_prognose]
+forbid:
+  - '\bF\s?3\d'
+  - "depressive episode"

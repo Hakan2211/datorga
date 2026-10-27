@@ -1,0 +1,48 @@
+# Synthetic. Same patient, a short session with little content.
+# Tests: negated findings are facts; organisational detail (late because of traffic) is left out;
+# nothing is padded.
+id: vt-panik-3
+title: VT Panik, kurze Sitzung ohne Besonderheiten (Diktat)
+method: VT
+age_group: adult
+patient: { first_name: Anna, last_name: Beispiel, birth_date: "1988-03-14" }
+segments:
+  - { role: therapist, text: "Kurze Sitzung, Frau Beispiel kam wegen eines Staus zwanzig Minuten zu spät." }
+  - { role: therapist, text: "Keine besonderen Ereignisse seit der letzten Woche, Stimmung ausgeglichen." }
+  - { role: therapist, text: "Suizidgedanken verneint." }
+  - { role: therapist, text: "Wir haben nur das Angsttagebuch durchgesehen, in dieser Woche keine Attacken." }
+  - { role: therapist, text: "Exposition wie geplant nächste Woche." }
+facts:
+  - id: stimmung
+    section: befund
+    text: Stimmung ausgeglichen.
+    match: ["ausgeglichen"]
+    segments: [2]
+    bericht_ok: [symptomatik_befund]
+  - id: suizid
+    section: risiko
+    text: Suizidgedanken verneint.
+    match: ["suizid"]
+    segments: [3]
+    bericht_ok: [symptomatik_befund]
+  - id: keine-attacken
+    section: verlauf
+    text: In dieser Woche keine Panikattacken (laut Angsttagebuch).
+    match: ["kein", "attacke|panik"]
+    segments: [4]
+    bericht_ok: [symptomatik_befund]
+  - id: tagebuch
+    section: [interventionen, verlauf]
+    text: Angsttagebuch durchgesehen.
+    match: ["tagebuch"]
+    segments: [4]
+    required: false
+  - id: exposition
+    section: vereinbarungen
+    text: Exposition wie geplant in der nächsten Sitzung.
+    match: ["exposition"]
+    segments: [5]
+    bericht: [behandlungsplan_prognose]
+forbid:
+  - '\bF\s?4\d'
+  - "stau"

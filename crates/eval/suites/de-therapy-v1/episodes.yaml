@@ -1,0 +1,31 @@
+# Episodes: sessions that feed one Bericht. Drafting uses the cases' expected facts as the
+# applied facts (in session order), so its score doesn't depend on the extraction run.
+# `forbid`: regexes that must not appear in any drafted sentence (names that must not reach the
+# Gutachter, invented prognoses or goals, diagnoses).
+episodes:
+  - id: vt-panik
+    kind: erstantrag
+    sessions: [vt-panik-1, vt-panik-2, vt-panik-3]
+    forbid:
+      - "\\banna\\b|frau beispiel|gerda|brandt"
+      - "prognose|günstig|gut motiviert|hohe motivation"
+      - "panikstörung|agoraphob|\\bF\\s?4\\d"
+      - "abhängig|missbrauch"
+      - "einzeltherapie|einzelsetting|gruppentherapie"
+  - id: tp-depression
+    kind: erstantrag
+    sessions: [tp-depression-1, tp-depression-2]
+    forbid:
+      - "markus|lehmann|\\bjana\\b|leipzig"
+      - "prognose|günstig|gut motiviert|hohe motivation"
+      - "depressive episode|\\bF\\s?3\\d"
+      # No goal or setting is in the facts of these episodes.
+      - "therapieziel|ziele umfassen|einzeltherapie|einzelsetting|gruppentherapie"
+  - id: kjp-schulangst
+    kind: erstantrag
+    sessions: [kjp-schulangst-1]
+    forbid:
+      - "\\bleon\\b|krüger|schmidt"
+      - "prognose|günstig|gut motiviert|hohe motivation"
+      - "schulphobie|trennungsangst|\\bF\\s?[49]\\d"
+      - "therapieziel|ziele umfassen|einzeltherapie|einzelsetting|gruppentherapie"
