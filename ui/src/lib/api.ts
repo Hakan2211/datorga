@@ -101,6 +101,8 @@ export const api = {
   updatePatient: (id: string, input: PatientInput) => invoke<Patient>('patient_update', { id, input }),
   erasePatient: (id: string) => invoke<void>('patient_erase', { id }),
 
+  exportConsentForm: (patientId: string, kind: 'recording', path: string) =>
+    invoke<void>('consent_form_export', { patientId, kind, path }),
   consentText: (kind: ConsentKind) => invoke<ConsentText>('consent_text', { kind }),
   consents: (patientId: string) => invoke<Consent[]>('consents_list', { patientId }),
   grantConsent: (patientId: string, kind: ConsentKind, note: string) =>

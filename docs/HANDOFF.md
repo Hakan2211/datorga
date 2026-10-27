@@ -1,8 +1,8 @@
-# thera: session handoff (2026-10-27, after the Nachtrag export hint)
+# thera: session handoff (2026-10-27, after the printable consent form)
 
 Start a new session with: *"Read docs/HANDOFF.md and continue with the next step."*
 
-**State at end of session (2026-10-27):** the Nachtrag export hint (slice 8) is done, tested, committed and pushed to `main`. The release app (desktop shortcut) and installers were rebuilt from it. The user asked to work through the remaining steps one by one until Phase 2. Next step: **printable consent form** (see Next steps 9).
+**State at end of session (2026-10-27):** the printable consent form (slice 9) is done, tested, committed and pushed to `main`. The release app (desktop shortcut) and installers were rebuilt from it. The user asked to work through the remaining steps one by one until Phase 2. Next step: **backup reminder** (see Next steps 10).
 
 On the next start of the dev-box app you'll see **"Notfall-Kit fehlt"**: the DB predates the kit, so it was never confirmed. Create a new key there and save/print the kit.
 
@@ -173,6 +173,19 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
 - UI: warning on the note's export card ("Seit dem letzten Export (…) kam ein Nachtrag hinzu …") and an `ExportOutdatedBadge` ("neu exportieren") next to the note status in the sessions list, on the patient page and on the session page.
 - Tests: 98 core (+ lifecycle: Nachtrag before the first export doesn't count, Nachtrag after export → outdated on report and session list, re-export clears it). E2E in the real app: export → no hint; Nachtrag → hint and all three badges; export again → hint and badges gone; first PDF lacks the Nachtrag, second contains it.
 
+**Built (slice 9, 2026-10-27): printable consent form**
+- `render::ConsentForm` + `consent_form_pdf()` (Typst, `render/einwilligung.typ`, one A4 page):
+  - practice header, title and paragraphs taken unchanged from `consent::current()` (the text the app records)
+  - patient name and birth date: the form stays in the practice file and never goes to the Gutachter
+  - therapist name, and signature lines with room to sign
+  - two extra lines for Sorgeberechtigte when the patient has a KJP episode
+  - a "Widerruf" section to cut off at the bottom
+  - footer: text version + first 16 hex of the same SHA-256 that a consent grant stores
+  - while the version contains `entwurf`, a box says the text isn't legally reviewed yet
+- Store `log_consent_form` (audit `consent.form_export` with kind + version only). App `consent_form_export(patient_id, kind, path)`.
+- UI: "Formular drucken (PDF)" on the consent card (file name `Einwilligung-Tonaufnahme.pdf`, no patient name in the file name); the grant dialog suggests printing, signing, then recording the consent.
+- Tests: 99 core (+ form: title/paragraphs equal the recorded text, German birth date, draft flag, hash prefix, PDF with and without guardian lines). E2E in the real app: KJP patient → PDF with guardian lines and birth date; adult → none; draft box, practice and therapist printed; audit entries carry only kind/version; grant dialog shows the hint.
+
 ## Current limitations
 
 - ~~Database is unencrypted~~ Encrypted SQLCipher build is live (2026-10-27): Strawberry Perl, LLVM, CMake installed, `LIBCLANG_PATH` set. Old plain DB backed up to `%APPDATA%\de.datorga.thera.plain-backup-20261027` (delete once not needed). A10's technical gates (encryption, recovery kit, verified backup) are done. Before real patients: legal review of the consent text and a restore test on the therapist's own machine.
@@ -181,7 +194,7 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
 - The sidecar reads a **plaintext WAV** from `stt-tmp` while it runs (deleted afterwards, wiped on next unlock after a crash). Possible hardening: whisper-cli `-f -` (stdin) + parsing stdout, or a Windows Job Object so a crashed app can't leave the sidecar running.
 - There is no audio playback in the transcript viewer, so the therapist reviews text without hearing it.
 - The consent text is a **draft**: needs legal review before real patients. After any wording change, bump `RECORDING_VERSION` in `crates/core/src/consent.rs`.
-- No printable consent form yet (the therapist notes the signed paper form in the consent note).
+- The printable consent form carries the draft text (marked as such) until the legal review.
 - Closing the laptop lid during a recording still sleeps if Windows is configured to. What the audio stream does after resume is untested.
 - Backups are manual (no schedule, no reminder yet) and always full. `last_backup` is the only "how old is my backup" signal.
 - Vorlagen upload is a placeholder card.
@@ -218,8 +231,8 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
    - **Decided (user, 2026-10-27):** the Notfall-Schlüssel is the backup key. No separate backup password. Restoring on a new machine needs the backup archive and the current Notfall-Kit. Consequences to handle: after a key rotation, older backups need the old key, or re-wrap the key inside them. Say so in the UI and on the kit.
 7. ~~**Capture guards**~~ **done** (slice 7): disk-space check before and during a recording (warn early, stop cleanly before the disk is full), and keep the laptop awake while recording (Windows `SetThreadExecutionState`).
 8. ~~**Nachtrag export hint**~~ **done** (slice 8): mark a note whose newest Nachtrag is newer than its last export ("neu exportieren").
-9. **NEXT → Printable consent form:** PDF of the current recording-consent text (version + hash) with signature lines, from the patient's consent card.
-10. **Backup reminder:** a hint in the app when the last backup is older than N days (schedule later).
+9. ~~**Printable consent form**~~ **done** (slice 9): PDF of the current recording-consent text (version + hash) with signature lines, from the patient's consent card.
+10. **NEXT → Backup reminder:** a hint in the app when the last backup is older than N days (schedule later).
 11. **Vorlagen module: deferred** until the therapist hands over material. She will supply old **Sitzungen and Berichte** later, and she must be able to **upload them herself in the app** (no developer-side import):
    - upload old Berichte, old session notes and her forms (PDF/DOCX → text)
    - redaction review (pseudonymizer `detect()` spans), stored as style exemplars

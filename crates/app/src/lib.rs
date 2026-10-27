@@ -506,6 +506,27 @@ fn consent_text(kind: ConsentKind) -> ConsentText {
     consent::current(kind)
 }
 
+/// Printable consent form (PDF) with the current text, for signing on paper.
+#[tauri::command]
+fn consent_form_export(state: State<'_, AppState>, patient_id: String, kind: ConsentKind, path: String) -> CmdResult<()> {
+    state.with(|s| {
+        let patient = s.patient(&patient_id)?;
+        let guardians = s.list_episodes(&patient_id)?.iter().any(|e| e.age_group == AgeGroup::Kjp);
+        let text_of = |k: &str| s.setting(k).map(|v| v.and_then(|v| v.as_str().map(str::to_string)));
+        let text = consent::current(kind);
+        let form = render::ConsentForm::new(
+            &text,
+            &patient,
+            text_of("therapist_name")?,
+            text_of("practice_header")?,
+            guardians,
+            &thera_core::domain::now(),
+        );
+        std::fs::write(&path, render::consent_form_pdf(&form)?)?;
+        s.log_consent_form(&patient_id, kind, &text.version)
+    })
+}
+
 #[tauri::command]
 fn consents_list(state: State<'_, AppState>, patient_id: String) -> CmdResult<Vec<Consent>> {
     state.with(|s| s.list_consents(&patient_id))
@@ -1128,6 +1149,7 @@ pub fn run() {
             patient_update,
             patient_erase,
             consent_text,
+            consent_form_export,
             consents_list,
             consent_grant,
             consent_revoke,

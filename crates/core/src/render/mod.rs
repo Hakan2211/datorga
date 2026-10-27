@@ -15,6 +15,7 @@ use richtext::Block;
 
 const BERICHT_TYP: &str = include_str!("bericht.typ");
 const NOTFALL_TYP: &str = include_str!("notfall.typ");
+const EINWILLIGUNG_TYP: &str = include_str!("einwilligung.typ");
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RenderDoc {
@@ -149,6 +150,56 @@ impl RecoveryKit {
 
 pub fn recovery_kit_pdf(kit: &RecoveryKit) -> Result<Vec<u8>> {
     typst_pdf_from(NOTFALL_TYP, kit)
+}
+
+/// Paper consent form for the practice file: carries the patient's name (never sent to the
+/// Gutachter) and exactly the text version the app records when consent is entered.
+#[derive(Debug, Serialize)]
+pub struct ConsentForm {
+    pub title: String,
+    pub paragraphs: Vec<String>,
+    pub patient_name: String,
+    pub birth_date: Option<String>,
+    pub therapist: Option<String>,
+    pub practice: Option<String>,
+    /// Signature lines for Sorgeberechtigte (KJP).
+    pub guardians: bool,
+    pub version: String,
+    pub hash_short: String,
+    /// The text is still the unreviewed draft: the form says so.
+    pub draft: bool,
+    pub created: String,
+}
+
+impl ConsentForm {
+    pub fn new(
+        text: &crate::consent::ConsentText,
+        patient: &Patient,
+        therapist: Option<String>,
+        practice: Option<String>,
+        guardians: bool,
+        created_at: &str,
+    ) -> Self {
+        let mut parts = text.text.split("\n\n").map(|p| p.trim().replace('\n', " ")).filter(|p| !p.is_empty());
+        let title = parts.next().unwrap_or_default();
+        Self {
+            title,
+            paragraphs: parts.collect(),
+            patient_name: format!("{} {}", patient.first_name, patient.last_name),
+            birth_date: patient.birth_date.as_deref().map(german_date),
+            therapist: therapist.filter(|t| !t.trim().is_empty()),
+            practice: practice.filter(|p| !p.trim().is_empty()),
+            guardians,
+            version: text.version.clone(),
+            hash_short: text.hash.chars().take(16).collect(),
+            draft: text.version.contains("entwurf"),
+            created: german_datetime(created_at),
+        }
+    }
+}
+
+pub fn consent_form_pdf(form: &ConsentForm) -> Result<Vec<u8>> {
+    typst_pdf_from(EINWILLIGUNG_TYP, form)
 }
 
 fn typst_pdf_from(main: &str, data: &impl Serialize) -> Result<Vec<u8>> {
@@ -414,6 +465,38 @@ mod tests {
         if let Ok(dir) = std::env::var("THERA_RENDER_OUT") {
             std::fs::write(format!("{dir}/notfall-kit-test.pdf"), &pdf).unwrap();
         }
+    }
+
+    #[test]
+    fn consent_form_carries_text_version_and_guardian_lines() {
+        let text = crate::consent::current(ConsentKind::Recording);
+        let patient = Patient {
+            id: "p".into(),
+            external_ref: None,
+            first_name: "Anna".into(),
+            last_name: "Beispiel".into(),
+            birth_date: Some("2012-03-14".into()),
+            chiffre: None,
+            pronouns: None,
+            consent_recording: false,
+            status: "active".into(),
+            created_at: "2026-10-27T10:00:00Z".into(),
+            archived_at: None,
+        };
+        let form = ConsentForm::new(&text, &patient, Some("M. Muster".into()), Some("Praxis Muster".into()), true, "2026-10-27T13:05:00Z");
+        assert_eq!(form.title, "Einwilligung in die Tonaufnahme von Therapiesitzungen");
+        assert_eq!(form.paragraphs.len(), 4);
+        let joined = form.paragraphs.join("\n\n");
+        assert!(text.text.ends_with(&joined), "body is the recorded text, unchanged");
+        assert_eq!((form.patient_name.as_str(), form.birth_date.as_deref()), ("Anna Beispiel", Some("14.03.2012")));
+        assert!(form.draft && text.hash.starts_with(&form.hash_short));
+        let pdf = consent_form_pdf(&form).unwrap();
+        assert!(pdf.starts_with(b"%PDF"));
+        if let Ok(dir) = std::env::var("THERA_RENDER_OUT") {
+            std::fs::write(format!("{dir}/einwilligung-test.pdf"), &pdf).unwrap();
+        }
+        let adult = ConsentForm::new(&text, &patient, None, None, false, "2026-10-27T13:05:00Z");
+        assert!(consent_form_pdf(&adult).unwrap().starts_with(b"%PDF"));
     }
 
     #[test]

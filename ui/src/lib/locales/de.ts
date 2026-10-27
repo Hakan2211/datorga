@@ -141,6 +141,10 @@ export const de = {
     grantedAt: 'erteilt',
     revokedAt: 'widerrufen',
     version: 'Textversion',
+    printForm: 'Formular drucken (PDF)',
+    formSaved: 'Formular gespeichert. Ausdrucken, unterschreiben lassen und zur Akte nehmen.',
+    paperHint:
+      'Tipp: Unter „Formular drucken“ erhalten Sie diesen Text als Formular mit Unterschriftszeilen. Nach der Unterschrift hier erfassen.',
   },
   episodes: {
     title: 'Behandlungsfälle',

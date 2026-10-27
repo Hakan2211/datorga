@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Mic, MicOff, ShieldCheck } from 'lucide-react'
+import { save } from '@tauri-apps/plugin-dialog'
+import { Mic, MicOff, Printer, ShieldCheck } from 'lucide-react'
 import type { Consent } from '@/bindings/Consent'
 import { formatDate } from '@/components/bits'
 import {
@@ -40,6 +41,17 @@ export function ConsentCard({ patientId }: { patientId: string }) {
   const revoke = useMutation({
     mutationFn: (id: string) => api.revokeConsent(id),
     onSuccess: invalidate,
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+  const printForm = useMutation({
+    mutationFn: async () => {
+      // No patient name in the file name: the file may end up in a downloads folder.
+      const path = await save({ defaultPath: 'Einwilligung-Tonaufnahme.pdf', filters: [{ name: 'PDF', extensions: ['pdf'] }] })
+      if (!path) return false
+      await api.exportConsentForm(patientId, 'recording', path)
+      return true
+    },
+    onSuccess: (done) => done && toast.success(t('consent.formSaved')),
     onError: (e) => toast.error(errorMessage(e)),
   })
 
@@ -87,6 +99,9 @@ export function ConsentCard({ patientId }: { patientId: string }) {
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-sm text-muted-foreground">{active ? t('consent.activeHint') : t('consent.noneHint')}</p>
+        <Button size="sm" variant="outline" onClick={() => printForm.mutate()} disabled={printForm.isPending}>
+          <Printer /> {t('consent.printForm')}
+        </Button>
         {!!consents.data?.length && <ConsentHistory consents={consents.data} />}
       </CardContent>
     </Card>
@@ -154,6 +169,7 @@ function GrantConsentDialog({ patientId, onGranted }: { patientId: string; onGra
         <DialogHeader>
           <DialogTitle>{t('consent.grantTitle')}</DialogTitle>
         </DialogHeader>
+        <p className="text-sm text-muted-foreground">{t('consent.paperHint')}</p>
         <p className="text-sm text-muted-foreground">{t('consent.shown')}</p>
         <div className="max-h-80 space-y-3 overflow-y-auto rounded-md border bg-muted/30 p-4 text-sm">
           {text.data?.text.split('\n\n').map((para, i) => <p key={i}>{para}</p>)}

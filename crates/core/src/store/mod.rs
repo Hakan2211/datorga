@@ -95,6 +95,17 @@ impl Store {
         Ok(())
     }
 
+    /// The paper consent form was written for `patient_id` (ids and version only).
+    pub fn log_consent_form(&self, patient_id: &str, kind: ConsentKind, version: &str) -> Result<()> {
+        audit::append(&self.conn, Entry {
+            actor: ACTOR,
+            action: "consent.form_export",
+            entity_type: "patient",
+            entity_id: Some(patient_id),
+            meta: json!({ "kind": kind.as_str(), "version": version }),
+        })
+    }
+
     // ---------- backup ----------
 
     /// Consistent copy of the database into `path` (must not exist), keyed like this one.
