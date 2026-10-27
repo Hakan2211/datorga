@@ -155,7 +155,7 @@ Whisper (increment b) will need LLVM/clang.
 
 **Phase 2 slices:**
 - 11 LLM provider layer (done 2026-10-27).
-- 12 Local models: hardware probe, GGUF catalog + recommendation, download/import with SHA-256, `llama-server` sidecar, provider `local`.
+- 12 Local models: hardware probe, GGUF catalog + recommendation, download/import with SHA-256, `llama-server` sidecar, provider `local` (done 2026-10-27: llama.cpp b11932 Vulkan build; Mistral Small 3.2 24B / Qwen3 14B / Qwen3 8B experimental; server on 127.0.0.1 with a per-start key, killed with the app via a job object).
 - 13 Per-session fact extraction with citations to transcript segments, plus a redaction preview, producing a Sitzungsnotiz draft.
 - 14 Bericht drafting per section from confirmed facts (later plus style exemplars). Each report stores model/provider/prompt version/hash (PLAN §5).
 - 15 Eval set (synthetic German sessions → expected facts), `cargo run -p eval`.

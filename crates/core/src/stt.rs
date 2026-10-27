@@ -4,7 +4,7 @@
 //! it runs. Both live in a per-job work directory that is always removed afterwards, also on
 //! error or cancel. A crash can leave one behind: the caller wipes the whole work root on startup.
 
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,7 +12,6 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 
 use crate::audio::{self, AudioKey};
 use crate::{Error, Result};
@@ -29,15 +28,7 @@ pub struct Segment {
 
 // ---------- model catalog ----------
 
-/// A downloadable ggml model. Hashes are the SHA-256 of the file on Hugging Face.
-#[derive(Debug, Clone, Copy)]
-pub struct ModelInfo {
-    pub id: &'static str,
-    pub file: &'static str,
-    pub url: &'static str,
-    pub sha256: &'static str,
-    pub bytes: u64,
-}
+pub use crate::models::{sha256_file, ModelInfo};
 
 pub const DEFAULT_MODEL: &str = "large-v3-turbo-q5_0";
 
@@ -67,21 +58,6 @@ pub const MODELS: &[ModelInfo] = &[
 
 pub fn model(id: &str) -> Result<&'static ModelInfo> {
     MODELS.iter().find(|m| m.id == id).ok_or_else(|| Error::Invalid(format!("unknown model {id}")))
-}
-
-/// Streaming SHA-256 of a file (models are up to 1.6 GB).
-pub fn sha256_file(path: &Path) -> Result<String> {
-    let mut f = std::fs::File::open(path)?;
-    let mut h = Sha256::new();
-    let mut buf = vec![0u8; 1 << 20];
-    loop {
-        let n = f.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        h.update(&buf[..n]);
-    }
-    Ok(hex::encode(h.finalize()))
 }
 
 // ---------- sidecar ----------

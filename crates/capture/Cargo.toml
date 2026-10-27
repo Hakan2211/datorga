@@ -3,7 +3,7 @@ name = "thera-capture"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Microphone capture: cpal input, mono 16 kHz PCM, fixed-size chunks. No storage, no Tauri."
+description = "Microphone capture: cpal input, mono 16 kHz PCM, fixed-size chunks; OS helpers (disk, power, hardware, job objects). No storage, no Tauri."
 
 [dependencies]
 cpal = "0.18.2"

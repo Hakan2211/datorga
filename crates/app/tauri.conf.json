@@ -45,7 +45,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "whisper/*": "whisper/"
+      "whisper/*": "whisper/",
+      "llama/*": "llama/"
     }
   }
 }

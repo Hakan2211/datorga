@@ -29,6 +29,9 @@ import type { LlmConfig } from '@/bindings/LlmConfig'
 import type { ProviderId } from '@/bindings/ProviderId'
 import type { ProviderInfo } from '@/bindings/ProviderInfo'
 import type { RemoteModel } from '@/bindings/RemoteModel'
+import type { Fit } from '@/bindings/Fit'
+import type { Hardware } from '@/bindings/Hardware'
+import type { Recommendation } from '@/bindings/Recommendation'
 
 export type InitResult = {
   status: 'ready' | 'recovery_required' | 'new'
@@ -72,6 +75,24 @@ export type SttOverview = {
 
 export type LlmOverview = { config: LlmConfig; providers: (ProviderInfo & { has_key: boolean })[] }
 export type LlmTestResult = { model: string; latency_ms: number; answer: string }
+
+export type LocalModelView = {
+  id: string
+  label: string
+  bytes: number
+  fit: Fit
+  experimental: boolean
+  installed: boolean
+  transfer: Transfer | null
+}
+export type LocalOverview = {
+  engine: string | null
+  hardware: Hardware
+  recommendation: Recommendation
+  models: LocalModelView[]
+  loaded: string | null
+  loading: string | null
+}
 
 export const jobActive = (job: Job | null | undefined) => job?.status === 'queued' || job?.status === 'running'
 
@@ -151,6 +172,12 @@ export const api = {
   llmModels: (provider: ProviderId) => invoke<RemoteModel[]>('llm_models', { provider }),
   testLlm: (provider: ProviderId) => invoke<LlmTestResult>('llm_test', { provider }),
 
+  local: () => invoke<LocalOverview>('local_overview'),
+  downloadLocalModel: (id: string) => invoke<void>('local_model_download', { id }),
+  importLocalModel: (id: string, path: string) => invoke<void>('local_model_import', { id, path }),
+  deleteLocalModel: (id: string) => invoke<void>('local_model_delete', { id }),
+  unloadLocal: () => invoke<void>('local_unload'),
+
   templates: () => invoke<Template[]>('templates_list'),
 
   reports: (status?: ReportStatus) => invoke<ReportSummary[]>('reports_list', { status: status ?? null }),
@@ -199,6 +226,16 @@ export const q = {
         query.state.data?.models.some((m) => m.transfer && !m.transfer.error) ? 500 : false,
     }),
   llm: () => queryOptions({ queryKey: ['llm'], queryFn: api.llm }),
+  // Polled during a download/import and while a model loads (`busy`: a request may be loading one).
+  local: (busy = false) =>
+    queryOptions({
+      queryKey: ['local'],
+      queryFn: api.local,
+      refetchInterval: (query) =>
+        busy || query.state.data?.loading || query.state.data?.models.some((m) => m.transfer && !m.transfer.error)
+          ? 500
+          : false,
+    }),
   audioDevices: () => queryOptions({ queryKey: ['audioDevices'], queryFn: api.audioDevices }),
   // Polled for the timer and level meter; cheap (no DB access).
   recording: () =>

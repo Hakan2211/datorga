@@ -7,6 +7,8 @@ pub mod consent;
 pub mod crypto;
 pub mod domain;
 pub mod llm;
+pub mod local;
+pub mod models;
 pub mod pii;
 pub mod pseudo;
 pub mod render;

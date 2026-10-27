@@ -338,6 +338,41 @@ export const de = {
           'Requesty ist ein US-Unternehmen; der voreingestellte EU-Endpunkt verarbeitet in Frankfurt. Schalten Sie für den Schlüssel das Protokollieren von Anfragen ab und wählen Sie ein Modell mit EU-Region, sonst wird außerhalb der EU gerechnet.',
       },
     },
+    local: {
+      intro:
+        'Das Modell läuft auf diesem Computer: Texte verlassen ihn nicht. Beim Herunterladen wird nur das Modell geladen, es werden keine Patientendaten übertragen.',
+      machine: 'Dieser Computer',
+      ram: '{{gb}} GB Arbeitsspeicher',
+      gpu: '{{name}} ({{gb}} GB Grafikspeicher)',
+      threads: '{{count}} Prozessor-Threads',
+      recommended: 'Empfehlung für diesen Computer: {{model}}.',
+      recommendedBadge: 'Empfohlen',
+      noneFits:
+        'Für lokale Modelle reicht der Arbeitsspeicher dieses Computers nicht (mindestens 16 GB, empfohlen 32 GB). Nutzen Sie einen der anderen Anbieter.',
+      experimentalHint:
+        'Experimentell: Antworten kommen langsam, und die Entwürfe brauchen mehr Nacharbeit. Empfohlen sind 32 GB Arbeitsspeicher oder eine Grafikkarte mit genug eigenem Speicher.',
+      experimental: 'experimentell',
+      fit: {
+        gpu: 'läuft auf der Grafikkarte (schnell)',
+        partial: 'teils Grafikkarte, teils Prozessor',
+        cpu: 'nur Prozessor (langsam)',
+        too_big: 'zu groß für diesen Computer',
+      },
+      models: {
+        'mistral-small-3.2-24b':
+          'Von Mistral AI (Frankreich). Bestes Deutsch dieser Auswahl; braucht eine Grafikkarte mit mindestens 16 GB, auf dem Prozessor allein sehr langsam.',
+        'qwen3-14b': 'Von Alibaba (Qwen). Gutes Deutsch; mit 32 GB Arbeitsspeicher auch ohne Grafikkarte nutzbar.',
+        'qwen3-8b': 'Kleinere Variante für Computer mit 16 GB. Die Entwürfe brauchen deutlich mehr Nacharbeit.',
+      },
+      test: 'Modell laden und testen',
+      testing: 'Lädt und testet…',
+      testOk: 'Das lokale Modell antwortet ({{ms}} ms)',
+      loading: 'Modell wird geladen…',
+      loaded: 'Geladen: {{model}}. Nach 5 Minuten ohne Anfrage wird der Speicher wieder freigegeben.',
+      unload: 'Jetzt entladen',
+      engine: 'Programm: {{engine}}',
+      engineMissing: 'Der lokale KI-Server fehlt in dieser Installation.',
+    },
     stt: {
       title: 'Transkription (lokal)',
       intro:

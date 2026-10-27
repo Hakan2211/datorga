@@ -4,11 +4,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { open } from '@tauri-apps/plugin-dialog'
-import { AlertTriangle, CheckCircle2, DatabaseBackup, Download, FolderOpen, KeyRound, Lock, LockOpen, Trash2 } from 'lucide-react'
+import { AlertTriangle, DatabaseBackup, FolderOpen, KeyRound, Lock, LockOpen } from 'lucide-react'
 import { Page, PageHeader } from '@/components/app-shell'
 import { RecoveryKitPanel } from '@/components/recovery-kit'
 import { RestoreBackup } from '@/components/backup-restore'
 import { LlmCard } from '@/components/llm-settings'
+import { ModelRow } from '@/components/model-row'
 import { formatDate } from '@/components/bits'
 import { DEFAULT_REMINDER_DAYS } from '@/lib/backup'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -24,13 +25,12 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { api, errorMessage, q, type LastBackup, type SttOverview } from '@/lib/api'
+import { api, errorMessage, q, type LastBackup } from '@/lib/api'
 
 export const Route = createFileRoute('/settings')({ component: Settings })
 
@@ -285,7 +285,11 @@ function SttCard() {
           {data?.models.map((m) => (
             <ModelRow
               key={m.id}
-              model={m}
+              title={m.id}
+              bytes={m.bytes}
+              description={t(`settings.stt.models.${m.id}`)}
+              installed={m.installed}
+              transfer={m.transfer}
               active={data.active === m.id}
               busy={act.isPending}
               onUse={() => act.mutate(() => api.selectModel(m.id))}
@@ -303,85 +307,4 @@ function SttCard() {
       </CardContent>
     </Card>
   )
-}
-
-function ModelRow({
-  model,
-  active,
-  busy,
-  onUse,
-  onDownload,
-  onImport,
-  onDelete,
-}: {
-  model: SttOverview['models'][number]
-  active: boolean
-  busy: boolean
-  onUse: () => void
-  onDownload: () => void
-  onImport: () => void
-  onDelete: () => void
-}) {
-  const { t } = useTranslation()
-  const transfer = model.transfer
-  const moving = !!transfer && !transfer.error
-  const pct = transfer ? Math.floor((transfer.received / transfer.total) * 100) : 0
-  return (
-    <li className="space-y-2 p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-medium">{model.id}</span>
-        <span className="text-muted-foreground">{formatBytes(model.bytes)}</span>
-        {active && (
-          <Badge variant="secondary" className="bg-success/15 font-normal text-success">
-            {t('settings.stt.active')}
-          </Badge>
-        )}
-        {model.installed && (
-          <span className="flex items-center gap-1 text-success">
-            <CheckCircle2 className="size-3.5" /> {t('settings.stt.installed')}
-          </span>
-        )}
-        <span className="ml-auto flex gap-1">
-          {model.installed && !active && (
-            <Button size="sm" variant="outline" onClick={onUse} disabled={busy}>
-              {t('settings.stt.use')}
-            </Button>
-          )}
-          {!model.installed && !moving && (
-            <>
-              <Button size="sm" variant="outline" onClick={onDownload} disabled={busy}>
-                <Download /> {t('settings.stt.download')}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={onImport} disabled={busy}>
-                <FolderOpen /> {t('settings.stt.import')}
-              </Button>
-            </>
-          )}
-          {model.installed && (
-            <Button size="sm" variant="ghost" onClick={onDelete} disabled={busy} aria-label={t('settings.stt.delete')}>
-              <Trash2 />
-            </Button>
-          )}
-        </span>
-      </div>
-      <p className="text-muted-foreground">{t(`settings.stt.models.${model.id}`)}</p>
-      {moving && (
-        <div className="flex items-center gap-3">
-          <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
-            <div className="h-full bg-primary transition-[width]" style={{ width: `${pct}%` }} />
-          </div>
-          <span className="font-mono text-xs tabular-nums">{pct} %</span>
-        </div>
-      )}
-      {transfer?.error && (
-        <p className="text-destructive">
-          {t('settings.stt.failed')}: {transfer.error}
-        </p>
-      )}
-    </li>
-  )
-}
-
-function formatBytes(n: number): string {
-  return n >= 1e9 ? `${(n / 1e9).toFixed(1).replace('.', ',')} GB` : `${Math.round(n / 1e6)} MB`
 }

@@ -1,8 +1,8 @@
-# thera: session handoff (2026-10-27, Phase 2 started: slice 11 done)
+# thera: session handoff (2026-10-27, Phase 2: slices 11–12 done)
 
 Start a new session with: *"Read docs/HANDOFF.md and continue with the next step."*
 
-**State at end of session (2026-10-27):** Phase 1 is done (slices 1–10). Phase 2 has started. The user decided (PLAN-AMENDMENTS §9): OpenRouter/Requesty + own endpoint, chosen model, the therapist's own key, only pseudonymized text leaves the machine, local models with hardware-based recommendation; ChatGPT/OpenCode subscription deferred. **Slice 11 (LLM provider layer) is done** and verified in the real app against a mock endpoint. It isn't tested against a real OpenRouter/Requesty key yet (none on the dev box). Next step: **slice 12, local models** (see Next steps 12).
+**State at end of session (2026-10-27):** Phase 1 is done (slices 1–10). Phase 2 has started. The user decided (PLAN-AMENDMENTS §9): OpenRouter/Requesty + own endpoint, chosen model, the therapist's own key, only pseudonymized text leaves the machine, local models with hardware-based recommendation; ChatGPT/OpenCode subscription deferred. **Slice 11 (LLM provider layer) is done** and verified in the real app against a mock endpoint. It isn't tested against a real OpenRouter/Requesty key yet (none on the dev box). **Slice 12 (local models) is done** and verified with the real llama-server on the dev box GPU. Next step: **slice 13, fact extraction per session** (see Next steps 12).
 
 On the next start of the dev-box app you'll see **"Notfall-Kit fehlt"**: the DB predates the kit, so it was never confirmed. Create a new key there and save/print the kit.
 
@@ -227,13 +227,39 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
 - E2E harness note: sonner toasts are read with a MutationObserver that records every added `[data-sonner-toast]` (also inside newly mounted lists); reading the last visible toast picks up stale ones.
 - Not done: no drafting yet (no consumer of `chat` besides the test), no streaming, no real-provider test (needs the therapist's key).
 
+**Built (slice 12, 2026-10-27): local models (Phase 2)**
+- Sidecar: llama.cpp **b11932** Windows **Vulkan** x64 build, fetched by `scripts/fetch-llama.ps1` (pinned SHA-256) into `crates/app/llama/` (gitignored, `.gitkeep` tracked), bundled as resource folder `llama/*`. Only `llama-server.exe` + the DLLs it loads (~75 MB; `ggml-rpc.dll` left out because ggml loads every `ggml-*.dll` as a backend). Vulkan runs on NVIDIA/AMD/Intel GPUs and falls back to the CPU (`ggml-cpu-*.dll` picked at runtime); `-ngl auto` + `--fit on` (defaults) offload as many layers as fit in VRAM.
+- `core::models`: `ModelInfo` + `sha256_file` moved out of `stt` (re-exported there) and shared by both catalogs.
+- `core::local`:
+  - catalog, biggest first, Q4_K_M, HF URL + SHA-256 + size pinned: **Mistral Small 3.2 24B** (unsloth, 14.3 GB, `cpu_ok: false`), **Qwen3 14B** (official, 9.0 GB), **Qwen3 8B** (official, 5.0 GB, `experimental`). ctx 16k each; KV size per model in the catalog.
+  - `Hardware` (RAM, CPU threads, GPUs with dedicated VRAM), `fit()` → `gpu` | `partial` | `cpu` | `too_big` (6 GiB RAM headroom, 1 GiB VRAM margin, partial from 4 GiB VRAM), `recommend()`: the biggest model that fits the GPU entirely, else the biggest `cpu_ok` one that fits RAM; experimental below 30 GiB RAM unless on the GPU (A5) or for the 8B.
+  - `LlamaServer`: `spawn` on 127.0.0.1 with a free port and a new random API key per start (env `LLAMA_API_KEY`, inherited `LLAMA_*` vars removed), flags `--no-webui --no-slots --offline --cache-ram 0 --parallel 1 --sleep-idle-seconds 300` (+ `--reasoning-budget 0` for Qwen3's thinking mode); stderr drained into an 8-line in-memory tail (no log file); `wait_ready` polls `/health` (cancel, timeout, early exit → error with the log tail); `Drop` kills.
+- `llm`: provider `local` (no key, no base URL, not a US intermediary). `LlmConfig.providers.local.model` = catalog id. Requests go through the same `llm::chat` egress gate.
+- `thera_capture::system`: `system_info()` (RAM via `GlobalMemoryStatusEx`, GPUs via DXGI `EnumAdapters1`/`GetDesc1`, raw COM vtable FFI, software adapters skipped) and `ProcessJob` (job object with `KILL_ON_JOB_CLOSE`): sidecars assigned to it die with the app, also on a crash or hard kill. Plain kernel32/dxgi FFI, no new crate.
+- App:
+  - `local_endpoint` starts the server lazily on the first request (serialized by a start lock, load timeout 10 min, `exiting` cancels), reuses it while alive and the model matches. `llm_endpoint`/`llm_test` handle `local`; `llm_models` for `local` lists installed models without loading one.
+  - `llm_config_set` stops the server when the provider or local model changes. Window exit stops it; the job object covers crashes.
+  - commands `local_overview` (hardware, recommendation, models with fit/installed/transfer, `loaded`, `loading`, engine), `local_model_download/import/delete` (delete unloads first), `local_unload`.
+  - downloads/imports share `start_transfer` with the speech models, which now refuses when free space < size + 1 GB.
+  - debug-only `THERA_LLAMA_SERVER` points at another server exe (E2E with the fake).
+- UI: `components/model-row.tsx` (shared by speech and language models). Settings → KI-Entwürfe → "Lokales Modell (auf diesem Computer)": machine line, recommendation box, model rows with fit/recommended/experimental badges, "Modell laden und testen", loading/loaded status, "Jetzt entladen".
+- Tests: 117 core unit (+ catalog, recommendation table, fit levels, server args), `tests/llama_sidecar.rs` (4) against `thera-fake-llama` (start + readiness + chat + 401 without key + gone after drop; failed load shows the log; cancel and timeout kill; missing model refused), capture 8 (+ struct layouts vs. Windows headers, RAM probe, closing the job kills its child).
+- E2E in the real debug app (isolated data dir + keychain user `e2e-local`, removed afterwards):
+  - dev box detected as 32 GB · RTX 3090 Ti (24 GB) · UHD 770 · 20 threads → recommends Mistral Small 24B, all three "läuft auf der Grafikkarte"
+  - real HF download of Qwen3 8B (5 GB, hash-checked, 458 s at ~11 MB/s)
+  - with the fake server: test → "Geladen", unload → process gone, provider "Aus" → process gone, **hard kill of the app → server gone** (job object)
+  - with the **real llama-server**: load + answer in 4.7 s (answer itself 75 ms, so thinking is off), model fully on the GPU (~6.9 GB VRAM), listens on 127.0.0.1 only, `/v1/models` and `/slots` → 401 without the key, no web UI (404), unload and normal window close both stop it
+  - audit `llm.test` with provider `local`, no text
+- Not done: Mistral Small and Qwen3 14B were not downloaded or run (only their hashes are pinned); no CPU-only measurement; whisper-cli is not in the job object yet.
+
 ## Current limitations
 
 - ~~Database is unencrypted~~ Encrypted SQLCipher build is live (2026-10-27): Strawberry Perl, LLVM, CMake installed, `LIBCLANG_PATH` set. Old plain DB backed up to `%APPDATA%\de.datorga.thera.plain-backup-20261027` (delete once not needed). A10's technical gates (encryption, recovery kit, verified backup) are done. Before real patients: legal review of the consent text and a restore test on the therapist's own machine.
-- Recording/dictation and local transcription work. No diarization (session recordings are one speaker stream, role `unknown`). AI providers can be configured and tested, but nothing drafts with them yet.
+- Recording/dictation and local transcription work. No diarization (session recordings are one speaker stream, role `unknown`). AI providers (cloud and local) can be configured and tested, but nothing drafts with them yet.
 - The OpenRouter/Requesty paths are tested only against a mock. Before real use: one test with a real key, and check that the chosen model has a ZDR endpoint (OpenRouter) / an EU region with logging off (Requesty).
 - Transcription is **CPU only**. A 50-min session on a laptop CPU may take ~25–50 min (unmeasured on laptop hardware). The CUDA build is 285 MB+ and NVIDIA-only; Vulkan has no prebuilt Windows release (would need our own build). Decide once the therapist's laptop specs are known.
-- The sidecar reads a **plaintext WAV** from `stt-tmp` while it runs (deleted afterwards, wiped on next unlock after a crash). Possible hardening: whisper-cli `-f -` (stdin) + parsing stdout, or a Windows Job Object so a crashed app can't leave the sidecar running.
+- The sidecar reads a **plaintext WAV** from `stt-tmp` while it runs (deleted afterwards, wiped on next unlock after a crash). Possible hardening: whisper-cli `-f -` (stdin) + parsing stdout, and putting whisper-cli into the app's `ProcessJob` (llama-server already is) so a crashed app can't leave it running.
+- Local models: only Qwen3 8B was run, on a 24 GB GPU. CPU-only speed (the therapist's laptop may have no usable GPU) is unmeasured; a dense 14B on a laptop CPU is likely ~3–6 tokens/s. Local and transcription can run at the same time and compete for RAM. The server unloads the model after 5 idle minutes, so the next request pays the load time again.
 - There is no audio playback in the transcript viewer, so the therapist reviews text without hearing it.
 - The consent text is a **draft**: needs legal review before real patients. After any wording change, bump `RECORDING_VERSION` in `crates/core/src/consent.rs`.
 - The printable consent form carries the draft text (marked as such) until the legal review.
@@ -281,13 +307,8 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
    - the "Vorlagen" placeholder card stays until then
 12. **Phase 2** (decisions and slices: PLAN-AMENDMENTS §9):
    - ~~slice 11, LLM provider layer~~ **done**
-   - **NEXT → slice 12, local models:**
-     - hardware probe (total RAM via `GlobalMemoryStatusEx`, GPU name + VRAM via DXGI, CPU cores)
-     - a GGUF catalog (e.g. Qwen3 14B / Mistral Small 24B Q4_K_M for ≥32 GB, a 7–8B model as "experimental" at 16 GB; pin HF URLs + SHA-256 like `stt::MODELS`)
-     - a recommendation in Settings, with download/import reusing `start_transfer`
-     - a llama.cpp `llama-server` sidecar (fetch script with pinned hash like `fetch-whisper.ps1`, resource folder) started on 127.0.0.1 with a random port and stopped on exit
-     - provider `local` in `LlmConfig`, using the same `llm::chat`
-   - slice 13: fact extraction per session with segment citations + redaction preview → Sitzungsnotiz draft
+   - ~~slice 12, local models~~ **done** (hardware probe, GGUF catalog + recommendation, hash-checked download/import, llama-server sidecar in a kill-on-close job object, provider `local`)
+   - **NEXT → slice 13:** fact extraction per session with segment citations + redaction preview → Sitzungsnotiz draft. Works with any provider incl. `local`; long sessions need chunking for 16k context.
    - slice 14: Bericht drafting per section; store model/provider/prompt hash
    - slice 15: eval set
    - deferred: using a ChatGPT/OpenCode subscription (reasons in PLAN-AMENDMENTS §9). An endpoint with an API key already works as "Eigener Endpunkt".
@@ -295,7 +316,7 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
 
 - Exact **Chiffre** format (app suggests surname initial + DDMMYY).
 - 5–10 anonymized old Berichte and old Sitzungen + her style preferences (she brings them later and uploads them herself) (Phase 0 eval + first style exemplars).
-- Laptop specs (CPU, RAM, GPU) for local models (slice 12 will detect them in the app): decides turbo-q5_0 vs. small and CPU vs. GPU build. Which report kinds matter most.
+- Laptop specs (CPU, RAM, GPU): Settings → KI-Entwürfe → Lokales Modell now shows them and the recommended model. Decides turbo-q5_0 vs. small, CPU vs. GPU whisper build, and whether local drafting is usable. Which report kinds matter most.
 
 ## Handy commands
 
@@ -307,6 +328,7 @@ npm run typecheck && npm test         # UI checks
 cargo test -p thera-core              # also regenerates ui/src/bindings (ts-rs)
 cargo test -p thera-capture
 powershell -ExecutionPolicy Bypass -File scripts/fetch-whisper.ps1   # once per checkout: whisper.cpp sidecar
+powershell -ExecutionPolicy Bypass -File scripts/fetch-llama.ps1     # once per checkout: llama-server sidecar
 # real sidecar test (needs a model + 16 kHz mono WAV):
 THERA_WHISPER_CLI=crates/app/whisper/whisper-cli.exe THERA_WHISPER_MODEL=<ggml.bin> THERA_WHISPER_WAV=<wav>   cargo test -p thera-core --test stt_sidecar real_whisper -- --ignored --nocapture
 ```
@@ -320,3 +342,4 @@ Close the running thera window before `app:build` (it locks the exe).
 - Launch `target\debug\thera-app.exe` with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`. If the release app is open, also set `WEBVIEW2_USER_DATA_FOLDER` to a scratch dir, or the debug instance exits silently.
 - Drive it with `playwright-core` `connectOverCDP` (install it in a scratch dir; it's not in `ui/`).
 - Mics on the dev machine: the default "J5-AUDIO" is silent; use the "Scarlett 2i2".
+- Local models without the real server: `THERA_LLAMA_SERVER=target/debug/thera-fake-llama.exe` (built by `cargo test -p thera-core`). The fake loads in 0.5 s and echoes; model files only need the catalog size to count as installed.

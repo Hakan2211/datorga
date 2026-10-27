@@ -6,6 +6,7 @@
 //! Persistence and encryption are the sink's job (`thera_core::audio`).
 
 pub mod power;
+pub mod system;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc;

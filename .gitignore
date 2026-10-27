@@ -15,3 +15,7 @@ fixtures/
 # whisper.cpp sidecar, fetched by scripts/fetch-whisper.ps1
 /crates/app/whisper/*
 !/crates/app/whisper/.gitkeep
+
+# llama.cpp sidecar (llama-server), fetched by scripts/fetch-llama.ps1
+/crates/app/llama/*
+!/crates/app/llama/.gitkeep

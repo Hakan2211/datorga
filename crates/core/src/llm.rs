@@ -23,8 +23,11 @@ pub const CONFIG_SETTING: &str = "llm_config";
 pub enum ProviderId {
     Openrouter,
     Requesty,
-    /// Any other OpenAI-compatible endpoint (Mistral, a practice gateway, a local llama-server).
+    /// Any other OpenAI-compatible endpoint (Mistral, a practice gateway, a self-run server).
     Custom,
+    /// The bundled llama.cpp server with a downloaded model ([`crate::local`]). Nothing leaves
+    /// the machine. Its address and key are new on every start, so they aren't configured.
+    Local,
 }
 
 /// Fixed facts about a provider, shown in Settings.
@@ -68,6 +71,14 @@ pub fn providers() -> Vec<ProviderInfo> {
             us_intermediary: false,
             needs_key: false,
         },
+        ProviderInfo {
+            id: ProviderId::Local,
+            label: "Lokales Modell (auf diesem Computer)".into(),
+            default_base_url: String::new(),
+            key_url: None,
+            us_intermediary: false,
+            needs_key: false,
+        },
     ]
 }
 
@@ -75,7 +86,8 @@ pub fn provider(id: ProviderId) -> ProviderInfo {
     providers().into_iter().find(|p| p.id == id).expect("every ProviderId is listed")
 }
 
-/// Per-provider choices. The key is not here (keychain).
+/// Per-provider choices. The key is not here (keychain). For [`ProviderId::Local`], `model` is
+/// a [`crate::local::MODELS`] id.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ProviderSettings {

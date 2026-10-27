@@ -3,12 +3,13 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
 use thera_capture::power::{self, KeepAwake};
+use thera_capture::system::{self, ProcessJob};
 use thera_capture::{InputDevice, Recorder};
 use thera_core::audio::{self, ChunkWriter};
 use thera_core::backup::{self, BackupSummary, Unlocked};
@@ -16,6 +17,8 @@ use thera_core::consent::{self, ConsentText};
 use thera_core::crypto::{self, KeyStore, MasterKey, Unlock};
 use thera_core::domain::*;
 use thera_core::llm::{self, Endpoint, LlmConfig, ProviderId, ProviderInfo, RemoteModel};
+use thera_core::local::{self, Fit, Gpu, Hardware, LlamaServer, Recommendation};
+use thera_core::models::ModelInfo;
 use thera_core::pii::{self, CheckItem};
 use thera_core::render;
 use thera_core::store::Store;
@@ -75,7 +78,7 @@ fn kr(e: keyring::Error) -> thera_core::Error {
 struct AppState {
     data_dir: PathBuf,
     keyring_user: String,
-    /// Bundled resources; holds the whisper.cpp sidecar in `whisper/`.
+    /// Bundled resources: the whisper.cpp sidecar in `whisper/`, llama-server in `llama/`.
     resource_dir: PathBuf,
     store: Mutex<Option<Store>>,
     recording: Mutex<Option<ActiveRecording>>,
@@ -86,6 +89,14 @@ struct AppState {
     exiting: AtomicBool,
     /// Model downloads/imports in progress (or failed), by model id.
     model_transfers: Mutex<HashMap<String, Transfer>>,
+    /// Sidecars are assigned to it, so they die with the app, also on a crash.
+    job: Option<ProcessJob>,
+    /// The running local model server (provider `local`).
+    llama: Mutex<Option<LlamaServer>>,
+    /// Held while a server starts, so two requests don't load two models.
+    llama_start: Mutex<()>,
+    /// The model id being loaded right now, for the Settings status.
+    llama_loading: Mutex<Option<String>>,
 }
 
 struct RunningJob {
@@ -179,6 +190,25 @@ impl AppState {
     }
     fn whisper_dir(&self) -> PathBuf {
         self.resource_dir.join("whisper")
+    }
+    fn llama_dir(&self) -> PathBuf {
+        self.resource_dir.join("llama")
+    }
+    /// Debug builds take `THERA_LLAMA_SERVER` (E2E against the fake server).
+    fn llama_exe(&self) -> PathBuf {
+        #[cfg(debug_assertions)]
+        if let Some(exe) = std::env::var_os("THERA_LLAMA_SERVER") {
+            return exe.into();
+        }
+        self.llama_dir().join("llama-server.exe")
+    }
+    /// e.g. `llama.cpp-b11932`; `None` when llama-server is missing from this build.
+    fn llama_engine(&self) -> Option<String> {
+        if !self.llama_exe().exists() {
+            return None;
+        }
+        let version = std::fs::read_to_string(self.llama_dir().join("VERSION")).unwrap_or_default();
+        Some(format!("{}-{}", local::ENGINE, version.trim()))
     }
     /// e.g. `whisper.cpp-b5454`; `None` when the sidecar is missing from this build.
     fn engine(&self) -> Option<String> {
@@ -805,8 +835,7 @@ fn stt_overview(state: State<'_, AppState>) -> CmdResult<SttOverview> {
             id: m.id,
             file: m.file,
             bytes: m.bytes,
-            // Size only here; the full hash is checked once, when the file arrives.
-            installed: std::fs::metadata(state.models_dir().join(m.file)).is_ok_and(|md| md.len() == m.bytes),
+            installed: model_installed(&state, m),
             transfer: transfers.get(m.id).cloned(),
         })
         .collect();
@@ -821,8 +850,37 @@ fn stt_model_select(state: State<'_, AppState>, id: String) -> CmdResult<()> {
 
 #[tauri::command]
 fn stt_model_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
-    let m = stt::model(&id)?;
-    if lock(&state.model_transfers)?.get(&id).is_some_and(|t| t.error.is_none()) {
+    delete_model(&state, stt::model(&id)?)
+}
+
+#[tauri::command]
+fn stt_model_download(app: AppHandle, id: String) -> CmdResult<()> {
+    download_model(&app, *stt::model(&id)?)
+}
+
+#[tauri::command]
+fn stt_model_import(app: AppHandle, id: String, path: String) -> CmdResult<()> {
+    import_model(&app, *stt::model(&id)?, path)
+}
+
+/// Fetches a model file from Hugging Face. Only the model travels; no patient data is sent.
+fn download_model(app: &AppHandle, m: ModelInfo) -> CmdResult<()> {
+    start_transfer(app, m, Box::new(move || {
+        let resp = ureq::get(m.url).call().map_err(|e| format!("Download fehlgeschlagen: {e}"))?;
+        Ok(Box::new(resp.into_body().into_with_config().limit(m.bytes + 1).reader()) as Box<dyn std::io::Read>)
+    }))
+}
+
+/// Copies a model file the user already has (offline installs). It must match the catalog hash.
+fn import_model(app: &AppHandle, m: ModelInfo, path: String) -> CmdResult<()> {
+    start_transfer(app, m, Box::new(move || {
+        Ok(Box::new(std::fs::File::open(&path).map_err(|e| e.to_string())?) as Box<dyn std::io::Read>)
+    }))
+}
+
+/// Removes a model file unless it is being transferred.
+fn delete_model(state: &AppState, m: &ModelInfo) -> CmdResult<()> {
+    if lock(&state.model_transfers)?.get(m.id).is_some_and(|t| t.error.is_none()) {
         return Err(CmdError::Other("Das Modell wird gerade übertragen".into()));
     }
     match std::fs::remove_file(state.models_dir().join(m.file)) {
@@ -831,30 +889,24 @@ fn stt_model_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
     }
 }
 
-/// Fetches a model file from Hugging Face. Only the model travels; no patient data is sent.
-#[tauri::command]
-fn stt_model_download(app: AppHandle, id: String) -> CmdResult<()> {
-    let m = *stt::model(&id)?;
-    start_transfer(&app, m, Box::new(move || {
-        let resp = ureq::get(m.url).call().map_err(|e| format!("Download fehlgeschlagen: {e}"))?;
-        Ok(Box::new(resp.into_body().into_with_config().limit(m.bytes + 1).reader()) as Box<dyn std::io::Read>)
-    }))
-}
-
-/// Copies a model file the user already has (offline installs). It must match the catalog hash.
-#[tauri::command]
-fn stt_model_import(app: AppHandle, id: String, path: String) -> CmdResult<()> {
-    let m = *stt::model(&id)?;
-    start_transfer(&app, m, Box::new(move || {
-        Ok(Box::new(std::fs::File::open(&path).map_err(|e| e.to_string())?) as Box<dyn std::io::Read>)
-    }))
+/// Size only; the full hash is checked once, when the file arrives.
+fn model_installed(state: &AppState, m: &ModelInfo) -> bool {
+    std::fs::metadata(state.models_dir().join(m.file)).is_ok_and(|md| md.len() == m.bytes)
 }
 
 type OpenSource = Box<dyn FnOnce() -> Result<Box<dyn std::io::Read>, String> + Send>;
 
-/// Runs a download or import on its own thread; progress is read through `stt_overview`.
-fn start_transfer(app: &AppHandle, m: stt::ModelInfo, open: OpenSource) -> CmdResult<()> {
+/// Runs a download or import on its own thread; progress is read through `stt_overview` /
+/// `local_overview` (speech and language model ids don't overlap).
+fn start_transfer(app: &AppHandle, m: ModelInfo, open: OpenSource) -> CmdResult<()> {
     let state = app.state::<AppState>();
+    if let Some(free) = power::free_space(&state.models_dir()) {
+        let need = m.bytes + (1 << 30);
+        if free < need {
+            let gb = |b: u64| format!("{:.1}", b as f64 / 1e9).replace('.', ",");
+            return Err(CmdError::Other(format!("Nicht genug Speicherplatz: {} GB frei, {} GB nötig", gb(free), gb(need))));
+        }
+    }
     {
         let mut transfers = lock(&state.model_transfers)?;
         if transfers.get(m.id).is_some_and(|t| t.error.is_none()) {
@@ -882,7 +934,7 @@ fn start_transfer(app: &AppHandle, m: stt::ModelInfo, open: OpenSource) -> CmdRe
 }
 
 /// Streams into `<file>.part` while hashing, and renames only if the SHA-256 matches.
-fn transfer_model(state: &AppState, m: &stt::ModelInfo, open: OpenSource) -> Result<(), String> {
+fn transfer_model(state: &AppState, m: &ModelInfo, open: OpenSource) -> Result<(), String> {
     use std::io::{Read, Write};
     std::fs::create_dir_all(state.models_dir()).map_err(|e| e.to_string())?;
     let dest = state.models_dir().join(m.file);
@@ -1117,6 +1169,14 @@ fn llm_key(state: &AppState, id: ProviderId) -> CmdResult<Option<String>> {
 
 fn llm_endpoint(state: &AppState, id: ProviderId) -> CmdResult<(Endpoint, LlmConfig)> {
     let config = state.with(|s| s.llm_config())?;
+    if id == ProviderId::Local {
+        let model = config
+            .settings(id)
+            .model
+            .filter(|m| !m.is_empty())
+            .ok_or_else(|| CmdError::Other("Kein lokales Modell gewählt".into()))?;
+        return Ok((local_endpoint(state, &model)?, config));
+    }
     let api_key = llm_key(state, id)?;
     if llm::provider(id).needs_key && api_key.is_none() {
         return Err(CmdError::Other("Kein API-Schlüssel hinterlegt".into()));
@@ -1153,7 +1213,14 @@ fn llm_overview(state: State<'_, AppState>) -> CmdResult<LlmOverview> {
 
 #[tauri::command]
 fn llm_config_set(state: State<'_, AppState>, config: LlmConfig) -> CmdResult<()> {
-    state.with(|s| s.set_llm_config(&config))
+    state.with(|s| s.set_llm_config(&config))?;
+    // Switching away from a loaded local model frees its memory right away.
+    let wanted = (config.active == Some(ProviderId::Local)).then(|| config.settings(ProviderId::Local).model).flatten();
+    let mut slot = lock(&state.llama)?;
+    if slot.as_ref().is_some_and(|s| Some(s.model_id) != wanted.as_deref()) {
+        *slot = None;
+    }
+    Ok(())
 }
 
 /// Stores (or with `None`/empty removes) a provider's API key in the OS keychain.
@@ -1173,6 +1240,14 @@ fn llm_key_set(state: State<'_, AppState>, provider: ProviderId, key: Option<Str
 #[tauri::command]
 async fn llm_models(app: AppHandle, provider: ProviderId) -> CmdResult<Vec<RemoteModel>> {
     blocking(app, move |state| {
+        if provider == ProviderId::Local {
+            // The installed catalog models; listing them must not load one.
+            return Ok(local::MODELS
+                .iter()
+                .filter(|m| model_installed(state, &m.file))
+                .map(|m| RemoteModel { id: m.file.id.into(), name: Some(m.label.into()), context_length: Some(m.ctx) })
+                .collect());
+        }
         let (ep, _) = llm_endpoint(state, provider)?;
         Ok(llm::list_models(&ep)?)
     })
@@ -1198,6 +1273,138 @@ async fn llm_test(app: AppHandle, provider: ProviderId) -> CmdResult<LlmTestResu
         Ok(LlmTestResult { model: c.model, latency_ms: c.latency_ms, answer: c.text.chars().take(200).collect() })
     })
     .await
+}
+
+// ---------- local models (Phase 2) ----------
+
+/// Loading 15 GB from a slow disk can take minutes.
+const LOCAL_LOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Endpoint of the local server for `model_id`, starting it and loading the model if needed.
+fn local_endpoint(state: &AppState, model_id: &str) -> CmdResult<Endpoint> {
+    let m = local::model(model_id)?;
+    let _starting = lock(&state.llama_start)?;
+    {
+        let mut slot = lock(&state.llama)?;
+        if let Some(server) = slot.as_mut().filter(|s| s.model_id == m.file.id) {
+            if server.alive() {
+                return Ok(server.endpoint());
+            }
+        }
+        *slot = None;
+    }
+    let exe = state.llama_exe();
+    if !exe.exists() {
+        return Err(CmdError::Other("Der lokale KI-Server fehlt in dieser Installation".into()));
+    }
+    if !model_installed(state, &m.file) {
+        return Err(CmdError::Other("Das Modell ist nicht installiert (Einstellungen → KI-Entwürfe)".into()));
+    }
+    *lock(&state.llama_loading)? = Some(m.file.id.to_string());
+    let started = (|| {
+        let mut server = LlamaServer::spawn(&exe, &state.models_dir().join(m.file.file), m)?;
+        if let Some(job) = &state.job {
+            job.assign(server.child());
+        }
+        server.wait_ready(LOCAL_LOAD_TIMEOUT, &state.exiting)?;
+        Ok::<_, thera_core::Error>(server)
+    })();
+    *lock(&state.llama_loading)? = None;
+    let server = started?;
+    let ep = server.endpoint();
+    *lock(&state.llama)? = Some(server);
+    Ok(ep)
+}
+
+fn hardware() -> &'static Hardware {
+    static HW: OnceLock<Hardware> = OnceLock::new();
+    HW.get_or_init(|| {
+        let info = system::system_info();
+        Hardware {
+            ram_bytes: info.ram_bytes,
+            cpu_threads: info.cpu_threads,
+            gpus: info.gpus.into_iter().map(|(name, vram_bytes)| Gpu { name, vram_bytes }).collect(),
+        }
+    })
+}
+
+#[derive(Serialize)]
+struct LocalModelView {
+    id: &'static str,
+    label: &'static str,
+    bytes: u64,
+    fit: Fit,
+    experimental: bool,
+    installed: bool,
+    transfer: Option<Transfer>,
+}
+
+#[derive(Serialize)]
+struct LocalOverview {
+    /// `None`: llama-server is missing from this build.
+    engine: Option<String>,
+    hardware: Hardware,
+    recommendation: Recommendation,
+    models: Vec<LocalModelView>,
+    /// The model the server holds (it unloads it after a few idle minutes on its own).
+    loaded: Option<String>,
+    loading: Option<String>,
+}
+
+#[tauri::command]
+fn local_overview(state: State<'_, AppState>) -> CmdResult<LocalOverview> {
+    let hw = hardware();
+    let transfers = lock(&state.model_transfers)?.clone();
+    let models = local::MODELS
+        .iter()
+        .map(|m| LocalModelView {
+            id: m.file.id,
+            label: m.label,
+            bytes: m.file.bytes,
+            fit: local::fit(hw, m),
+            experimental: m.experimental,
+            installed: model_installed(&state, &m.file),
+            transfer: transfers.get(m.file.id).cloned(),
+        })
+        .collect();
+    let loaded = lock(&state.llama)?.as_mut().and_then(|s| s.alive().then(|| s.model_id.to_string()));
+    Ok(LocalOverview {
+        engine: state.llama_engine(),
+        hardware: hw.clone(),
+        recommendation: local::recommend(hw),
+        models,
+        loaded,
+        loading: lock(&state.llama_loading)?.clone(),
+    })
+}
+
+#[tauri::command]
+fn local_model_download(app: AppHandle, id: String) -> CmdResult<()> {
+    download_model(&app, local::model(&id)?.file)
+}
+
+#[tauri::command]
+fn local_model_import(app: AppHandle, id: String, path: String) -> CmdResult<()> {
+    import_model(&app, local::model(&id)?.file, path)
+}
+
+#[tauri::command]
+fn local_model_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    let m = local::model(&id)?;
+    {
+        let mut slot = lock(&state.llama)?;
+        if slot.as_ref().is_some_and(|s| s.model_id == m.file.id) {
+            *slot = None;
+        }
+    }
+    delete_model(&state, &m.file)
+}
+
+/// Stops the server and frees the model's memory; the next request loads it again.
+#[tauri::command]
+fn local_unload(state: State<'_, AppState>) -> CmdResult<()> {
+    *lock(&state.llama)? = None;
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1231,6 +1438,10 @@ pub fn run() {
                 transcribing: Mutex::new(None),
                 exiting: AtomicBool::new(false),
                 model_transfers: Mutex::new(HashMap::new()),
+                job: ProcessJob::new(),
+                llama: Mutex::new(None),
+                llama_start: Mutex::new(()),
+                llama_loading: Mutex::new(None),
             });
             let handle = app.handle().clone();
             std::thread::spawn(move || stt_worker(handle));
@@ -1294,6 +1505,11 @@ pub fn run() {
             llm_key_set,
             llm_models,
             llm_test,
+            local_overview,
+            local_model_download,
+            local_model_import,
+            local_model_delete,
+            local_unload,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -1304,6 +1520,10 @@ pub fn run() {
                 let _ = stop_recording(&state, "stopped");
                 // Kill a running sidecar and give the worker a moment to delete its plaintext WAV.
                 state.exiting.store(true, Ordering::Relaxed);
+                // Stops the local model server; a load in progress sees `exiting` and stops too.
+                if let Ok(mut llama) = state.llama.lock() {
+                    *llama = None;
+                }
                 let cancel = state.transcribing.lock().ok().and_then(|g| g.as_ref().map(|r| r.cancel.clone()));
                 if let Some(cancel) = cancel {
                     cancel.store(true, Ordering::Relaxed);
