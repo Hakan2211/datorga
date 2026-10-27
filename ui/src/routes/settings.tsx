@@ -9,6 +9,8 @@ import { Page, PageHeader } from '@/components/app-shell'
 import { RecoveryKitPanel } from '@/components/recovery-kit'
 import { RestoreBackup } from '@/components/backup-restore'
 import { formatDate } from '@/components/bits'
+import { DEFAULT_REMINDER_DAYS } from '@/lib/backup'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -79,6 +81,12 @@ function BackupCard() {
   const qc = useQueryClient()
   const dir = useQuery(q.setting<string>('backup_dir'))
   const last = useQuery(q.setting<LastBackup>('last_backup'))
+  const reminder = useQuery(q.setting<number>('backup_reminder_days'))
+  const setReminder = useMutation({
+    mutationFn: (days: number) => api.setSetting('backup_reminder_days', days),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['setting', 'backup_reminder_days'] }),
+    onError: (e) => toast.error(errorMessage(e)),
+  })
   const choose = useMutation({
     mutationFn: async () => {
       const picked = await open({ directory: true, multiple: false })
@@ -124,6 +132,24 @@ function BackupCard() {
               ? t('backup.last', { date: formatDate(last.data.at, true), file: last.data.file })
               : t('backup.never')}
           </span>
+        </div>
+        <div className="flex items-center gap-3">
+          <Label htmlFor="backup-reminder">{t('backup.reminder')}</Label>
+          <Select
+            value={String(reminder.data ?? DEFAULT_REMINDER_DAYS)}
+            onValueChange={(v) => setReminder.mutate(Number(v))}
+          >
+            <SelectTrigger id="backup-reminder" className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {[1, 3, 7, 14, 30, 0].map((d) => (
+                <SelectItem key={d} value={String(d)}>
+                  {d === 0 ? t('backup.reminderOff') : t('backup.reminderEvery', { count: d })}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <div className="space-y-2 border-t pt-4">
           <p className="text-muted-foreground">{t('backup.restoreIntro')}</p>

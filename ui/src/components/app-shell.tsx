@@ -16,6 +16,7 @@ import {
   Users,
 } from 'lucide-react'
 import { api, q } from '@/lib/api'
+import { BackupReminder } from '@/components/backup-reminder'
 import { cn } from '@/lib/utils'
 
 // Module registry: each module contributes a nav entry. Later modules are listed but disabled.
@@ -100,7 +101,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </div>
       </aside>
-      <main className="flex-1 overflow-y-auto">{children}</main>
+      <main className="flex-1 overflow-y-auto">
+        <BackupReminder />
+        {children}
+      </main>
     </div>
   )
 }

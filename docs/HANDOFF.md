@@ -1,8 +1,8 @@
-# thera: session handoff (2026-10-27, after the printable consent form)
+# thera: session handoff (2026-10-27, Phase 1 done; Phase 2 next)
 
 Start a new session with: *"Read docs/HANDOFF.md and continue with the next step."*
 
-**State at end of session (2026-10-27):** the printable consent form (slice 9) is done, tested, committed and pushed to `main`. The release app (desktop shortcut) and installers were rebuilt from it. The user asked to work through the remaining steps one by one until Phase 2. Next step: **backup reminder** (see Next steps 10).
+**State at end of session (2026-10-27):** slices 5–10 (Notfall-Kit, backup + restore, capture guards, Nachtrag export hint, consent form, backup reminder) are done, tested, committed and pushed to `main`. The release app (desktop shortcut) and installers were rebuilt from it. The user asked to work through the remaining steps one by one until Phase 2; that point is reached (the Vorlagen module stays deferred until the therapist hands over material). Next step: **Phase 2**, which needs decisions from the user first (see Next steps 12).
 
 On the next start of the dev-box app you'll see **"Notfall-Kit fehlt"**: the DB predates the kit, so it was never confirmed. Create a new key there and save/print the kit.
 
@@ -186,6 +186,17 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
 - UI: "Formular drucken (PDF)" on the consent card (file name `Einwilligung-Tonaufnahme.pdf`, no patient name in the file name); the grant dialog suggests printing, signing, then recording the consent.
 - Tests: 99 core (+ form: title/paragraphs equal the recorded text, German birth date, draft flag, hash prefix, PDF with and without guardian lines). E2E in the real app: KJP patient → PDF with guardian lines and birth date; adult → none; draft box, practice and therapist printed; audit entries carry only kind/version; grant dialog shows the hint.
 
+**Built (slice 10, 2026-10-27): backup reminder**
+- `ui/src/lib/backup.ts` `backupDue(last, days, hasData, now)`: no reminder without patients or when off (0); `null` = never backed up; else the age in days once it reaches the interval. Vitest covers it (3 tests).
+- `components/backup-reminder.tsx`: banner at the top of every page (`role="status"`). "Jetzt sichern" runs the backup when a folder is set, otherwise "Sicherung einrichten" links to Settings. "Später" hides it until the next start.
+- Settings → Datensicherung: "Erinnern, wenn die letzte Sicherung älter ist als" 1/3/7/14/30 days or "nie erinnern" (setting `backup_reminder_days`, default 7).
+- E2E in the real app (fresh data dir):
+  - no patients → no banner
+  - patient → "noch keine Datensicherung" with "Sicherung einrichten"
+  - folder set → "Jetzt sichern" → backup → banner gone
+  - backup 8 days old → "8 Tage alt"; "Später" hides it across pages
+  - reminder off → gone
+
 ## Current limitations
 
 - ~~Database is unencrypted~~ Encrypted SQLCipher build is live (2026-10-27): Strawberry Perl, LLVM, CMake installed, `LIBCLANG_PATH` set. Old plain DB backed up to `%APPDATA%\de.datorga.thera.plain-backup-20261027` (delete once not needed). A10's technical gates (encryption, recovery kit, verified backup) are done. Before real patients: legal review of the consent text and a restore test on the therapist's own machine.
@@ -196,7 +207,7 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
 - The consent text is a **draft**: needs legal review before real patients. After any wording change, bump `RECORDING_VERSION` in `crates/core/src/consent.rs`.
 - The printable consent form carries the draft text (marked as such) until the legal review.
 - Closing the laptop lid during a recording still sleeps if Windows is configured to. What the audio stream does after resume is untested.
-- Backups are manual (no schedule, no reminder yet) and always full. `last_backup` is the only "how old is my backup" signal.
+- Backups are manual (reminder banner, no automatic schedule) and always full.
 - Vorlagen upload is a placeholder card.
 - Sitzungsnotiz: no AI drafting (Phase 2: fact extraction from `source_segments`). A note exported before a Nachtrag lacks it until exported again (now flagged "neu exportieren"). Partial insert works within one segment only, not across segments.
 
@@ -232,12 +243,12 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
 7. ~~**Capture guards**~~ **done** (slice 7): disk-space check before and during a recording (warn early, stop cleanly before the disk is full), and keep the laptop awake while recording (Windows `SetThreadExecutionState`).
 8. ~~**Nachtrag export hint**~~ **done** (slice 8): mark a note whose newest Nachtrag is newer than its last export ("neu exportieren").
 9. ~~**Printable consent form**~~ **done** (slice 9): PDF of the current recording-consent text (version + hash) with signature lines, from the patient's consent card.
-10. **NEXT → Backup reminder:** a hint in the app when the last backup is older than N days (schedule later).
+10. ~~**Backup reminder**~~ **done** (slice 10): a hint in the app when the last backup is older than N days (schedule later).
 11. **Vorlagen module: deferred** until the therapist hands over material. She will supply old **Sitzungen and Berichte** later, and she must be able to **upload them herself in the app** (no developer-side import):
    - upload old Berichte, old session notes and her forms (PDF/DOCX → text)
    - redaction review (pseudonymizer `detect()` spans), stored as style exemplars
    - the "Vorlagen" placeholder card stays until then
-12. **Phase 2:** LLM adapter (OpenAI-compatible, EU default, US-intermediary warning), per-session fact extraction with citations, Bericht drafting from facts + style exemplars, eval set.
+12. **NEXT → Phase 2.** Decisions needed from the user before coding: which LLM provider/endpoint (EU-hosted default per plan, OpenAI-compatible API), who holds the API key (therapist's own key in Settings vs. a practice account), and whether drafts may leave the machine at all for the pilot (pseudonymized via `core::pseudo`, fail-closed). Then: LLM adapter (OpenAI-compatible, EU default, US-intermediary warning), per-session fact extraction with citations, Bericht drafting from facts + style exemplars, eval set.
 
 ## Open questions for the therapist
 
