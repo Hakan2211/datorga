@@ -14,6 +14,7 @@ use crate::{Error, Result};
 use richtext::Block;
 
 const BERICHT_TYP: &str = include_str!("bericht.typ");
+const NOTFALL_TYP: &str = include_str!("notfall.typ");
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RenderDoc {
@@ -111,12 +112,52 @@ pub fn build_doc(
 }
 
 pub fn pdf(doc: &RenderDoc) -> Result<Vec<u8>> {
+    typst_pdf_from(BERICHT_TYP, doc)
+}
+
+/// The printable "Notfall-Kit". Holds the recovery key in clear text: written only where the
+/// therapist chooses, never logged.
+#[derive(Serialize)]
+pub struct RecoveryKit {
+    /// The 16 groups of [`crate::crypto::RecoveryKey::display`].
+    pub groups: Vec<String>,
+    /// German date, e.g. "27.10.2026, 14:05".
+    pub created: String,
+    pub reason: String,
+    pub device: String,
+    pub app_version: String,
+    pub data_dir: String,
+}
+
+impl RecoveryKit {
+    /// `created_at` is RFC 3339 (UTC); `rotated` = replaces an earlier key.
+    pub fn new(key: &crate::crypto::RecoveryKey, created_at: &str, rotated: bool, device: String, app_version: String, data_dir: String) -> Self {
+        Self {
+            groups: key.display().split('-').map(str::to_string).collect(),
+            created: german_datetime(created_at),
+            reason: if rotated {
+                "Neuer Schlüssel; alle früheren Notfall-Kits sind ungültig".into()
+            } else {
+                "Ersteinrichtung".into()
+            },
+            device,
+            app_version,
+            data_dir,
+        }
+    }
+}
+
+pub fn recovery_kit_pdf(kit: &RecoveryKit) -> Result<Vec<u8>> {
+    typst_pdf_from(NOTFALL_TYP, kit)
+}
+
+fn typst_pdf_from(main: &str, data: &impl Serialize) -> Result<Vec<u8>> {
     let engine = TypstEngine::builder()
-        .main_file(BERICHT_TYP)
+        .main_file(main)
         .search_fonts_with(TypstKitFontOptions::default().include_system_fonts(false).include_embedded_fonts(true))
         .build();
     let mut input = Dict::new();
-    input.insert("data".into(), serde_json::to_string(doc)?.into_value());
+    input.insert("data".into(), serde_json::to_string(data)?.into_value());
     let compiled = engine
         .compile_with_input(input)
         .output
@@ -348,6 +389,20 @@ mod tests {
         assert!(serde_json::to_string(&doc.addenda).unwrap().contains("Dienstag"));
         assert!(pdf(&doc).unwrap().starts_with(b"%PDF"));
         assert!(docx(&doc).unwrap().starts_with(b"PK"));
+    }
+
+    #[test]
+    fn recovery_kit_pdf_renders_key_groups() {
+        let key = crate::crypto::RecoveryKey::generate().unwrap();
+        let kit = RecoveryKit::new(&key, "2026-10-27T13:05:00Z", true, "PRAXIS-PC".into(), "0.1.0".into(), "C:/Users/x/AppData/Roaming/de.datorga.thera".into());
+        assert_eq!(kit.groups.len(), 16);
+        assert_eq!(kit.groups.join("-"), key.display());
+        assert_eq!(kit.created, "27.10.2026, 14:05");
+        let pdf = recovery_kit_pdf(&kit).unwrap();
+        assert!(pdf.starts_with(b"%PDF"));
+        if let Ok(dir) = std::env::var("THERA_RENDER_OUT") {
+            std::fs::write(format!("{dir}/notfall-kit-test.pdf"), &pdf).unwrap();
+        }
     }
 
     #[test]

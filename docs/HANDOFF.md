@@ -1,8 +1,10 @@
-# thera: session handoff (2026-10-27, after slice 4 + follow-ups)
+# thera: session handoff (2026-10-27, after the Recovery-kit PDF)
 
 Start a new session with: *"Read docs/HANDOFF.md and continue with the next step."*
 
-**State at end of session (2026-10-27):** everything is committed and pushed to `main`. The release app (desktop shortcut) and installers were rebuilt from `4ffeb59` (later commits are docs only). Next step: **Recovery-kit PDF** (see Next steps 5).
+**State at end of session (2026-10-27):** the Recovery-kit work (slice 5) is done, tested, committed and pushed to `main`. The release app (desktop shortcut) and installers were rebuilt from it. Next step: **encrypted backup + restore** (see Next steps 6), the last A10 gate before real patient data.
+
+On the next start of the dev-box app you'll see **"Notfall-Kit fehlt"**: the DB predates the kit, so it was never confirmed. Create a new key there and save/print the kit.
 
 Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Test") and two Nachträge. Nachträge can't be deleted; only erasing the test patient removes them. The 12:03 session's two recordings belong to the user and are untranscribed: don't confirm transcripts there (that deletes the audio).
 
@@ -87,9 +89,38 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
 - Transcript picker: text selected inside one segment turns its button into "Markierten Text einfügen" and inserts only that part.
 - Tests: 87 core. E2E in the real app: TTS dictation came back as one long segment, partial selection inserted only the selected words, sign, two Nachträge (form clears, headings with time and signer, DB seq 1/2, audit text-free), PDF shows original + signature + both Nachträge.
 
+**Built (slice 5, 2026-10-27): Recovery-kit PDF ("Notfall-Kit", C5)**
+- `core::crypto`: `rewrap(key, path)` issues a new `RecoveryKey` and replaces `master.wrapped` atomically (temp + fsync + rename; first run uses the same writer now). `check_recovery(path, key)` parses the key and verifies that it opens `master.wrapped`.
+- `core::render`: `RecoveryKit` + `recovery_kit_pdf()` (Typst, `render/notfall.typ`, shares the engine with `pdf()` via `typst_pdf_from`). The one-page A4 kit holds:
+  - the key in 16 groups (DejaVu Sans Mono)
+  - date/time (German local), reason (Ersteinrichtung / Neuer Schlüssel), computer name, app version, data folder, and a blank line for "Aufbewahrungsort"
+  - when it is needed, how to restore, and the warnings (key + data folder = full access; no photos/cloud/e-mail; delete the PDF after printing; old kits stop working after rotation)
+  - no QR code (Typst packages would need network)
+- Store:
+  - `rotate_recovery_key` writes audit `recovery_key.rotate` in the same transaction as the file swap. A failed swap leaves no event. A failed commit is recoverable, because the keychain still has the master key, so rotating again works.
+  - setting `recovery_kit_confirmed`: absent = unconfirmed; rotation sets it to false.
+  - `confirm_recovery_kit` (audit `recovery_kit.confirm`) and `log_recovery_kit_export` (audit `recovery_kit.export {first_run}`).
+  - No key material in any audit event (tested).
+- App:
+  - `recovery_kit_export(recovery_key, rotated, path)` refuses a key that doesn't open `master.wrapped`.
+  - `recovery_key_rotate` loads the master key from the keychain and returns the new key once.
+  - `recovery_kit_confirm`.
+  - `app_init` returns `recovery_confirmed`.
+  - **Debug-only** isolation: `THERA_DATA_DIR` and `THERA_KEYRING_USER` override the data dir and keychain user (`cfg(debug_assertions)`, ignored in release).
+- UI: `components/recovery-kit.tsx` (`RecoveryKitPanel`) shows the key groups, "Notfall-Kit als PDF speichern" (save dialog) and the confirm checkbox; continuing persists the confirmation. It's used in three places:
+  - the first-run screen
+  - the new **"Notfall-Kit fehlt"** gate in `unlock-gate.tsx`: an unconfirmed key (window reload or crash before confirming, or an old install) forces a new key at the next start
+  - Settings → Sicherheit → "Neuen Notfall-Schlüssel erstellen": a confirm dialog explains that old kits stop working, then a dialog that won't close until the confirmed "Fertig"
+- Tests: 91 core (+ rewrap/old key dead/typed-key parsing, rotation audit without key, failed rotation without event, kit PDF render). E2E in the real debug app (isolated data dir + `e2e-master-key` keychain entry, real entry untouched):
+  - first-run screen: continue blocked until the checkbox is ticked
+  - reload during first run → "Notfall-Kit fehlt" → new key → kit PDF saved (key in the PDF = key on screen)
+  - Settings rotation: Esc and outside click don't close the dialog; kit saved; audit chain intact
+  - keychain entry deleted → "Wiederherstellung erforderlich": the old key is rejected; the new key, typed in lower case with spaces, opens the DB
+- E2E trick: the native save dialog can't be driven over CDP, and overriding `__TAURI_INTERNALS__.invoke` doesn't take. Use `page.route(/ipc\.localhost\/plugin%3Adialog%7Csave/, …)` and fulfill it with a JSON path (header `Tauri-Response: ok`).
+
 ## Current limitations
 
-- ~~Database is unencrypted~~ Encrypted SQLCipher build is live (2026-10-27): Strawberry Perl, LLVM, CMake installed, `LIBCLANG_PATH` set. Old plain DB backed up to `%APPDATA%\de.datorga.thera.plain-backup-20261027` (delete once not needed). Still: fake patients only until the recovery-kit PDF exists.
+- ~~Database is unencrypted~~ Encrypted SQLCipher build is live (2026-10-27): Strawberry Perl, LLVM, CMake installed, `LIBCLANG_PATH` set. Old plain DB backed up to `%APPDATA%\de.datorga.thera.plain-backup-20261027` (delete once not needed). The recovery kit exists now; still fake patients only until backup + restore is verified (A10).
 - Recording/dictation and local transcription work. No diarization (session recordings are one speaker stream, role `unknown`) and no AI drafting yet.
 - Transcription is **CPU only**. A 50-min session on a laptop CPU may take ~25–50 min (unmeasured on laptop hardware). The CUDA build is 285 MB+ and NVIDIA-only; Vulkan has no prebuilt Windows release (would need our own build). Decide once the therapist's laptop specs are known.
 - The sidecar reads a **plaintext WAV** from `stt-tmp` while it runs (deleted afterwards, wiped on next unlock after a crash). Possible hardening: whisper-cli `-f -` (stdin) + parsing stdout, or a Windows Job Object so a crashed app can't leave the sidecar running.
@@ -113,19 +144,26 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
    - open: disk-space guard + keep-awake for capture; GPU decision; optional audio playback in the viewer; diarization for session recordings (PLAN §4.3)
 3. ~~**Sitzungsnotiz** form per session~~ **done** (slice 4).
 4. ~~**Sitzungsnotiz follow-ups**~~ **done**: Nachtrag, sidebar highlight, partial transcript insert.
-5. **NEXT → Recovery-kit PDF** ("Notfall-Kit", PLAN-AMENDMENTS C5; gate for real patient data, A10). What exists:
+5. ~~**Recovery-kit PDF**~~ **done** (slice 5). The original brief follows for reference.
+   Brief ("Notfall-Kit", PLAN-AMENDMENTS C5; gate for real patient data, A10). What exists:
    - `crates/core/src/crypto.rs`: `RecoveryKey` (`generate`/`display`/`parse`), `wrap`/`unwrap` (AES-GCM), `unlock_or_init` writes `master.wrapped` on first run and returns `Unlock::Created { recovery }`; `recover()` restores the keychain entry.
    - `crates/app/src/lib.rs`: `app_init` returns `recovery_key` **once** (first run only), `app_recover` takes it back. The UI shows it in `components/unlock-gate.tsx`. The key is never stored, so it can't be shown again later.
    - To build:
      - a printable PDF (Typst, like `render/`) with the recovery key (+ QR optional), date, device/app hint and instructions for what to do when the keychain is lost, offered on the first-run screen (save/print before continuing, with a "I have stored it safely" confirmation);
      - since the key can't be re-shown: a Settings action "Neuen Notfallschlüssel erstellen" that generates a new recovery key, re-wraps the master key into `master.wrapped` atomically (write temp + rename) and produces a new PDF; the old printed key stops working (say so); audit entry without the key;
      - tests: re-wrap then `recover()` with new key works and old key fails; E2E of first run on the dev box needs isolation: the data dir comes from Tauri `app_data_dir()` (known-folder API, not the `APPDATA` env var) and the keychain entry `de.datorga.thera`/`master-key` is shared, so an existing entry skips first run. Add a debug-only override for both (e.g. `THERA_DATA_DIR` + a different keyring user), never touch the real entry.
-   - The dev box's DB was created before this; use the Settings action to get a printable kit for it.
-6. **Vorlagen module: deferred** until the therapist hands over material. She will supply old **Sitzungen and Berichte** later, and she must be able to **upload them herself in the app** (no developer-side import):
+   - The dev box's DB was created before this; the "Notfall-Kit fehlt" gate asks for a new kit on next start.
+6. **NEXT → Encrypted backup + restore** (PLAN §362 / 3.2, A10 gate):
+   - an `age`-encrypted (or AES-GCM) archive of `thera.db` (consistent snapshot via SQLite backup API / `VACUUM INTO`), `master.wrapped` and `audio/`, written to a path the user chooses
+   - restore from within the app, needing the Notfall-Schlüssel when the keychain doesn't match
+   - a verified restore test
+   - schedule later
+   - **Decided (user, 2026-10-27):** the Notfall-Schlüssel is the backup key. No separate backup password. Restoring on a new machine needs the backup archive and the current Notfall-Kit. Consequences to handle: after a key rotation, older backups need the old key, or re-wrap the key inside them. Say so in the UI and on the kit.
+7. **Vorlagen module: deferred** until the therapist hands over material. She will supply old **Sitzungen and Berichte** later, and she must be able to **upload them herself in the app** (no developer-side import):
    - upload old Berichte, old session notes and her forms (PDF/DOCX → text)
    - redaction review (pseudonymizer `detect()` spans), stored as style exemplars
    - the "Vorlagen" placeholder card stays until then
-7. **Phase 2:** LLM adapter (OpenAI-compatible, EU default, US-intermediary warning), per-session fact extraction with citations, Bericht drafting from facts + style exemplars, eval set.
+8. **Phase 2:** LLM adapter (OpenAI-compatible, EU default, US-intermediary warning), per-session fact extraction with citations, Bericht drafting from facts + style exemplars, eval set.
 
 ## Open questions for the therapist
 

@@ -42,11 +42,15 @@ type CmdResult<T> = Result<T, CmdError>;
 
 // ---------- keychain ----------
 
-struct OsKeyStore;
+/// Keychain entry `KEYRING_SERVICE`/`user`. `user` is `KEYRING_USER` except in debug builds
+/// started with `THERA_KEYRING_USER` (isolated first-run E2E; never touches the real entry).
+struct OsKeyStore<'a> {
+    user: &'a str,
+}
 
-impl KeyStore for OsKeyStore {
+impl KeyStore for OsKeyStore<'_> {
     fn load(&self) -> thera_core::Result<Option<MasterKey>> {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(kr)?;
+        let entry = keyring::Entry::new(KEYRING_SERVICE, self.user).map_err(kr)?;
         match entry.get_password() {
             Ok(hex) => Ok(Some(MasterKey::from_hex(&hex)?)),
             Err(keyring::Error::NoEntry) => Ok(None),
@@ -55,7 +59,7 @@ impl KeyStore for OsKeyStore {
     }
 
     fn store(&self, key: &MasterKey) -> thera_core::Result<()> {
-        keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(kr)?.set_password(&key.to_hex()).map_err(kr)
+        keyring::Entry::new(KEYRING_SERVICE, self.user).map_err(kr)?.set_password(&key.to_hex()).map_err(kr)
     }
 }
 
@@ -67,6 +71,7 @@ fn kr(e: keyring::Error) -> thera_core::Error {
 
 struct AppState {
     data_dir: PathBuf,
+    keyring_user: String,
     /// Bundled resources; holds the whisper.cpp sidecar in `whisper/`.
     resource_dir: PathBuf,
     store: Mutex<Option<Store>>,
@@ -104,6 +109,9 @@ struct ActiveRecording {
 }
 
 impl AppState {
+    fn keys(&self) -> OsKeyStore<'_> {
+        OsKeyStore { user: &self.keyring_user }
+    }
     fn db_path(&self) -> PathBuf {
         self.data_dir.join("thera.db")
     }
@@ -165,30 +173,68 @@ struct InitResult {
     status: &'static str,
     /// Shown once on first run; the user must write it down / print it.
     recovery_key: Option<String>,
+    /// The current recovery key was confirmed as stored. False → the UI asks for a new kit.
+    recovery_confirmed: bool,
     encrypted: bool,
 }
 
 #[tauri::command]
 fn app_init(state: State<'_, AppState>) -> CmdResult<InitResult> {
     if state.store.lock().map_err(|_| CmdError::Other("state poisoned".into()))?.is_some() {
-        return Ok(InitResult { status: "ready", recovery_key: None, encrypted: Store::is_encrypted() });
+        let recovery_confirmed = state.with(|s| s.recovery_kit_confirmed())?;
+        return Ok(InitResult { status: "ready", recovery_key: None, recovery_confirmed, encrypted: Store::is_encrypted() });
     }
-    let (key, recovery_key) = match crypto::unlock_or_init(&OsKeyStore, &state.wrapped_path()) {
+    let (key, recovery_key) = match crypto::unlock_or_init(&state.keys(), &state.wrapped_path()) {
         Ok(Unlock::Existing(k)) => (k, None),
         Ok(Unlock::Created { key, recovery }) => (key, Some(recovery.display())),
         Err(thera_core::Error::Crypto(m)) if m == "recovery_required" => {
-            return Ok(InitResult { status: "recovery_required", recovery_key: None, encrypted: Store::is_encrypted() })
+            return Ok(InitResult {
+                status: "recovery_required",
+                recovery_key: None,
+                recovery_confirmed: false,
+                encrypted: Store::is_encrypted(),
+            })
         }
         Err(e) => return Err(e.into()),
     };
     state.open_store(&key)?;
-    Ok(InitResult { status: "ready", recovery_key, encrypted: Store::is_encrypted() })
+    let recovery_confirmed = state.with(|s| s.recovery_kit_confirmed())?;
+    Ok(InitResult { status: "ready", recovery_key, recovery_confirmed, encrypted: Store::is_encrypted() })
 }
 
 #[tauri::command]
 fn app_recover(state: State<'_, AppState>, recovery_key: String) -> CmdResult<()> {
-    let key = crypto::recover(&OsKeyStore, &state.wrapped_path(), &recovery_key)?;
+    let key = crypto::recover(&state.keys(), &state.wrapped_path(), &recovery_key)?;
     state.open_store(&key)
+}
+
+/// Writes the printable Notfall-Kit for `recovery_key` (the one just shown on first run or
+/// after rotation). Refuses a key that doesn't open `master.wrapped`.
+#[tauri::command]
+fn recovery_kit_export(state: State<'_, AppState>, recovery_key: String, rotated: bool, path: String) -> CmdResult<()> {
+    let key = crypto::check_recovery(&state.wrapped_path(), &recovery_key)?;
+    let kit = render::RecoveryKit::new(
+        &key,
+        &thera_core::domain::now(),
+        rotated,
+        std::env::var("COMPUTERNAME").unwrap_or_else(|_| "—".into()),
+        env!("CARGO_PKG_VERSION").into(),
+        state.data_dir.display().to_string(),
+    );
+    std::fs::write(&path, render::recovery_kit_pdf(&kit)?).map_err(thera_core::Error::from)?;
+    state.with(|s| s.log_recovery_kit_export(!rotated))
+}
+
+#[tauri::command]
+fn recovery_kit_confirm(state: State<'_, AppState>) -> CmdResult<()> {
+    state.with(|s| s.confirm_recovery_kit())
+}
+
+/// "Neuen Notfall-Schlüssel erstellen". Returns the new key once; earlier kits stop working.
+#[tauri::command]
+fn recovery_key_rotate(state: State<'_, AppState>) -> CmdResult<String> {
+    let key = state.keys().load()?.ok_or_else(|| CmdError::Other("Schlüssel nicht im Schlüsselbund".into()))?;
+    Ok(state.with(|s| s.rotate_recovery_key(&key, &state.wrapped_path()))?.display())
 }
 
 // ---------- patients ----------
@@ -792,10 +838,24 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
+            #[cfg_attr(not(debug_assertions), allow(unused_mut))]
+            let mut data_dir = app.path().app_data_dir()?;
+            #[cfg_attr(not(debug_assertions), allow(unused_mut))]
+            let mut keyring_user = KEYRING_USER.to_string();
+            // Debug-only isolation for first-run E2E: own data dir and keychain entry.
+            #[cfg(debug_assertions)]
+            {
+                if let Some(dir) = std::env::var_os("THERA_DATA_DIR") {
+                    data_dir = dir.into();
+                }
+                if let Ok(user) = std::env::var("THERA_KEYRING_USER") {
+                    keyring_user = user;
+                }
+            }
             std::fs::create_dir_all(&data_dir)?;
             app.manage(AppState {
                 data_dir,
+                keyring_user,
                 resource_dir: app.path().resource_dir()?,
                 store: Mutex::new(None),
                 recording: Mutex::new(None),
@@ -811,6 +871,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_init,
             app_recover,
+            recovery_kit_export,
+            recovery_key_rotate,
+            recovery_kit_confirm,
             patients_list,
             patient_get,
             patient_create,

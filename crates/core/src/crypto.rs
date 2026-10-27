@@ -135,9 +135,36 @@ pub fn unlock_or_init(store: &dyn KeyStore, wrapped_path: &std::path::Path) -> R
     }
     let key = MasterKey::generate()?;
     let recovery = RecoveryKey::generate()?;
-    std::fs::write(wrapped_path, wrap(&key, &recovery)?)?;
+    write_wrapped(wrapped_path, &wrap(&key, &recovery)?)?;
     store.store(&key)?;
     Ok(Unlock::Created { key, recovery })
+}
+
+/// Issue a new recovery key: `key` (the live master key) is wrapped under it and replaces
+/// `wrapped_path` atomically. Every earlier recovery key stops working.
+pub fn rewrap(key: &MasterKey, wrapped_path: &std::path::Path) -> Result<RecoveryKey> {
+    let recovery = RecoveryKey::generate()?;
+    write_wrapped(wrapped_path, &wrap(key, &recovery)?)?;
+    Ok(recovery)
+}
+
+/// Parses `recovery` and checks it opens `wrapped_path`, so a kit never prints a dead key.
+pub fn check_recovery(wrapped_path: &std::path::Path, recovery: &str) -> Result<RecoveryKey> {
+    let r = RecoveryKey::parse(recovery)?;
+    unwrap(&std::fs::read_to_string(wrapped_path)?, &r)?;
+    Ok(r)
+}
+
+/// temp + fsync + rename: a crash leaves either the old or the new wrapped key, never half.
+fn write_wrapped(path: &std::path::Path, contents: &str) -> Result<()> {
+    use std::io::Write;
+    let tmp = path.with_extension("wrapped.tmp");
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(contents.as_bytes())?;
+    f.sync_all()?;
+    drop(f);
+    std::fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 /// Restore the keychain entry from the printed recovery key.
@@ -190,5 +217,28 @@ mod tests {
         assert!(unlock_or_init(&lost, &wrapped).is_err());
         let restored = recover(&lost, &wrapped, &recovery.display()).unwrap();
         assert_eq!(restored.as_bytes(), key.as_bytes());
+    }
+
+    #[test]
+    fn rewrap_replaces_old_recovery_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let wrapped = dir.path().join("master.wrapped");
+        let store = MemoryKeyStore::default();
+        let Unlock::Created { key, recovery: old } = unlock_or_init(&store, &wrapped).unwrap() else {
+            panic!("expected first run")
+        };
+        let new = rewrap(&key, &wrapped).unwrap();
+        assert!(!dir.path().join("master.wrapped.tmp").exists());
+        assert!(check_recovery(&wrapped, &new.display()).is_ok());
+        assert!(check_recovery(&wrapped, &old.display()).is_err());
+
+        let lost = MemoryKeyStore::default();
+        assert!(recover(&lost, &wrapped, &old.display()).is_err(), "old printed key is dead");
+        assert!(lost.load().unwrap().is_none());
+        let restored = recover(&lost, &wrapped, &new.display()).unwrap();
+        assert_eq!(restored.as_bytes(), key.as_bytes());
+        // Lower case and spaces instead of dashes still parse.
+        let typed = new.display().to_lowercase().replace('-', " ");
+        assert!(check_recovery(&wrapped, &typed).is_ok());
     }
 }

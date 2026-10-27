@@ -33,14 +33,34 @@ export const de = {
   setup: {
     recoveryTitle: 'Ihr Notfall-Schlüssel',
     recoveryBody:
-      'Mit diesem Schlüssel können Sie Ihre Daten wiederherstellen, falls der Schlüsselbund dieses Computers verloren geht. Er wird nur dieses eine Mal angezeigt. Bitte ausdrucken oder notieren und sicher aufbewahren (nicht auf diesem Computer).',
-    recoveryConfirm: 'Ich habe den Schlüssel sicher notiert',
+      'Mit diesem Schlüssel können Sie Ihre Daten wiederherstellen, falls der Schlüsselbund dieses Computers verloren geht. Er wird nur dieses eine Mal angezeigt. Speichern und drucken Sie das Notfall-Kit oder notieren Sie den Schlüssel, und bewahren Sie ihn sicher auf (nicht auf diesem Computer).',
+    unconfirmedTitle: 'Notfall-Kit fehlt',
+    unconfirmedBody:
+      'Für diese Datenbank wurde noch kein Notfall-Schlüssel als sicher verwahrt bestätigt (etwa weil das Fenster beim ersten Start geschlossen wurde). Ohne ihn sind Ihre Daten verloren, wenn der Schlüsselbund dieses Computers verloren geht. Erstellen Sie jetzt einen neuen; ein eventuell vorhandener älterer Schlüssel wird damit ungültig.',
     recoveryRequiredTitle: 'Wiederherstellung erforderlich',
     recoveryRequiredBody:
       'Der Datenbankschlüssel wurde im Schlüsselbund nicht gefunden. Geben Sie Ihren Notfall-Schlüssel ein.',
     recoveryInput: 'Notfall-Schlüssel',
     recover: 'Wiederherstellen',
     outsideTauri: 'Diese Oberfläche läuft nur innerhalb der Desktop-App (npm run tauri dev).',
+  },
+  recoveryKit: {
+    savePdf: 'Notfall-Kit als PDF speichern',
+    pdfHint:
+      'Das PDF enthält den Schlüssel und eine Anleitung zur Wiederherstellung. Ausdrucken, danach die Datei löschen.',
+    saved: 'Gespeichert unter {{path}}. Bitte jetzt ausdrucken und die Datei danach löschen.',
+    confirm: 'Ich habe das Notfall-Kit ausgedruckt oder den Schlüssel notiert und sicher verwahrt',
+    title: 'Notfall-Schlüssel',
+    intro:
+      'Der Notfall-Schlüssel öffnet Ihre Daten, falls der Schlüsselbund dieses Computers verloren geht. Er wird aus Sicherheitsgründen nicht gespeichert und kann nicht erneut angezeigt werden. Ist Ihr Ausdruck verloren oder unsicher, erstellen Sie einen neuen.',
+    rotate: 'Neuen Notfall-Schlüssel erstellen',
+    rotateConfirmTitle: 'Neuen Notfall-Schlüssel erstellen?',
+    rotateConfirmBody:
+      'Der bisherige Notfall-Schlüssel und alle bisher gedruckten Notfall-Kits funktionieren danach nicht mehr. Vernichten Sie den alten Ausdruck, sobald der neue sicher verwahrt ist.',
+    rotateAction: 'Erstellen',
+    newTitle: 'Ihr neuer Notfall-Schlüssel',
+    newBody: 'Er wird nur dieses eine Mal angezeigt. Bitte jetzt das Notfall-Kit speichern und ausdrucken.',
+    done: 'Fertig',
   },
   enums: {
     method: { VT: 'Verhaltenstherapie (VT)', TP: 'Tiefenpsychologisch fundiert (TP)', AP: 'Analytisch (AP)' },

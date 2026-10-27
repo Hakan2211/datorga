@@ -28,6 +28,7 @@ import type { Transcript } from '@/bindings/Transcript'
 export type InitResult = {
   status: 'ready' | 'recovery_required'
   recovery_key: string | null
+  recovery_confirmed: boolean
   encrypted: boolean
 }
 
@@ -76,6 +77,10 @@ export const isTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS
 export const api = {
   init: () => invoke<InitResult>('app_init'),
   recover: (recoveryKey: string) => invoke<void>('app_recover', { recoveryKey }),
+  exportRecoveryKit: (recoveryKey: string, rotated: boolean, path: string) =>
+    invoke<void>('recovery_kit_export', { recoveryKey, rotated, path }),
+  rotateRecoveryKey: () => invoke<string>('recovery_key_rotate'),
+  confirmRecoveryKit: () => invoke<void>('recovery_kit_confirm'),
 
   patients: (query?: string) => invoke<Patient[]>('patients_list', { query: query || null }),
   patient: (id: string) => invoke<Patient>('patient_get', { id }),

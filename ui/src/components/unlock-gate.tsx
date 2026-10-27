@@ -5,18 +5,18 @@ import { KeyRound, ShieldAlert } from 'lucide-react'
 import { api, errorMessage, isTauri } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { RecoveryKitPanel } from '@/components/recovery-kit'
 
 /** Opens the encrypted store before anything else renders. Shows the recovery key once on first run. */
 export function UnlockGate({ children }: { children: ReactNode }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const init = useQuery({ queryKey: ['init'], queryFn: api.init, enabled: isTauri(), staleTime: Infinity })
-  const [acknowledged, setAcknowledged] = useState(false)
-  const [checked, setChecked] = useState(false)
+  const [rotatedKey, setRotatedKey] = useState<string | null>(null)
   const [recoveryInput, setRecoveryInput] = useState('')
+  const rotate = useMutation({ mutationFn: api.rotateRecoveryKey, onSuccess: setRotatedKey })
   const recover = useMutation({
     mutationFn: () => api.recover(recoveryInput),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['init'] }),
@@ -50,8 +50,9 @@ export function UnlockGate({ children }: { children: ReactNode }) {
     )
   }
 
-  if (init.data.recovery_key && !acknowledged) {
-    const groups = init.data.recovery_key.split('-')
+  // Fresh key (first run, or replacing one that was never confirmed): show it once with the kit.
+  const freshKey = init.data.recovery_key ?? rotatedKey
+  if (freshKey && !init.data.recovery_confirmed) {
     return (
       <Centered>
         <Card className="w-[38rem]">
@@ -62,18 +63,34 @@ export function UnlockGate({ children }: { children: ReactNode }) {
             </CardTitle>
             <CardDescription>{t('setup.recoveryBody')}</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-4 gap-x-4 gap-y-2 rounded-md bg-muted p-4 text-center font-mono text-base tracking-wider select-all">
-              {groups.map((g, i) => (
-                <span key={i}>{g}</span>
-              ))}
-            </div>
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox checked={checked} onCheckedChange={(v) => setChecked(v === true)} />
-              {t('setup.recoveryConfirm')}
-            </label>
-            <Button disabled={!checked} onClick={() => setAcknowledged(true)}>
-              {t('common.open')}
+          <CardContent>
+            <RecoveryKitPanel
+              recoveryKey={freshKey}
+              rotated={rotatedKey !== null}
+              onDone={() => setRotatedKey(null)}
+              doneLabel={t('common.open')}
+            />
+          </CardContent>
+        </Card>
+      </Centered>
+    )
+  }
+
+  if (!init.data.recovery_confirmed) {
+    return (
+      <Centered>
+        <Card className="w-[34rem]">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ShieldAlert className="size-5" />
+              {t('setup.unconfirmedTitle')}
+            </CardTitle>
+            <CardDescription>{t('setup.unconfirmedBody')}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {rotate.isError && <p className="text-sm text-destructive">{errorMessage(rotate.error)}</p>}
+            <Button onClick={() => rotate.mutate()} disabled={rotate.isPending}>
+              <KeyRound /> {t('recoveryKit.rotate')}
             </Button>
           </CardContent>
         </Card>

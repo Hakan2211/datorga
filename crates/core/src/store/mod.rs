@@ -10,12 +10,15 @@ use crate::audio::{self, AudioKey, ChunkWriter};
 use crate::audit::{self, Entry};
 use crate::stt;
 use crate::consent;
-use crate::crypto::MasterKey;
+use crate::crypto::{self, MasterKey, RecoveryKey};
 use crate::domain::*;
 use crate::templates::{self, Template};
 use crate::{Error, Result};
 
 const ACTOR: &str = "therapist";
+/// Setting: the therapist confirmed the current recovery key is stored. Absent or false means the
+/// key shown last was never confirmed (window reload, crash, old install): the app asks for a new one.
+const RECOVERY_CONFIRMED: &str = "recovery_kit_confirmed";
 
 /// Ordered migrations; index + 1 = schema version (stored in `PRAGMA user_version`).
 const MIGRATIONS: &[&str] = &[
@@ -89,6 +92,44 @@ impl Store {
             )?;
         }
         Ok(())
+    }
+
+    // ---------- recovery key ----------
+
+    /// "Neuen Notfall-Schlüssel erstellen": re-wraps `key` under a fresh recovery key. The audit
+    /// event commits only if the file was replaced; if the commit itself fails the keychain still
+    /// holds the master key, so rotating again recovers.
+    pub fn rotate_recovery_key(&self, key: &MasterKey, wrapped_path: &Path) -> Result<RecoveryKey> {
+        let tx = self.conn.unchecked_transaction()?;
+        audit::append(&tx, Entry { actor: ACTOR, action: "recovery_key.rotate", entity_type: "master_key", entity_id: None, meta: json!({}) })?;
+        self.set_setting(RECOVERY_CONFIRMED, &json!(false))?;
+        let recovery = crypto::rewrap(key, wrapped_path)?;
+        tx.commit()?;
+        Ok(recovery)
+    }
+
+    pub fn recovery_kit_confirmed(&self) -> Result<bool> {
+        Ok(self.setting(RECOVERY_CONFIRMED)?.and_then(|v| v.as_bool()).unwrap_or(false))
+    }
+
+    /// "Ich habe das Notfall-Kit … sicher verwahrt".
+    pub fn confirm_recovery_kit(&self) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        audit::append(&tx, Entry { actor: ACTOR, action: "recovery_kit.confirm", entity_type: "master_key", entity_id: None, meta: json!({}) })?;
+        self.set_setting(RECOVERY_CONFIRMED, &json!(true))?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The kit PDF was written somewhere. The key itself never reaches the log.
+    pub fn log_recovery_kit_export(&self, first_run: bool) -> Result<()> {
+        audit::append(&self.conn, Entry {
+            actor: ACTOR,
+            action: "recovery_kit.export",
+            entity_type: "master_key",
+            entity_id: None,
+            meta: json!({ "first_run": first_run }),
+        })
     }
 
     // ---------- templates ----------
@@ -1159,6 +1200,43 @@ mod tests {
                 ..Default::default()
             })
             .unwrap()
+    }
+
+    #[test]
+    fn rotating_recovery_key_is_audited_without_the_key() {
+        let store = Store::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let wrapped = dir.path().join("master.wrapped");
+        let keys = crypto::MemoryKeyStore::default();
+        let crypto::Unlock::Created { key, recovery: old } = crypto::unlock_or_init(&keys, &wrapped).unwrap() else {
+            panic!("expected first run")
+        };
+        assert!(!store.recovery_kit_confirmed().unwrap(), "fresh install starts unconfirmed");
+        store.confirm_recovery_kit().unwrap();
+        assert!(store.recovery_kit_confirmed().unwrap());
+        let new = store.rotate_recovery_key(&key, &wrapped).unwrap();
+        assert!(!store.recovery_kit_confirmed().unwrap(), "a new key needs a new confirmation");
+        assert!(crypto::check_recovery(&wrapped, &old.display()).is_err());
+        assert!(crypto::check_recovery(&wrapped, &new.display()).is_ok());
+        store.log_recovery_kit_export(false).unwrap();
+
+        let events = audit::list(store.conn(), 10).unwrap();
+        let actions: Vec<_> = events.iter().map(|e| e.action.as_str()).collect();
+        assert_eq!(actions[..3], ["recovery_kit.export", "recovery_key.rotate", "recovery_kit.confirm"]);
+        let dump = serde_json::to_string(&events).unwrap().to_uppercase();
+        let hex = new.display().replace('-', "");
+        assert!(!dump.contains(&hex[..16]), "no key material in the audit log");
+        assert_eq!(audit::verify(store.conn()).unwrap(), None);
+    }
+
+    #[test]
+    fn failed_rotation_leaves_no_audit_event() {
+        let store = Store::open_in_memory().unwrap();
+        let missing = std::path::Path::new("Z:/does/not/exist/master.wrapped");
+        store.confirm_recovery_kit().unwrap();
+        assert!(store.rotate_recovery_key(&MasterKey::from_bytes([1; 32]), missing).is_err());
+        assert!(store.recovery_kit_confirmed().unwrap(), "old key still valid, so still confirmed");
+        assert!(audit::list(store.conn(), 10).unwrap().iter().all(|e| e.action != "recovery_key.rotate"));
     }
 
     #[test]

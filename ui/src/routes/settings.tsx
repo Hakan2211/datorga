@@ -4,8 +4,21 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { open } from '@tauri-apps/plugin-dialog'
-import { AlertTriangle, CheckCircle2, Download, FolderOpen, Lock, LockOpen, Trash2 } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Download, FolderOpen, KeyRound, Lock, LockOpen, Trash2 } from 'lucide-react'
 import { Page, PageHeader } from '@/components/app-shell'
+import { RecoveryKitPanel } from '@/components/recovery-kit'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -38,20 +51,78 @@ function Settings() {
           <CardHeader>
             <CardTitle className="text-base">{t('settings.security')}</CardTitle>
           </CardHeader>
-          <CardContent className="flex items-center gap-2 text-sm">
-            {init.data?.encrypted ? (
-              <>
-                <Lock className="size-4 text-success" /> {t('privacy.encrypted')} (SQLCipher, AES-256)
-              </>
-            ) : (
-              <>
-                <LockOpen className="size-4 text-warning" /> {t('privacy.notEncrypted')}
-              </>
-            )}
+          <CardContent className="space-y-5 text-sm">
+            <p className="flex items-center gap-2">
+              {init.data?.encrypted ? (
+                <>
+                  <Lock className="size-4 text-success" /> {t('privacy.encrypted')} (SQLCipher, AES-256)
+                </>
+              ) : (
+                <>
+                  <LockOpen className="size-4 text-warning" /> {t('privacy.notEncrypted')}
+                </>
+              )}
+            </p>
+            <RecoveryKeySection />
           </CardContent>
         </Card>
       </Page>
     </>
+  )
+}
+
+function RecoveryKeySection() {
+  const { t } = useTranslation()
+  const [newKey, setNewKey] = useState<string | null>(null)
+  const rotate = useMutation({
+    mutationFn: api.rotateRecoveryKey,
+    onSuccess: setNewKey,
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+
+  return (
+    <div className="space-y-2">
+      <p className="flex items-center gap-2 font-medium">
+        <KeyRound className="size-4" /> {t('recoveryKit.title')}
+      </p>
+      <p className="text-muted-foreground">{t('recoveryKit.intro')}</p>
+      <AlertDialog>
+        <AlertDialogTrigger asChild>
+          <Button variant="outline" disabled={rotate.isPending}>
+            {t('recoveryKit.rotate')}
+          </Button>
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('recoveryKit.rotateConfirmTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>{t('recoveryKit.rotateConfirmBody')}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => rotate.mutate()}>{t('recoveryKit.rotateAction')}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      {/* The new key is shown once: the dialog only closes via the confirmed "Fertig". */}
+      <Dialog open={newKey !== null}>
+        <DialogContent
+          className="sm:max-w-[38rem]"
+          showCloseButton={false}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+          onPointerDownOutside={(e) => e.preventDefault()}
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <KeyRound className="size-5" /> {t('recoveryKit.newTitle')}
+            </DialogTitle>
+            <DialogDescription>{t('recoveryKit.newBody')}</DialogDescription>
+          </DialogHeader>
+          {newKey && (
+            <RecoveryKitPanel recoveryKey={newKey} rotated onDone={() => setNewKey(null)} doneLabel={t('recoveryKit.done')} />
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
   )
 }
 
