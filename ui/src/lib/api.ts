@@ -1,6 +1,7 @@
 // Typed wrappers over the Tauri commands in crates/app/src/lib.rs.
 // Types come from ts-rs (`cargo test -p thera-core` regenerates src/bindings).
 import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { queryOptions } from '@tanstack/react-query'
 import type { Application } from '@/bindings/Application'
 import type { ApplicationKind } from '@/bindings/ApplicationKind'
@@ -90,8 +91,19 @@ export type LlmCatalog = { models: CloudModel[]; recommended: Tier }
 export type LlmSpendView = { month: LlmSpend; total: LlmSpend }
 /** Redaction preview: the outgoing text, the local token table and where it would go. */
 export type ExtractPreview = Preview & { terms: PseudoTerm[]; provider: ProviderInfo | null; model: string | null }
-export type ExtractResult = { facts: NoteFact[]; dropped: number; chunks: number }
-export type DraftResult = { drafts: SectionDraft[]; sentences: number; dropped: number }
+/** `chunks` < `total` when cancelled: facts from the finished chunks were kept. */
+export type ExtractResult = { facts: NoteFact[]; dropped: number; chunks: number; total: number; cancelled: boolean }
+/** `done` < `total` when cancelled: the sections drafted before were kept. */
+export type DraftResult = {
+  drafts: SectionDraft[]
+  sentences: number
+  dropped: number
+  done: number
+  total: number
+  cancelled: boolean
+}
+/** A piece of streamed answer text, still tokenized. Shown as progress only. */
+export type LlmDelta = { request_id: string; text: string }
 export type ExtractProgress = { report_id: string; stage: 'loading' | 'running'; done: number; total: number }
 
 export type LocalModelView = {
@@ -193,7 +205,8 @@ export const api = {
   llmSpend: () => invoke<LlmSpendView>('llm_spend'),
 
   extractPreview: (reportId: string) => invoke<ExtractPreview>('extract_preview', { reportId }),
-  extractRun: (reportId: string, digest: string) => invoke<ExtractResult>('extract_run', { reportId, digest }),
+  extractRun: (reportId: string, digest: string, requestId: string) =>
+    invoke<ExtractResult>('extract_run', { reportId, digest, requestId }),
   addPseudoTerm: (patientId: string, kind: EntityKind, text: string) =>
     invoke<PseudoTerm>('pseudo_term_add', { patientId, kind, text }),
   removePseudoTerm: (id: string) => invoke<void>('pseudo_term_remove', { id }),
@@ -203,8 +216,15 @@ export const api = {
   draftSources: (reportId: string) => invoke<EpisodeFact[]>('draft_sources', { reportId }),
   draftPreview: (reportId: string, sections: string[], instruction: string | null) =>
     invoke<ExtractPreview>('draft_preview', { reportId, sections, instruction }),
-  draftRun: (reportId: string, sections: string[], instruction: string | null, digest: string) =>
-    invoke<DraftResult>('draft_run', { reportId, sections, instruction, digest }),
+  draftRun: (reportId: string, sections: string[], instruction: string | null, digest: string, requestId: string) =>
+    invoke<DraftResult>('draft_run', { reportId, sections, instruction, digest, requestId }),
+  /** Stops a running extraction or draft; what finished before is kept. */
+  llmCancel: (requestId: string) => invoke<void>('llm_cancel', { requestId }),
+  /** Streamed answer text of one request (`llm:delta` events from the backend). */
+  onLlmDelta: (requestId: string, cb: (text: string) => void): Promise<UnlistenFn> =>
+    listen<LlmDelta>('llm:delta', (e) => {
+      if (e.payload.request_id === requestId) cb(e.payload.text)
+    }),
   reportDrafts: (reportId: string) => invoke<SectionDraft[]>('report_drafts', { reportId }),
   rejectDraft: (reportId: string, draftId: string) => invoke<SectionDraft[]>('report_draft_reject', { reportId, draftId }),
   applyDraft: (reportId: string, draftId: string, mode: ApplyMode) =>

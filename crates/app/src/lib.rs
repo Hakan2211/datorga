@@ -101,6 +101,8 @@ struct AppState {
     llama_start: Mutex<()>,
     /// The model id being loaded right now, for the Settings status.
     llama_loading: Mutex<Option<String>>,
+    /// Running extractions and drafts by the request id the UI chose, for `llm_cancel`.
+    llm_runs: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 struct RunningJob {
@@ -1171,7 +1173,8 @@ fn llm_key(state: &AppState, id: ProviderId) -> CmdResult<Option<String>> {
     }
 }
 
-fn llm_endpoint(state: &AppState, id: ProviderId) -> CmdResult<(Endpoint, LlmConfig)> {
+/// `cancel` stops a local model that is still loading.
+fn llm_endpoint(state: &AppState, id: ProviderId, cancel: &AtomicBool) -> CmdResult<(Endpoint, LlmConfig)> {
     let config = state.with(|s| s.llm_config())?;
     if id == ProviderId::Local {
         let model = config
@@ -1179,7 +1182,7 @@ fn llm_endpoint(state: &AppState, id: ProviderId) -> CmdResult<(Endpoint, LlmCon
             .model
             .filter(|m| !m.is_empty())
             .ok_or_else(|| CmdError::Other("Kein lokales Modell gewählt".into()))?;
-        return Ok((local_endpoint(state, &model)?, config));
+        return Ok((local_endpoint(state, &model, cancel)?, config));
     }
     let api_key = llm_key(state, id)?;
     if llm::provider(id).needs_key && api_key.is_none() {
@@ -1252,7 +1255,7 @@ async fn llm_models(app: AppHandle, provider: ProviderId) -> CmdResult<Vec<Remot
                 .map(|m| RemoteModel { id: m.file.id.into(), name: Some(m.label.into()), context_length: Some(m.ctx) })
                 .collect());
         }
-        let (ep, _) = llm_endpoint(state, provider)?;
+        let (ep, _) = llm_endpoint(state, provider, &AtomicBool::new(false))?;
         Ok(llm::list_models(&ep)?)
     })
     .await
@@ -1269,7 +1272,7 @@ struct LlmTestResult {
 #[tauri::command]
 async fn llm_test(app: AppHandle, provider: ProviderId) -> CmdResult<LlmTestResult> {
     blocking(app, move |state| {
-        let (ep, config) = llm_endpoint(state, provider)?;
+        let (ep, config) = llm_endpoint(state, provider, &AtomicBool::new(false))?;
         let model = config.settings(provider).model.filter(|m| !m.is_empty()).ok_or_else(|| CmdError::Other("Kein Modell gewählt".into()))?;
         let result = llm::ping(&ep, &model);
         state.with(|s| s.log_llm_call("llm.test", provider, &model, result.as_ref().map_err(|_| "error")))?;
@@ -1366,6 +1369,72 @@ fn note_facts(state: State<'_, AppState>, report_id: String) -> CmdResult<Vec<No
     state.with(|s| s.note_facts(&report_id))
 }
 
+/// A running extraction or draft that `llm_cancel` can stop. Unregisters itself when dropped.
+struct LlmRun<'a> {
+    state: &'a AppState,
+    id: String,
+    cancel: Arc<AtomicBool>,
+}
+
+impl<'a> LlmRun<'a> {
+    fn start(state: &'a AppState, id: &str) -> CmdResult<Self> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        lock(&state.llm_runs)?.insert(id.to_string(), cancel.clone());
+        Ok(Self { state, id: id.to_string(), cancel })
+    }
+    fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for LlmRun<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut runs) = self.state.llm_runs.lock() {
+            runs.remove(&self.id);
+        }
+    }
+}
+
+/// Stops a running extraction or draft. What finished before is kept.
+#[tauri::command]
+fn llm_cancel(state: State<'_, AppState>, request_id: String) -> CmdResult<()> {
+    if let Some(cancel) = lock(&state.llm_runs)?.get(&request_id) {
+        cancel.store(true, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+/// One piece of streamed answer text (`llm:delta`). Still tokenized: it is shown as progress only,
+/// never stored.
+#[derive(Clone, Serialize)]
+struct LlmDelta<'a> {
+    request_id: &'a str,
+    text: &'a str,
+}
+
+/// Streams one request, forwarding deltas to the UI, and logs it. `Ok(None)` = cancelled.
+#[allow(clippy::too_many_arguments)]
+fn stream_call(
+    state: &AppState,
+    events: &AppHandle,
+    run: &LlmRun,
+    action: &str,
+    (provider, model): (ProviderId, &str),
+    ep: &Endpoint,
+    messages: &[(llm::Role, &thera_core::pseudo::Pseudonymized<String>)],
+    opts: &llm::ChatOptions,
+) -> CmdResult<Option<llm::Completion>> {
+    let result = llm::chat_stream(ep, model, messages, opts, &run.cancel, |text| {
+        let _ = events.emit("llm:delta", LlmDelta { request_id: &run.id, text });
+    });
+    let reason = if matches!(result, Err(thera_core::Error::Cancelled)) { "cancelled" } else { "error" };
+    state.with(|s| s.log_llm_call(action, provider, model, result.as_ref().map_err(|_| reason)))?;
+    match result {
+        Err(thera_core::Error::Cancelled) => Ok(None),
+        r => Ok(Some(r?)),
+    }
+}
+
 #[derive(Clone, Serialize)]
 struct ExtractProgress {
     report_id: String,
@@ -1379,16 +1448,21 @@ struct ExtractProgress {
 struct ExtractResult {
     facts: Vec<NoteFact>,
     dropped: usize,
+    /// Chunks answered; fewer than `total` when cancelled.
     chunks: usize,
+    total: usize,
+    cancelled: bool,
 }
 
-/// Sends the previewed text to the active provider, one request per chunk, and stores the
-/// checked facts. `digest` must match the preview the therapist saw; nothing is stored if any
-/// request fails.
+/// Sends the previewed text to the active provider, one streamed request per chunk, and stores
+/// the checked facts. `digest` must match the preview the therapist saw; nothing is stored if any
+/// request fails. `llm_cancel(request_id)` stops it: facts from finished chunks are kept as
+/// proposals.
 #[tauri::command]
-async fn extract_run(app: AppHandle, report_id: String, digest: String) -> CmdResult<ExtractResult> {
+async fn extract_run(app: AppHandle, report_id: String, digest: String, request_id: String) -> CmdResult<ExtractResult> {
     let events = app.clone();
     blocking(app, move |state| {
+        let run = LlmRun::start(state, &request_id)?;
         let (provider, model) = active_llm(state)?;
         let (prepared, segments, sections) = state.with(|s| prepare_extraction(s, &report_id))?;
         if prepared.digest != digest {
@@ -1401,30 +1475,42 @@ async fn extract_run(app: AppHandle, report_id: String, digest: String) -> CmdRe
         if provider == ProviderId::Local {
             progress("loading", 0);
         }
-        let (ep, _) = llm_endpoint(state, provider)?;
+        let nothing = || Ok(ExtractResult { facts: state.with(|s| s.note_facts(&report_id))?, dropped: 0, chunks: 0, total, cancelled: true });
+        let ep = match llm_endpoint(state, provider, &run.cancel) {
+            Err(_) if run.cancelled() => return nothing(),
+            r => r?.0,
+        };
         let opts = extract::chat_options();
         let keys: Vec<&str> = sections.iter().map(String::as_str).collect();
-        let (mut facts, mut dropped, mut answered_by) = (Vec::new(), 0, model.clone());
+        let (mut facts, mut dropped, mut done, mut answered_by) = (Vec::new(), 0, 0, model.clone());
         for (i, chunk) in prepared.chunks.iter().enumerate() {
+            if run.cancelled() {
+                break;
+            }
             progress("running", i);
-            let result = llm::chat(&ep, &model, &[(llm::Role::System, &prepared.system), (llm::Role::User, &chunk.user)], &opts);
-            state.with(|s| s.log_llm_call("llm.extract", provider, &model, result.as_ref().map_err(|_| "error")))?;
-            let completion = result?;
+            let messages = [(llm::Role::System, &prepared.system), (llm::Role::User, &chunk.user)];
+            let Some(completion) = stream_call(state, &events, &run, "llm.extract", (provider, &model), &ep, &messages, &opts)? else {
+                break;
+            };
             let parsed = extract::parse(&completion.text, &chunk.range, &keys, &prepared.map)?;
             facts.extend(parsed.facts);
             dropped += parsed.dropped;
             answered_by = completion.model;
+            done += 1;
         }
-        progress("running", total);
+        if done == 0 {
+            return nothing();
+        }
+        progress("running", done);
         let meta = ExtractionMeta {
             provider: provider_str(provider),
             model: answered_by,
             prompt_hash: prepared.prompt_hash.clone(),
-            chunks: total,
+            chunks: done,
             dropped,
         };
         let facts = state.with(|s| s.save_extraction(&report_id, &meta, &facts, &segments))?;
-        Ok(ExtractResult { facts, dropped, chunks: total })
+        Ok(ExtractResult { facts, dropped, chunks: done, total, cancelled: done < total })
     })
     .await
 }
@@ -1504,10 +1590,15 @@ struct DraftResult {
     drafts: Vec<SectionDraft>,
     sentences: usize,
     dropped: usize,
+    /// Sections drafted; fewer than `total` when cancelled.
+    done: usize,
+    total: usize,
+    cancelled: bool,
 }
 
-/// Sends the previewed requests (one per section) and stores the checked drafts. `digest` must
-/// match the preview the therapist saw; nothing is stored if any request fails.
+/// Sends the previewed requests (one streamed request per section) and stores the checked
+/// drafts. `digest` must match the preview the therapist saw; nothing is stored if any request
+/// fails. `llm_cancel(request_id)` stops it: sections drafted before are kept.
 #[tauri::command]
 async fn draft_run(
     app: AppHandle,
@@ -1515,9 +1606,11 @@ async fn draft_run(
     sections: Vec<String>,
     instruction: Option<String>,
     digest: String,
+    request_id: String,
 ) -> CmdResult<DraftResult> {
     let events = app.clone();
     blocking(app, move |state| {
+        let run = LlmRun::start(state, &request_id)?;
         let (provider, model) = active_llm(state)?;
         let (prepared, facts) = state.with(|s| prepare_draft(s, &report_id, &sections, instruction.as_deref()))?;
         if prepared.digest != digest {
@@ -1530,21 +1623,36 @@ async fn draft_run(
         if provider == ProviderId::Local {
             progress("loading", 0);
         }
-        let (ep, _) = llm_endpoint(state, provider)?;
+        let nothing = || {
+            let drafts = state.with(|s| s.section_drafts(&report_id))?;
+            Ok(DraftResult { drafts, sentences: 0, dropped: 0, done: 0, total, cancelled: true })
+        };
+        let ep = match llm_endpoint(state, provider, &run.cancel) {
+            Err(_) if run.cancelled() => return nothing(),
+            r => r?.0,
+        };
         let opts = draft::chat_options();
         let (mut drafts, mut sentences, mut dropped, mut answered_by) = (Vec::new(), 0, 0, model.clone());
         for (i, section) in prepared.sections.iter().enumerate() {
+            if run.cancelled() {
+                break;
+            }
             progress("running", i);
-            let result = llm::chat(&ep, &model, &[(llm::Role::System, &prepared.system), (llm::Role::User, &section.user)], &opts);
-            state.with(|s| s.log_llm_call("llm.draft", provider, &model, result.as_ref().map_err(|_| "error")))?;
-            let completion = result?;
+            let messages = [(llm::Role::System, &prepared.system), (llm::Role::User, &section.user)];
+            let Some(completion) = stream_call(state, &events, &run, "llm.draft", (provider, &model), &ep, &messages, &opts)? else {
+                break;
+            };
             let parsed = draft::parse(&completion.text, facts.len(), &prepared.map)?;
             sentences += parsed.sentences.len();
             dropped += parsed.dropped;
             drafts.push((section.key.clone(), parsed));
             answered_by = completion.model;
         }
-        progress("running", total);
+        let done = drafts.len();
+        if done == 0 {
+            return nothing();
+        }
+        progress("running", done);
         let meta = DraftMeta {
             provider: provider_str(provider),
             model: answered_by,
@@ -1552,7 +1660,7 @@ async fn draft_run(
             instructed: draft::clean_instruction(instruction.as_deref())?.is_some(),
         };
         let drafts = state.with(|s| s.save_drafts(&report_id, &meta, &drafts, &facts))?;
-        Ok(DraftResult { drafts, sentences, dropped })
+        Ok(DraftResult { drafts, sentences, dropped, done, total, cancelled: done < total })
     })
     .await
 }
@@ -1573,7 +1681,7 @@ fn report_draft_apply(state: State<'_, AppState>, report_id: String, draft_id: S
 const LOCAL_LOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// Endpoint of the local server for `model_id`, starting it and loading the model if needed.
-fn local_endpoint(state: &AppState, model_id: &str) -> CmdResult<Endpoint> {
+fn local_endpoint(state: &AppState, model_id: &str, cancel: &AtomicBool) -> CmdResult<Endpoint> {
     let m = local::model(model_id)?;
     let _starting = lock(&state.llama_start)?;
     {
@@ -1598,7 +1706,9 @@ fn local_endpoint(state: &AppState, model_id: &str) -> CmdResult<Endpoint> {
         if let Some(job) = &state.job {
             job.assign(server.child());
         }
-        server.wait_ready(LOCAL_LOAD_TIMEOUT, &state.exiting)?;
+        server.wait_ready_until(LOCAL_LOAD_TIMEOUT, || {
+            state.exiting.load(Ordering::Relaxed) || cancel.load(Ordering::Relaxed)
+        })?;
         Ok::<_, thera_core::Error>(server)
     })();
     *lock(&state.llama_loading)? = None;
@@ -1734,6 +1844,7 @@ pub fn run() {
                 llama: Mutex::new(None),
                 llama_start: Mutex::new(()),
                 llama_loading: Mutex::new(None),
+                llm_runs: Mutex::new(HashMap::new()),
             });
             let handle = app.handle().clone();
             std::thread::spawn(move || stt_worker(handle));
@@ -1801,6 +1912,7 @@ pub fn run() {
             llm_spend,
             extract_preview,
             extract_run,
+            llm_cancel,
             pseudo_term_add,
             pseudo_term_remove,
             note_facts,

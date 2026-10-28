@@ -5,6 +5,9 @@
 //! The API key lives in the OS keychain (app side). It's never stored in the DB or audit log.
 
 use std::collections::BTreeMap;
+use std::io::{BufRead, BufReader};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -300,19 +303,30 @@ pub fn chat(ep: &Endpoint, model: &str, messages: &[(Role, &Pseudonymized<String
         .map_err(net)?;
     let status = resp.status().as_u16();
     let text = resp.body_mut().with_config().limit(16 << 20).read_to_string().map_err(net)?;
+    json_completion(status, &text, model, started)
+}
+
+/// A complete (non-streamed) answer.
+fn json_completion(status: u16, text: &str, model: &str, started: Instant) -> Result<Completion> {
     let latency_ms = started.elapsed().as_millis() as u64;
     if status != 200 {
-        return Err(Error::Llm(api_error(status, &text)));
+        return Err(Error::Llm(api_error(status, text)));
     }
-    let v: Value = serde_json::from_str(&text)?;
+    let v: Value = serde_json::from_str(text)?;
     // Some routers answer 200 with an error object.
     if v.get("error").is_some() {
-        return Err(Error::Llm(api_error(status, &text)));
+        return Err(Error::Llm(api_error(status, text)));
     }
     let content = v.pointer("/choices/0/message/content").and_then(Value::as_str).unwrap_or("");
+    let finish = v.pointer("/choices/0/finish_reason").and_then(Value::as_str);
+    completion(content, finish, &v, model, latency_ms)
+}
+
+/// Checks the answer text and reads model and usage from `v` (the response, or the stream chunk
+/// that carried the usage).
+fn completion(content: &str, finish: Option<&str>, v: &Value, model: &str, latency_ms: u64) -> Result<Completion> {
     if content.trim().is_empty() {
-        let cut = v.pointer("/choices/0/finish_reason").and_then(Value::as_str) == Some("length");
-        return Err(Error::Llm(if cut {
+        return Err(Error::Llm(if finish == Some("length") {
             "Antwort abgeschnitten: das Modell hat sein Token-Budget mit Nachdenken aufgebraucht".into()
         } else {
             "Antwort ohne Text".into()
@@ -328,6 +342,119 @@ pub fn chat(ep: &Endpoint, model: &str, messages: &[(Role, &Pseudonymized<String
         cost: v.pointer("/usage/cost").and_then(Value::as_f64),
         latency_ms,
     })
+}
+
+enum StreamEvent {
+    Delta(String),
+    Done(Result<Completion>),
+}
+
+/// `POST /chat/completions` with `stream: true` (server-sent events). `on_delta` gets each piece
+/// of answer text as it arrives; the result is the same [`Completion`] [`chat`] returns.
+///
+/// Setting `cancel` returns [`Error::Cancelled`] within ~100 ms, also while the server is still
+/// silent (prompt processing). The request runs on its own thread, which drops the connection at
+/// the next line it reads, so the provider stops generating. An endpoint that ignores `stream`
+/// and answers with plain JSON works too.
+pub fn chat_stream(
+    ep: &Endpoint,
+    model: &str,
+    messages: &[(Role, &Pseudonymized<String>)],
+    opts: &ChatOptions,
+    cancel: &AtomicBool,
+    mut on_delta: impl FnMut(&str),
+) -> Result<Completion> {
+    if model.trim().is_empty() {
+        return Err(Error::Invalid("Kein Modell gewählt".into()));
+    }
+    let mut body = chat_body(ep, model, messages, opts);
+    body["stream"] = json!(true);
+    // Usage (and OpenRouter's cost) come in a last chunk only when asked for.
+    body["stream_options"] = json!({ "include_usage": true });
+    let url = ep.url("/chat/completions")?;
+    let (ep, model_id, timeout) = (ep.clone(), model.to_string(), opts.timeout);
+    let gone = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    {
+        let gone = gone.clone();
+        std::thread::spawn(move || {
+            let result = stream_request(&ep, &url, body.to_string(), &model_id, timeout, &gone, &tx);
+            let _ = tx.send(StreamEvent::Done(result));
+        });
+    }
+    let result = loop {
+        if cancel.load(Ordering::Relaxed) {
+            break Err(Error::Cancelled);
+        }
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(StreamEvent::Delta(t)) => on_delta(&t),
+            Ok(StreamEvent::Done(r)) => break r,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break Err(Error::Llm("Verbindung abgebrochen".into())),
+        }
+    };
+    gone.store(true, Ordering::Relaxed);
+    result
+}
+
+/// The streaming request itself, on the helper thread of [`chat_stream`].
+fn stream_request(
+    ep: &Endpoint,
+    url: &str,
+    body: String,
+    model: &str,
+    timeout: Duration,
+    gone: &AtomicBool,
+    tx: &mpsc::Sender<StreamEvent>,
+) -> Result<Completion> {
+    let started = Instant::now();
+    let mut resp = ep
+        .auth(ep.agent(timeout).post(url))
+        .header("Content-Type", "application/json")
+        .header("Accept", "text/event-stream")
+        .send(body)
+        .map_err(net)?;
+    let status = resp.status().as_u16();
+    if status != 200 || resp.body().mime_type() != Some("text/event-stream") {
+        let text = resp.body_mut().with_config().limit(16 << 20).read_to_string().map_err(net)?;
+        let c = json_completion(status, &text, model, started)?;
+        let _ = tx.send(StreamEvent::Delta(c.text.clone()));
+        return Ok(c);
+    }
+    let mut reader = BufReader::new(resp.body_mut().with_config().limit(16 << 20).reader());
+    let (mut text, mut finish, mut meta) = (String::new(), None::<String>, Value::Null);
+    let mut raw = Vec::new();
+    loop {
+        raw.clear();
+        if reader.read_until(b'\n', &mut raw).map_err(|e| Error::Llm(format!("Verbindung fehlgeschlagen: {e}")))? == 0 {
+            break;
+        }
+        if gone.load(Ordering::Relaxed) {
+            return Err(Error::Cancelled);
+        }
+        let line = String::from_utf8_lossy(&raw);
+        // Other lines are event separators or keep-alive comments (": OPENROUTER PROCESSING").
+        let Some(data) = line.trim_end().strip_prefix("data:").map(str::trim_start) else { continue };
+        if data == "[DONE]" {
+            break;
+        }
+        let v: Value = serde_json::from_str(data)?;
+        // An error after the stream started comes as a chunk with an error object.
+        if v.get("error").is_some() {
+            return Err(Error::Llm(api_error(status, data)));
+        }
+        if let Some(t) = v.pointer("/choices/0/delta/content").and_then(Value::as_str).filter(|t| !t.is_empty()) {
+            text.push_str(t);
+            let _ = tx.send(StreamEvent::Delta(t.to_string()));
+        }
+        if let Some(f) = v.pointer("/choices/0/finish_reason").and_then(Value::as_str) {
+            finish = Some(f.to_string());
+        }
+        if meta.is_null() || v.get("usage").is_some_and(|u| !u.is_null()) {
+            meta = v;
+        }
+    }
+    completion(&text, finish.as_deref(), &meta, model, started.elapsed().as_millis() as u64)
 }
 
 /// Connection test with a fixed German prompt (no patient data).

@@ -261,10 +261,22 @@ export function FactDraftCard({
             part: (done, total) => t("facts.progress.chunk", { done, total }),
             parts: (count) => t("facts.preview.chunks", { count }),
           }}
-          onRun={async (digest) => {
-            const r = await api.extractRun(reportId, digest);
+          onRun={async (digest, requestId) => {
+            const r = await api.extractRun(reportId, digest, requestId);
             qc.setQueryData(q.noteFacts(reportId).queryKey, r.facts);
             const open = r.facts.filter((f) => f.status === "proposed").length;
+            if (r.cancelled) {
+              if (r.chunks === 0) toast.info(t("facts.cancelledNothing"));
+              else
+                toast.success(
+                  t("facts.cancelledPartial", {
+                    done: r.chunks,
+                    total: r.total,
+                    count: open,
+                  }),
+                );
+              return;
+            }
             toast.success(
               t("facts.done", { count: open }) +
                 (r.dropped
@@ -386,7 +398,8 @@ export type RedactionLabels = {
 /**
  * Shows exactly what would be sent, lets the therapist add missed terms, then runs the request.
  * Shared by fact extraction (Sitzungsnotiz) and drafting (Bericht). `onRun` gets the digest of
- * the text shown, so the backend can refuse if it changed since.
+ * the text shown, so the backend can refuse if it changed since, and the request id that
+ * "Abbrechen" and the streamed text refer to.
  */
 export function RedactionDialog({
   reportId,
@@ -406,7 +419,7 @@ export function RedactionDialog({
   loadPreview: () => Promise<ExtractPreview>;
   progressEvent: "extract-progress" | "draft-progress";
   labels: RedactionLabels;
-  onRun: (digest: string) => Promise<void>;
+  onRun: (digest: string, requestId: string) => Promise<void>;
   onClose: () => void;
   /** Extra controls above the preview (e.g. an instruction). */
   children?: ReactNode;
@@ -422,6 +435,9 @@ export function RedactionDialog({
   const [term, setTerm] = useState("");
   const [kind, setKind] = useState<EntityKind>("person");
   const [progress, setProgress] = useState<ExtractProgress | null>(null);
+  const [requestId, setRequestId] = useState<string | null>(null);
+  const [received, setReceived] = useState(0);
+  const [cancelling, setCancelling] = useState(false);
 
   const refresh = () => void qc.invalidateQueries({ queryKey: previewKey });
   const add = useMutation({
@@ -438,13 +454,35 @@ export function RedactionDialog({
     onError: (e) => toast.error(errorMessage(e)),
   });
   const run = useMutation({
-    mutationFn: onRun,
+    mutationFn: (v: { digest: string; id: string }) => onRun(v.digest, v.id),
     onSuccess: onClose,
     onError: (e) => {
       setProgress(null);
+      setRequestId(null);
+      setCancelling(false);
       toast.error(errorMessage(e));
     },
   });
+  const start = (digest: string) => {
+    const id = crypto.randomUUID();
+    setRequestId(id);
+    setReceived(0);
+    setCancelling(false);
+    run.mutate({ digest, id });
+  };
+  const cancel = () => {
+    if (!requestId) return;
+    setCancelling(true);
+    api.llmCancel(requestId).catch((e) => toast.error(errorMessage(e)));
+  };
+
+  useEffect(() => {
+    if (!requestId) return;
+    const off = api.onLlmDelta(requestId, (text) =>
+      setReceived((n) => n + text.length),
+    );
+    return () => void off.then((f) => f());
+  }, [requestId]);
 
   useEffect(() => {
     const off = listen<ExtractProgress>(progressEvent, (e) => {
@@ -649,13 +687,21 @@ export function RedactionDialog({
                       progress.total,
                     )
                   : labels.running}
+              {received > 0 &&
+                ` · ${t("facts.progress.received", { count: received })}`}
             </span>
           )}
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
-            {t("common.cancel")}
+          <Button
+            variant="ghost"
+            onClick={busy ? cancel : onClose}
+            disabled={busy && cancelling}
+          >
+            {busy && cancelling
+              ? t("facts.progress.cancelling")
+              : t("common.cancel")}
           </Button>
           <Button
-            onClick={() => data && run.mutate(data.digest)}
+            onClick={() => data && start(data.digest)}
             disabled={
               !canRun ||
               !data?.provider ||

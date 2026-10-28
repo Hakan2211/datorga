@@ -167,7 +167,7 @@ impl Store {
                 "prompt_tokens": c.prompt_tokens, "completion_tokens": c.completion_tokens,
                 "reasoning_tokens": c.reasoning_tokens, "cost_usd": c.cost, "latency_ms": c.latency_ms,
             }),
-            Err(_) => json!({ "provider": provider, "model": model, "ok": false }),
+            Err(reason) => json!({ "provider": provider, "model": model, "ok": false, "error": reason }),
         };
         audit::append(&self.conn, Entry { actor: ACTOR, action, entity_type: "llm", entity_id: None, meta })
     }

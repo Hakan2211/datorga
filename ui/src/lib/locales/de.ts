@@ -282,7 +282,12 @@ export const de = {
       loading: 'Lokales Modell wird geladen…',
       running: 'KI liest die Abschrift…',
       chunk: 'KI liest Teil {{done}} von {{total}}…',
+      received: '{{count}} Zeichen empfangen',
+      cancelling: 'Wird abgebrochen…',
     },
+    cancelledNothing: 'Abgebrochen. Es wurde nichts gespeichert.',
+    cancelledPartial_one: 'Abgebrochen nach Teil {{done}} von {{total}}: {{count}} Vorschlag behalten.',
+    cancelledPartial_other: 'Abgebrochen nach Teil {{done}} von {{total}}: {{count}} Vorschläge behalten.',
     preview: {
       title: 'Vorschau: was gesendet wird',
       intro:
@@ -342,6 +347,7 @@ export const de = {
       running: 'KI entwirft…',
       part: 'KI entwirft Abschnitt {{done}} von {{total}}…',
     },
+    cancelledPartial: 'Abgebrochen: {{done}} von {{total}} Abschnitten entworfen und behalten.',
     send: 'Senden und entwerfen',
     runLocal: 'Entwerfen',
   },

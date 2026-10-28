@@ -4,6 +4,8 @@
 //! An extraction prompt gets one "Fakt: …" per transcript line in `verlauf`, citing that line,
 //! plus one fact with an invented token that the app has to drop. A Bericht draft prompt gets one
 //! "Entwurf: …" sentence per fact (at most three) plus one citing a fact that doesn't exist.
+//! With `stream: true` the answer comes as SSE in eight pieces, `THERA_FAKE_LLAMA_DELAY_MS` apart
+//! (default 20), so a cancel can land mid-stream.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -75,6 +77,9 @@ fn handle(stream: TcpStream, key: &str, alias: &str, ready: bool) {
         } else {
             format!("Echo: {last}")
         };
+        if req["stream"] == true {
+            return sse(stream, alias, &content);
+        }
         (200, json!({"model": alias, "choices": [{"message": {"role": "assistant", "content": content}}], "usage": {"prompt_tokens": 5, "completion_tokens": 3}}))
     } else {
         (404, json!({"error": {"message": "not found"}}))
@@ -109,4 +114,24 @@ fn draft(user: &str) -> String {
     }
     sentences.push(json!({"text": "Ohne Beleg erfunden.", "facts": [999]}));
     json!({"sentences": sentences}).to_string()
+}
+
+/// `content` as an OpenAI-style SSE stream, closing with a usage chunk and `[DONE]`.
+fn sse(mut w: TcpStream, alias: &str, content: &str) {
+    let pause = std::env::var("THERA_FAKE_LLAMA_DELAY_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(20);
+    let chars: Vec<char> = content.chars().collect();
+    let step = chars.len().div_ceil(8).max(1);
+    if write!(w, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").is_err() {
+        return;
+    }
+    for piece in chars.chunks(step) {
+        let chunk = json!({"model": alias, "choices": [{"delta": {"content": piece.iter().collect::<String>()}}]});
+        // The client hung up (cancelled): stop like llama-server does.
+        if write!(w, "data: {chunk}\n\n").and_then(|_| w.flush()).is_err() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(pause));
+    }
+    let done = json!({"model": alias, "choices": [{"delta": {}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 5, "completion_tokens": 3}});
+    let _ = write!(w, "data: {done}\n\ndata: [DONE]\n\n");
 }

@@ -36,6 +36,10 @@ fn starts_waits_for_the_model_and_answers_only_with_the_key() {
     let msg = p.pseudonymize("Hallo").unwrap();
     let c = llm::chat(&ep, "qwen3-14b", &[(Role::User, &msg)], &ChatOptions::default()).unwrap();
     assert_eq!(c.text, "Echo: Hallo");
+    let mut pieces = 0;
+    let c = llm::chat_stream(&ep, "qwen3-14b", &[(Role::User, &msg)], &ChatOptions::default(), &AtomicBool::new(false), |_| pieces += 1).unwrap();
+    assert_eq!((c.text.as_str(), c.completion_tokens), ("Echo: Hallo", Some(3)));
+    assert!(pieces > 1, "streamed in pieces");
     assert_eq!(llm::list_models(&ep).unwrap()[0].id, "qwen3-14b");
 
     let mut stranger = ep.clone();

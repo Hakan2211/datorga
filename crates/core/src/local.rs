@@ -264,6 +264,11 @@ impl LlamaServer {
     /// Waits until the model is loaded (`GET /health` answers 200). Kills the server on timeout,
     /// on `cancel`, or reports its last log lines when it exits by itself.
     pub fn wait_ready(&mut self, timeout: Duration, cancel: &AtomicBool) -> Result<()> {
+        self.wait_ready_until(timeout, || cancel.load(Ordering::Relaxed))
+    }
+
+    /// [`Self::wait_ready`] with any stop condition (e.g. app exit or the request was cancelled).
+    pub fn wait_ready_until(&mut self, timeout: Duration, cancelled: impl Fn() -> bool) -> Result<()> {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(2)))
             .http_status_as_error(false)
@@ -272,7 +277,7 @@ impl LlamaServer {
         let url = format!("http://127.0.0.1:{}/health", self.port);
         let started = Instant::now();
         loop {
-            if cancel.load(Ordering::Relaxed) {
+            if cancelled() {
                 self.kill();
                 return Err(Error::Cancelled);
             }

@@ -112,9 +112,14 @@ export function DraftDialog({
         part: (done, total) => t('draft.progress.part', { done, total }),
         parts: (count) => t('draft.parts', { count }),
       }}
-      onRun={async (digest) => {
-        const r = await api.draftRun(reportId, keys, sent || null, digest)
+      onRun={async (digest, requestId) => {
+        const r = await api.draftRun(reportId, keys, sent || null, digest, requestId)
         qc.setQueryData(q.reportDrafts(reportId).queryKey, r.drafts)
+        if (r.cancelled) {
+          if (r.done === 0) toast.info(t('facts.cancelledNothing'))
+          else toast.success(t('draft.cancelledPartial', { done: r.done, total: r.total }))
+          return
+        }
         toast.success(
           t('draft.done', { count: keys.length }) + (r.dropped ? ` ${t('draft.dropped', { count: r.dropped })}` : ''),
         )
