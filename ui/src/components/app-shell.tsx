@@ -5,7 +5,6 @@ import { useTranslation } from 'react-i18next'
 import {
   CalendarDays,
   FileText,
-  House,
   Library,
   Lock,
   LockOpen,
@@ -17,6 +16,7 @@ import {
   Search,
   Settings,
   Sparkles,
+  Sun,
   Users,
 } from 'lucide-react'
 import { api, q } from '@/lib/api'
@@ -32,8 +32,8 @@ type Icon = ComponentType<{ className?: string }>
 
 // Module registry: each module contributes a nav entry. Modules of later slices are shown disabled.
 const modules: { to?: string; label: string; icon: Icon; exact?: boolean }[] = [
-  { to: '/', label: 'nav.dashboard', icon: House, exact: true },
-  { label: 'nav.calendar', icon: CalendarDays },
+  { to: '/', label: 'nav.dashboard', icon: Sun, exact: true },
+  { to: '/calendar', label: 'nav.calendar', icon: CalendarDays },
   { to: '/patients', label: 'nav.patients', icon: Users },
   { to: '/sessions', label: 'nav.sessions', icon: Mic },
   { to: '/reports', label: 'nav.reports', icon: FileText },

@@ -591,7 +591,7 @@ mod tests {
             .create_patient(PatientInput { first_name: "Anna".into(), last_name: "Beispiel".into(), ..Default::default() })
             .unwrap();
         let s = store
-            .create_session(SessionInput { patient_id: p.id, episode_id: None, scheduled_at: None, modality: None })
+            .create_session(SessionInput { patient_id: p.id, episode_id: None, scheduled_at: None, modality: None, planned_minutes: None })
             .unwrap();
         let (src, mut w) = store.start_source(&s.id, SourceKind::Dictation, &data.join(AUDIO_DIR)).unwrap();
         w.write(&vec![1000i16; 16_000 * 6]).unwrap();

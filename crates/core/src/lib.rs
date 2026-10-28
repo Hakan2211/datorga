@@ -3,6 +3,7 @@
 pub mod audio;
 pub mod backup;
 pub mod audit;
+pub mod calendar;
 pub mod catalog;
 pub mod context;
 pub mod consent;

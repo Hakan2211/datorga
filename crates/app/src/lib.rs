@@ -1150,6 +1150,90 @@ fn session_create(state: State<'_, AppState>, input: SessionInput) -> CmdResult<
     state.with(|s| s.create_session(input))
 }
 
+// ---------- calendar (slice 22) ----------
+
+#[tauri::command]
+fn calendar_range(state: State<'_, AppState>, from: String, to: String) -> CmdResult<Vec<CalendarSession>> {
+    state.with(|s| s.sessions_between(&from, &to))
+}
+
+/// Writes the sessions in `[from, to)` as .ics (Chiffre only) to `path`; returns how many.
+#[tauri::command]
+fn calendar_export_ics(state: State<'_, AppState>, from: String, to: String, path: String) -> CmdResult<usize> {
+    state.with(|s| {
+        let sessions = s.sessions_between(&from, &to)?;
+        std::fs::write(&path, thera_core::calendar::ics(&sessions, &thera_core::domain::now())?)?;
+        s.log_calendar_export(sessions.len())?;
+        Ok(sessions.len())
+    })
+}
+
+#[tauri::command]
+fn sessions_create_series(state: State<'_, AppState>, inputs: Vec<SessionInput>) -> CmdResult<Vec<Session>> {
+    state.with(|s| s.create_sessions(&inputs))
+}
+
+#[tauri::command]
+fn session_update(state: State<'_, AppState>, id: String, update: SessionUpdate) -> CmdResult<Session> {
+    state.with(|s| s.update_session(&id, update))
+}
+
+#[tauri::command]
+fn session_cancel(state: State<'_, AppState>, id: String, reason: Option<String>) -> CmdResult<Session> {
+    state.with(|s| s.cancel_session(&id, reason.as_deref()))
+}
+
+#[tauri::command]
+fn session_reopen(state: State<'_, AppState>, id: String) -> CmdResult<Session> {
+    state.with(|s| s.reopen_session(&id))
+}
+
+#[tauri::command]
+fn session_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.with(|s| s.delete_session(&id))
+}
+
+/// "Fällig" on the Heute page; see `Store::due_items`.
+#[tauri::command]
+fn due_items(state: State<'_, AppState>, from: String, day_start: String, until: String) -> CmdResult<Vec<DueItem>> {
+    state.with(|s| s.due_items(&from, &day_start, &until))
+}
+
+#[tauri::command]
+fn tasks_list(state: State<'_, AppState>, from: String, to: String, open_before: bool) -> CmdResult<Vec<Task>> {
+    state.with(|s| s.list_tasks(&from, &to, open_before))
+}
+
+#[tauri::command]
+fn task_create(state: State<'_, AppState>, input: TaskInput) -> CmdResult<Task> {
+    state.with(|s| s.create_task(input))
+}
+
+#[tauri::command]
+fn task_update(state: State<'_, AppState>, id: String, input: TaskInput) -> CmdResult<Task> {
+    state.with(|s| s.update_task(&id, input))
+}
+
+#[tauri::command]
+fn task_set_done(state: State<'_, AppState>, id: String, done: bool) -> CmdResult<Task> {
+    state.with(|s| s.set_task_done(&id, done))
+}
+
+#[tauri::command]
+fn task_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.with(|s| s.delete_task(&id))
+}
+
+#[tauri::command]
+fn day_note_get(state: State<'_, AppState>, date: String) -> CmdResult<Option<String>> {
+    state.with(|s| s.day_note(&date))
+}
+
+#[tauri::command]
+fn day_note_set(state: State<'_, AppState>, date: String, body: String) -> CmdResult<()> {
+    state.with(|s| s.set_day_note(&date, &body))
+}
+
 /// Creates the session's Sitzungsnotiz (or returns the existing one).
 #[tauri::command]
 fn session_note_create(state: State<'_, AppState>, session_id: String) -> CmdResult<Report> {
@@ -2336,6 +2420,21 @@ pub fn run() {
             sessions_list,
             session_create,
             session_note_create,
+            calendar_range,
+            calendar_export_ics,
+            sessions_create_series,
+            session_update,
+            session_cancel,
+            session_reopen,
+            session_delete,
+            due_items,
+            tasks_list,
+            task_create,
+            task_update,
+            task_set_done,
+            task_delete,
+            day_note_get,
+            day_note_set,
             templates_list,
             reports_list,
             report_get,

@@ -5,7 +5,7 @@ import { useMatch, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { FileText, House, Library, Mic, NotebookPen, Plus, ScrollText, Settings, Square, User, Users } from 'lucide-react'
+import { CalendarDays, FileText, Library, Mic, NotebookPen, Plus, ScrollText, Settings, Square, Sun, User, Users } from 'lucide-react'
 import { formatDate } from '@/components/bits'
 import {
   CommandDialog,
@@ -20,7 +20,8 @@ import { api, errorMessage, q } from '@/lib/api'
 import { useCaptureDevice } from '@/lib/capture'
 
 const pages = [
-  { to: '/', label: 'nav.dashboard', icon: House },
+  { to: '/', label: 'nav.dashboard', icon: Sun },
+  { to: '/calendar', label: 'nav.calendar', icon: CalendarDays },
   { to: '/patients', label: 'nav.patients', icon: Users },
   { to: '/sessions', label: 'nav.sessions', icon: Mic },
   { to: '/reports', label: 'nav.reports', icon: FileText },

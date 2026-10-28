@@ -168,7 +168,12 @@ pub struct Session {
     pub ended_at: Option<String>,
     pub duration_s: Option<i64>,
     pub modality: Option<String>,
+    /// `planned` | `in_progress` | `recorded` | `cancelled`.
     pub status: String,
+    /// Planned length; `None` = [`DEFAULT_SESSION_MINUTES`].
+    #[ts(type = "number | null")]
+    pub planned_minutes: Option<i64>,
+    pub cancelled_reason: Option<String>,
     /// The session's Sitzungsnotiz, if one was started.
     pub note_id: Option<String>,
     pub note_status: Option<ReportStatus>,
@@ -263,6 +268,89 @@ pub struct SessionInput {
     pub episode_id: Option<String>,
     pub scheduled_at: Option<String>,
     pub modality: Option<String>,
+    #[serde(default)]
+    #[ts(optional, type = "number | null")]
+    pub planned_minutes: Option<i64>,
+}
+
+/// Length of a Richtlinien-Einzelsitzung; used when a session has no planned length.
+pub const DEFAULT_SESSION_MINUTES: i64 = 50;
+
+/// Reschedule or change a session that hasn't started.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SessionUpdate {
+    pub scheduled_at: String,
+    #[ts(type = "number | null")]
+    pub planned_minutes: Option<i64>,
+    pub modality: Option<String>,
+}
+
+/// A session in the calendar, with what the colours and the "Heute" timeline need.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CalendarSession {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub session: Session,
+    /// Shown locally only; the .ics export uses the Chiffre.
+    pub patient_name: String,
+    pub chiffre: Option<String>,
+    /// Running number among the patient's sessions that weren't cancelled ("Sitzung 12").
+    #[ts(type = "number")]
+    pub number: i64,
+    pub has_prep: bool,
+    /// Sources that finished recording, and those of them still without a confirmed transcript.
+    #[ts(type = "number")]
+    pub sources_finished: i64,
+    #[ts(type = "number")]
+    pub sources_unreviewed: i64,
+    pub recording: bool,
+}
+
+/// A to-do on a day (local date), optionally tied to a patient or session.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Task {
+    pub id: String,
+    pub date: String,
+    pub time: Option<String>,
+    pub title: String,
+    pub done: bool,
+    pub patient_id: Option<String>,
+    pub session_id: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TaskInput {
+    pub date: String,
+    pub time: Option<String>,
+    pub title: String,
+    pub patient_id: Option<String>,
+    pub session_id: Option<String>,
+}
+
+str_enum!(
+    /// Derived "Fällig" items on the Heute page.
+    DueKind { NoteOpen => "note_open", PrepMissing => "prep_missing", ReportDraft => "report_draft" }
+);
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DueItem {
+    pub kind: DueKind,
+    pub patient_id: String,
+    pub patient_name: String,
+    pub chiffre: Option<String>,
+    pub session_id: Option<String>,
+    pub report_id: Option<String>,
+    /// Session time, or the Bericht's last change.
+    pub at: Option<String>,
+    pub application_kind: Option<ApplicationKind>,
+    #[ts(type = "number | null")]
+    pub seq: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

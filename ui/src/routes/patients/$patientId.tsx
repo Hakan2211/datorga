@@ -13,6 +13,7 @@ import { Page, PageHeader } from '@/components/app-shell'
 import { ExportOutdatedBadge, StatusBadge, formatDate } from '@/components/bits'
 import { ConsentCard } from '@/components/consent-card'
 import { PatientFormDialog } from '@/components/patient-form'
+import { SessionDialog, type SessionDialogMode } from '@/components/session-dialog'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,7 +29,6 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { api, errorMessage, q } from '@/lib/api'
@@ -108,7 +108,7 @@ function PatientDetail() {
         </div>
         {episodes.data?.length === 0 && <p className="text-sm text-muted-foreground">{t('episodes.none')}</p>}
         {episodes.data?.map((e) => <EpisodeCard key={e.id} episode={e} />)}
-        <SessionsCard patientId={patientId} episodeId={episodes.data?.[0]?.id} />
+        <SessionsCard patientId={patientId} />
       </Page>
     </>
   )
@@ -135,7 +135,7 @@ function EpisodeCard({ episode }: { episode: Episode }) {
         <CardTitle className="text-base">
           {t(`enums.method.${episode.method}`)}
           <span className="ml-3 text-sm font-normal text-muted-foreground">
-            {t(`enums.age_group.${episode.age_group}`)} · {t(`enums.setting.${episode.setting}`)} ·{' '}
+            {t(`enums.age_group.${episode.age_group}`)} Â· {t(`enums.setting.${episode.setting}`)} Â·{' '}
             {t('episodes.since')} {formatDate(episode.started_at)}
           </span>
         </CardTitle>
@@ -250,36 +250,19 @@ function EnumSelect<T extends string>({
   )
 }
 
-function SessionsCard({ patientId, episodeId }: { patientId: string; episodeId?: string }) {
+function SessionsCard({ patientId }: { patientId: string }) {
   const { t } = useTranslation()
-  const qc = useQueryClient()
   const sessions = useQuery(q.sessions(patientId))
-  const [date, setDate] = useState('')
-  const create = useMutation({
-    mutationFn: () =>
-      api.createSession({
-        patient_id: patientId,
-        episode_id: episodeId ?? null,
-        scheduled_at: date ? new Date(date).toISOString() : null,
-        modality: 'praesenz',
-      }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['sessions'] })
-      setDate('')
-    },
-    onError: (e) => toast.error(errorMessage(e)),
-  })
+  const [dialog, setDialog] = useState<SessionDialogMode | null>(null)
 
   return (
     <Card>
+      <SessionDialog mode={dialog} onOpenChange={(o) => !o && setDialog(null)} />
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <CardTitle className="text-base">{t('sessions.title')}</CardTitle>
-        <div className="flex items-center gap-2">
-          <Input type="datetime-local" className="w-56" value={date} onChange={(e) => setDate(e.target.value)} />
-          <Button size="sm" variant="outline" onClick={() => create.mutate()} disabled={create.isPending}>
-            <Plus /> {t('sessions.new')}
-          </Button>
-        </div>
+        <Button size="sm" variant="outline" onClick={() => setDialog({ kind: 'create', patientId })} data-testid="patient-new-session">
+          <Plus /> {t('sessions.new')}
+        </Button>
       </CardHeader>
       <CardContent>
         <ul className="divide-y text-sm">

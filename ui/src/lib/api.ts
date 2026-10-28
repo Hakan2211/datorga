@@ -56,6 +56,11 @@ import type { LiveSession } from '@/bindings/LiveSession'
 import type { BriefStats } from '@/bindings/BriefStats'
 import type { PrepTurn } from '@/bindings/PrepTurn'
 import type { SessionPrep } from '@/bindings/SessionPrep'
+import type { CalendarSession } from '@/bindings/CalendarSession'
+import type { DueItem } from '@/bindings/DueItem'
+import type { SessionUpdate } from '@/bindings/SessionUpdate'
+import type { Task } from '@/bindings/Task'
+import type { TaskInput } from '@/bindings/TaskInput'
 
 export type InitResult = {
   status: 'ready' | 'recovery_required' | 'new'
@@ -233,6 +238,23 @@ export const api = {
   createSession: (input: SessionInput) => invoke<Session>('session_create', { input }),
   session: (id: string) => invoke<SessionView>('session_get', { id }),
   createSessionNote: (sessionId: string) => invoke<Report>('session_note_create', { sessionId }),
+  createSessions: (inputs: SessionInput[]) => invoke<Session[]>('sessions_create_series', { inputs }),
+  updateSession: (id: string, update: SessionUpdate) => invoke<Session>('session_update', { id, update }),
+  cancelSession: (id: string, reason: string | null) => invoke<Session>('session_cancel', { id, reason }),
+  reopenSession: (id: string) => invoke<Session>('session_reopen', { id }),
+  deleteSession: (id: string) => invoke<void>('session_delete', { id }),
+
+  // Calendar: `from`/`to` are instants (RFC 3339), task and note dates are local 'YYYY-MM-DD'.
+  calendar: (from: string, to: string) => invoke<CalendarSession[]>('calendar_range', { from, to }),
+  exportIcs: (from: string, to: string, path: string) => invoke<number>('calendar_export_ics', { from, to, path }),
+  dueItems: (from: string, dayStart: string, until: string) => invoke<DueItem[]>('due_items', { from, dayStart, until }),
+  tasks: (from: string, to: string, openBefore: boolean) => invoke<Task[]>('tasks_list', { from, to, openBefore }),
+  createTask: (input: TaskInput) => invoke<Task>('task_create', { input }),
+  updateTask: (id: string, input: TaskInput) => invoke<Task>('task_update', { id, input }),
+  setTaskDone: (id: string, done: boolean) => invoke<Task>('task_set_done', { id, done }),
+  deleteTask: (id: string) => invoke<void>('task_delete', { id }),
+  dayNote: (date: string) => invoke<string | null>('day_note_get', { date }),
+  setDayNote: (date: string, body: string) => invoke<void>('day_note_set', { date, body }),
 
   audioDevices: () => invoke<InputDevice[]>('audio_devices'),
   startRecording: (sessionId: string, kind: SourceKind, deviceId: string | null) =>
@@ -345,6 +367,14 @@ export const q = {
     queryOptions({ queryKey: ['applications', episodeId], queryFn: () => api.applications(episodeId) }),
   sessions: (patientId?: string) =>
     queryOptions({ queryKey: ['sessions', patientId ?? 'all'], queryFn: () => api.sessions(patientId) }),
+  // Polled so the colours follow a running recording or transcription elsewhere in the app.
+  calendar: (from: string, to: string) =>
+    queryOptions({ queryKey: ['calendar', from, to], queryFn: () => api.calendar(from, to), refetchInterval: 15_000 }),
+  dueItems: (from: string, dayStart: string, until: string) =>
+    queryOptions({ queryKey: ['calendar', 'due', from, dayStart, until], queryFn: () => api.dueItems(from, dayStart, until) }),
+  tasks: (from: string, to: string, openBefore: boolean) =>
+    queryOptions({ queryKey: ['tasks', from, to, openBefore], queryFn: () => api.tasks(from, to, openBefore) }),
+  dayNote: (date: string) => queryOptions({ queryKey: ['dayNote', date], queryFn: () => api.dayNote(date) }),
   // Polled while a transcription is queued or running (progress bar).
   session: (id: string) =>
     queryOptions({

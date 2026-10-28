@@ -187,3 +187,15 @@ Eval 2026-10-28 (`de-therapy-v1`, OpenRouter, ZDR enforced, production reasoning
 After slice 19 (`extract-2026.2` / `draft-2026.3`, tag-filtered drafts, 2026-10-28): Gemini 3.8 Flash draft precision 93 %, recall 96 % (0.098 $); Claude Haiku 5.5 97 % / 96 % (0.023 $); local Qwen3 8B 83 % / 75 % (3 runs). Forbidden 0 for all three. Haiku is now the cheapest and the most precise of the measured models.
 
 Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.5 (not measured to save cost). The suite has only 3 Bericht episodes: precision differences of a few points are noise.
+
+## 11. Calendar decisions (slice 22, 2026-10-28; made while building, for the user to review)
+
+| # | Decision | Why |
+|---|---|---|
+| K1 | **A session with a recording or a note keeps its time**: it can't be moved, cancelled or deleted. | The Sitzungsnotiz takes its date from the session; moving it would change documentation after the fact. |
+| K2 | **Cancel instead of delete.** "Absagen" keeps the session (status `cancelled`, optional reason, shown struck through, excluded from the session numbering). Delete is only for an empty mistake (no recording, note or prep). | Ausfälle stay visible for the record and for billing questions. |
+| K3 | **The cancel reason, task titles and the day note stay out of the audit log**; it records only that something changed. | Free text can name people; the log must survive erasure without PII. |
+| K4 | **Series without RRULE**: N sessions (1–25 in the dialog, ≤ 52 in core), weekly or every two weeks, dates computed in local time. | The plan's "Serie anlegen" helper; DST keeps the wall-clock time. |
+| K5 | **.ics = Chiffre + "Sitzung n" only**, three months from the start of the view, cancelled ones marked `STATUS:CANCELLED`. | A file that leaves the app; names and reasons never go into it. |
+| K6 | **"Fällig"** = sessions of the last 60 days that weren't cancelled and have no signed note; Berichte for an application in draft/review; tomorrow's planned sessions with nothing done yet. | Today's sessions are already on the timeline with their next step. |
+| K7 | **Times are typed (`HH:MM`)**, not picked in quarter hours. | 50-minute rhythms start at 8:50, 9:40, …; the native time input showed AM/PM. |

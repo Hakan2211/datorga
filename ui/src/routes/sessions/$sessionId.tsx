@@ -17,7 +17,9 @@ import {
   MicOff,
   NotebookPen,
   Square,
+  Undo2,
   X,
+  XCircle,
 } from 'lucide-react'
 import type { SourceKind } from '@/bindings/SourceKind'
 import type { SttTarget } from '@/bindings/SttTarget'
@@ -31,9 +33,9 @@ import {
   Stepper,
   StickyActionBar,
   formatDate,
-  stepStates,
 } from '@/components/bits'
 import { useReportExport } from '@/components/report-export'
+import { invalidateSessions } from '@/components/session-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -41,33 +43,32 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { TranscriptView } from '@/components/transcript-view'
 import { PrepCard } from '@/components/voice-prep'
 import { api, errorMessage, jobActive, q, type RecordingStatus, type SessionView, type SourceView } from '@/lib/api'
+import { SESSION_FLOW, flowStates, type FlowStep } from '@/lib/calendar'
 import { formatDuration, useCaptureDevice } from '@/lib/capture'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/sessions/$sessionId')({ component: SessionPage })
 
-const FLOW = ['prepare', 'capture', 'review', 'note', 'finish'] as const
-type FlowStep = (typeof FLOW)[number]
+const FLOW = SESSION_FLOW
 
 /** Where a session stands, from its recordings, transcripts and note. */
 function sessionFlow(view: SessionView, recording: RecordingStatus | null | undefined, hasPrep: boolean) {
   const { session, sources } = view
-  const hasNote = !!session.note_id
   const finished = sources.filter((s) => s.status !== 'recording')
   const reviewed = (s: SourceView) => s.transcript?.status === 'confirmed' || !!s.audio_deleted_at
-  const signed = session.note_status === 'signed' || session.note_status === 'exported'
-  const states = stepStates(
-    [
-      { key: 'prepare', done: hasPrep || sources.length > 0 || hasNote },
-      { key: 'capture', done: finished.length > 0 || hasNote },
-      { key: 'review', done: finished.length > 0 ? finished.every(reviewed) : hasNote },
-      { key: 'note', done: signed },
-      { key: 'finish', done: session.note_status === 'exported' && !session.note_export_outdated },
-    ],
-    recording?.session_id === session.id ? 'capture' : undefined,
-  )
+  const unreviewed = finished.filter((s) => !reviewed(s)).length
+  const states = flowStates({
+    hasPrep,
+    sources: sources.length,
+    finished: finished.length,
+    unreviewed,
+    hasNote: !!session.note_id,
+    noteStatus: session.note_status,
+    exportOutdated: session.note_export_outdated,
+    recordingHere: recording?.session_id === session.id,
+  })
   const current = FLOW.find((k) => states[k] === 'current')
-  return { states, current, unreviewed: finished.filter((s) => !reviewed(s)).length, finished: finished.length }
+  return { states, current, unreviewed, finished: finished.length }
 }
 
 function SessionPage() {
@@ -97,6 +98,7 @@ function SessionPage() {
         }
       />
       <Page className="flex-1">
+        {session.status === 'cancelled' && <CancelledBanner sessionId={session.id} reason={session.cancelled_reason} />}
         <Stepper
           steps={FLOW.map((k) => ({ key: k, label: t(`flow.session.${k}`), state: flow.states[k] }))}
           viewing={shown}
@@ -112,6 +114,26 @@ function SessionPage() {
         </div>
       </Page>
       <FlowBar shown={shown} flow={flow} recordingHere={recording.data?.session_id === session.id} onNext={setViewing} />
+    </div>
+  )
+}
+
+/** A cancelled session takes no recording or note until it is planned again. */
+function CancelledBanner({ sessionId, reason }: { sessionId: string; reason: string | null }) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const reopen = useMutation({
+    mutationFn: () => api.reopenSession(sessionId),
+    onSuccess: () => invalidateSessions(qc),
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+  return (
+    <div className="mx-auto flex max-w-4xl items-center gap-3 rounded-lg border border-dashed px-4 py-3 text-sm" data-testid="cancelled-banner">
+      <XCircle className="size-4 text-muted-foreground" />
+      <span className="flex-1">{reason ? t('sessions.cancelledReason', { reason }) : t('sessions.cancelled')}</span>
+      <Button size="sm" variant="outline" onClick={() => reopen.mutate()} disabled={reopen.isPending}>
+        <Undo2 /> {t('calendar.reopen')}
+      </Button>
     </div>
   )
 }

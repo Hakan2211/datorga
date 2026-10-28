@@ -424,7 +424,7 @@ mod tests {
             .create_patient(PatientInput { first_name: "Anna".into(), last_name: "Beispiel".into(), ..Default::default() })
             .unwrap();
         let s = store
-            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: None, scheduled_at: Some("2026-10-27T09:00:00Z".into()), modality: None })
+            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: None, scheduled_at: Some("2026-10-27T09:00:00Z".into()), modality: None, planned_minutes: None })
             .unwrap();
         let note = store.create_session_note(&s.id).unwrap();
         store.save_section(&note.id, "risiko", "<p>Keine Suizidalität</p>").unwrap();
@@ -444,7 +444,7 @@ mod tests {
             .create_patient(PatientInput { first_name: "Anna".into(), last_name: "Beispiel".into(), ..Default::default() })
             .unwrap();
         let s = store
-            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: None, scheduled_at: None, modality: None })
+            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: None, scheduled_at: None, modality: None, planned_minutes: None })
             .unwrap();
         let note = store.create_session_note(&s.id).unwrap();
         store.save_section(&note.id, "verlauf", "<p>Original</p>").unwrap();

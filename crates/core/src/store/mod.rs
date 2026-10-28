@@ -16,6 +16,9 @@ use crate::pseudo::{Dictionary, EntityKind};
 use crate::templates::{self, Template};
 use crate::{Error, Result};
 
+mod calendar;
+pub use calendar::normalize_ts;
+
 const ACTOR: &str = "therapist";
 /// Setting: the therapist confirmed the current recovery key is stored. Absent or false means the
 /// key shown last was never confirmed (window reload, crash, old install): the app asks for a new one.
@@ -34,6 +37,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V9__job_engine.sql"),
     include_str!("migrations/V10__session_prep.sql"),
     include_str!("migrations/V11__draft_quality.sql"),
+    include_str!("migrations/V12__calendar.sql"),
 ];
 
 /// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).
@@ -564,11 +568,14 @@ impl Store {
 
     pub fn create_session(&self, input: SessionInput) -> Result<Session> {
         self.patient(&input.patient_id)?;
+        let scheduled_at = input.scheduled_at.as_deref().map(normalize_ts).transpose()?;
+        calendar::check_minutes(input.planned_minutes)?;
         let tx = self.conn.unchecked_transaction()?;
         let id = new_id();
         tx.execute(
-            "INSERT INTO session (id, patient_id, episode_id, scheduled_at, modality) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, input.patient_id, input.episode_id, input.scheduled_at, input.modality],
+            "INSERT INTO session (id, patient_id, episode_id, scheduled_at, modality, planned_minutes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, input.patient_id, input.episode_id, scheduled_at, input.modality, input.planned_minutes],
         )?;
         audit::append(&tx, Entry { actor: ACTOR, action: "session.create", entity_type: "session", entity_id: Some(&id), meta: json!({}) })?;
         tx.commit()?;
@@ -596,6 +603,9 @@ impl Store {
     /// Session recordings are refused without an active recording consent (fail closed).
     pub fn start_source(&self, session_id: &str, kind: SourceKind, audio_root: &Path) -> Result<(SessionSource, ChunkWriter)> {
         let session = self.session(session_id)?;
+        if session.status == "cancelled" {
+            return Err(Error::Invalid("Die Sitzung ist abgesagt".into()));
+        }
         let consent_id = match kind {
             SourceKind::SessionAudio => Some(
                 self.active_consent(&session.patient_id, ConsentKind::Recording)?
@@ -980,6 +990,9 @@ impl Store {
         let session = self.session(session_id)?;
         if let Some(id) = session.note_id {
             return self.report(&id);
+        }
+        if session.status == "cancelled" {
+            return Err(Error::Invalid("Die Sitzung ist abgesagt".into()));
         }
         let template = self.template(templates::SESSION_NOTE_KEY)?;
         let template = match &session.episode_id {
@@ -1867,7 +1880,8 @@ const EPISODE_SELECT: &str =
     "SELECT id, patient_id, method, age_group, setting, stage, started_at, ended_at FROM episode";
 const SESSION_SELECT: &str = "SELECT s.id, s.patient_id, s.episode_id, s.scheduled_at, s.started_at, s.ended_at,
     s.duration_s, s.modality, s.status, n.id, n.status,
-    n.status = 'exported' AND (SELECT count(*) FROM report_addendum x WHERE x.report_id = n.id) > COALESCE(n.exported_addenda, 0)
+    n.status = 'exported' AND (SELECT count(*) FROM report_addendum x WHERE x.report_id = n.id) > COALESCE(n.exported_addenda, 0),
+    s.planned_minutes, s.cancelled_reason
     FROM session s LEFT JOIN report n ON n.session_id = s.id AND n.kind = 'sitzungsnotiz'";
 
 const JOB_SELECT: &str =
@@ -2009,6 +2023,8 @@ fn row_to_session(r: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
             None => None,
         },
         note_export_outdated: r.get::<_, Option<bool>>(11)?.unwrap_or(false),
+        planned_minutes: r.get(12)?,
+        cancelled_reason: r.get(13)?,
     })
 }
 
@@ -2211,7 +2227,7 @@ mod tests {
 
     fn session(store: &Store, p: &Patient) -> Session {
         store
-            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: None, scheduled_at: None, modality: None })
+            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: None, scheduled_at: None, modality: None, planned_minutes: None })
             .unwrap()
     }
 
@@ -2519,7 +2535,7 @@ mod tests {
 
     fn note_with_tagged_facts(store: &Store, p: &Patient, ep: &Episode, at: &str, facts: &[(&str, &str, &[&str])]) -> Report {
         let s = store
-            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: Some(ep.id.clone()), scheduled_at: Some(at.into()), modality: None })
+            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: Some(ep.id.clone()), scheduled_at: Some(at.into()), modality: None, planned_minutes: None })
             .unwrap();
         let note = store.create_session_note(&s.id).unwrap();
         let meta = ExtractionMeta { provider: "local".into(), model: "m".into(), prompt_hash: "h".into(), chunks: 1, dropped: 0, merged: 0, tagged: true };
@@ -2665,7 +2681,7 @@ mod tests {
             .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Tp, age_group: AgeGroup::Adult, setting: Setting::Einzel })
             .unwrap();
         let s = store
-            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: Some(ep.id.clone()), scheduled_at: None, modality: None })
+            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: Some(ep.id.clone()), scheduled_at: None, modality: None, planned_minutes: None })
             .unwrap();
         assert_eq!((s.note_id.as_deref(), s.note_status), (None, None));
 
@@ -2717,7 +2733,7 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let p = patient(&store);
         let s = store
-            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: None, scheduled_at: None, modality: None })
+            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: None, scheduled_at: None, modality: None, planned_minutes: None })
             .unwrap();
         let note = store.create_session_note(&s.id).unwrap();
         store.save_section(&note.id, "verlauf", "<p>Original</p>").unwrap();
@@ -2745,7 +2761,7 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let p = patient(&store);
         let s = store
-            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: None, scheduled_at: None, modality: None })
+            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: None, scheduled_at: None, modality: None, planned_minutes: None })
             .unwrap();
         let note = store.create_session_note(&s.id).unwrap();
         store.save_section(&note.id, "verlauf", "<p>Original</p>").unwrap();
