@@ -239,6 +239,9 @@ export const api = {
     invoke<SessionSource>('recording_start', { sessionId, kind, deviceId }),
   recordingStatus: () => invoke<RecordingStatus | null>('recording_status'),
   stopRecording: () => invoke<SessionSource>('recording_stop'),
+  /** WAV bytes of `fromMs..toMs`, decrypted in memory; only until the transcript is confirmed. */
+  sourceAudio: (sourceId: string, fromMs: number, toMs: number) =>
+    invoke<ArrayBuffer>('source_audio_wav', { sourceId, fromMs, toMs }),
 
   startTranscription: (sourceId: string, engine: SttTarget | null) =>
     invoke<Job>('transcription_start', { sourceId, engine }),

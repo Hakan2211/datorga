@@ -1,72 +1,191 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { AlertTriangle, ClipboardList, Cloud, FileText, Laptop, Mic, NotebookPen, Square, X } from 'lucide-react'
+import {
+  AlertTriangle,
+  ArrowRight,
+  CheckCircle2,
+  ClipboardList,
+  Cloud,
+  Download,
+  FileSignature,
+  FileText,
+  Laptop,
+  Mic,
+  MicOff,
+  NotebookPen,
+  Square,
+  X,
+} from 'lucide-react'
 import type { SourceKind } from '@/bindings/SourceKind'
 import type { SttTarget } from '@/bindings/SttTarget'
 import { Page, PageHeader } from '@/components/app-shell'
-import { ExportOutdatedBadge, StatusBadge, formatDate } from '@/components/bits'
+import {
+  EmptyState,
+  ExportOutdatedBadge,
+  SectionCard,
+  StatusBadge,
+  StatusPill,
+  Stepper,
+  StickyActionBar,
+  formatDate,
+  stepStates,
+} from '@/components/bits'
+import { useReportExport } from '@/components/report-export'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { TranscriptView } from '@/components/transcript-view'
 import { PrepCard } from '@/components/voice-prep'
 import { api, errorMessage, jobActive, q, type RecordingStatus, type SessionView, type SourceView } from '@/lib/api'
+import { formatDuration, useCaptureDevice } from '@/lib/capture'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/sessions/$sessionId')({ component: SessionPage })
+
+const FLOW = ['prepare', 'capture', 'review', 'note', 'finish'] as const
+type FlowStep = (typeof FLOW)[number]
+
+/** Where a session stands, from its recordings, transcripts and note. */
+function sessionFlow(view: SessionView, recording: RecordingStatus | null | undefined, hasPrep: boolean) {
+  const { session, sources } = view
+  const hasNote = !!session.note_id
+  const finished = sources.filter((s) => s.status !== 'recording')
+  const reviewed = (s: SourceView) => s.transcript?.status === 'confirmed' || !!s.audio_deleted_at
+  const signed = session.note_status === 'signed' || session.note_status === 'exported'
+  const states = stepStates(
+    [
+      { key: 'prepare', done: hasPrep || sources.length > 0 || hasNote },
+      { key: 'capture', done: finished.length > 0 || hasNote },
+      { key: 'review', done: finished.length > 0 ? finished.every(reviewed) : hasNote },
+      { key: 'note', done: signed },
+      { key: 'finish', done: session.note_status === 'exported' && !session.note_export_outdated },
+    ],
+    recording?.session_id === session.id ? 'capture' : undefined,
+  )
+  const current = FLOW.find((k) => states[k] === 'current')
+  return { states, current, unreviewed: finished.filter((s) => !reviewed(s)).length, finished: finished.length }
+}
 
 function SessionPage() {
   const { sessionId } = Route.useParams()
   const { t } = useTranslation()
   const view = useQuery(q.session(sessionId))
+  const recording = useQuery(q.recording())
+  const prep = useQuery(q.prep(sessionId))
+  const [viewing, setViewing] = useState<FlowStep | null>(null)
   if (!view.data) return null
-  const { session, patient, sources } = view.data
+  const { session, patient } = view.data
+  const flow = sessionFlow(view.data, recording.data, !!prep.data)
+  // Without a choice the page follows the work; once everything is done it rests on "Abschließen".
+  const shown = viewing ?? flow.current ?? 'finish'
 
   return (
-    <>
+    <div className="flex min-h-full flex-col">
       <PageHeader
         title={formatDate(session.scheduled_at ?? session.started_at, true)}
         subtitle={
-          <Link to="/patients/$patientId" params={{ patientId: patient.id }} className="hover:underline">
-            {patient.first_name} {patient.last_name}
-          </Link>
+          <span className="flex items-center gap-2">
+            <Link to="/patients/$patientId" params={{ patientId: patient.id }} className="hover:underline">
+              {patient.first_name} {patient.last_name}
+            </Link>
+            {patient.chiffre && <StatusPill className="font-mono">{patient.chiffre}</StatusPill>}
+          </span>
         }
       />
-      <Page>
-        <PrepCard sessionId={session.id} />
-        <NoteCard view={view.data} />
-        <CapturePanel view={view.data} />
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('capture.sources')}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {sources.length === 0 ? (
-              <p className="text-sm text-muted-foreground">{t('capture.none')}</p>
-            ) : (
-              <ul className="divide-y text-sm">
-                {sources.map((s) => (
-                  <SourceRow key={s.id} source={s} patientId={patient.id} />
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
+      <Page className="flex-1">
+        <Stepper
+          steps={FLOW.map((k) => ({ key: k, label: t(`flow.session.${k}`), state: flow.states[k] }))}
+          viewing={shown}
+          onSelect={setViewing}
+          className="mx-auto max-w-4xl"
+        />
+        <div data-testid={`step-${shown}`} className="space-y-6">
+          {shown === 'prepare' && <PrepCard sessionId={session.id} primary={false} />}
+          {shown === 'capture' && <CapturePanel view={view.data} primary={flow.finished === 0} />}
+          {shown === 'review' && <ReviewStep view={view.data} onCapture={() => setViewing('capture')} />}
+          {shown === 'note' && <NoteCard view={view.data} unreviewed={flow.unreviewed} />}
+          {shown === 'finish' && <FinishStep view={view.data} />}
+        </div>
       </Page>
-    </>
+      <FlowBar shown={shown} flow={flow} recordingHere={recording.data?.session_id === session.id} onNext={setViewing} />
+    </div>
   )
 }
 
-function NoteCard({ view }: { view: SessionView }) {
+/** The step's one primary action when it moves the flow on to the next step. */
+function FlowBar({
+  shown,
+  flow,
+  recordingHere,
+  onNext,
+}: {
+  shown: FlowStep
+  flow: ReturnType<typeof sessionFlow>
+  recordingHere: boolean
+  onNext: (step: FlowStep) => void
+}) {
+  const { t } = useTranslation()
+  let info: ReactNode = null
+  let action: ReactNode = null
+  const go = (step: FlowStep, label: string, primary = true) => (
+    <Button variant={primary ? 'default' : 'ghost'} onClick={() => onNext(step)} data-testid="flow-next">
+      {label} <ArrowRight />
+    </Button>
+  )
+  if (shown === 'prepare') {
+    info = t('flow.session.prepareHint')
+    action = go('capture', t('flow.session.toCapture'))
+  } else if (shown === 'capture' && !recordingHere && flow.finished > 0) {
+    action = go('review', t('flow.session.toReview'))
+  } else if (shown === 'review') {
+    if (flow.unreviewed > 0) {
+      info = t('flow.session.unreviewed', { count: flow.unreviewed })
+      action = go('note', t('flow.session.skipReview'), false)
+    } else if (flow.finished > 0) {
+      action = go('note', t('flow.session.toNote'))
+    }
+  }
+  if (!info && !action) return null
+  return <StickyActionBar info={info}>{action}</StickyActionBar>
+}
+
+function ReviewStep({ view, onCapture }: { view: SessionView; onCapture: () => void }) {
+  const { t } = useTranslation()
+  const { sources, patient } = view
+  if (sources.length === 0) {
+    return (
+      <EmptyState
+        icon={MicOff}
+        title={t('flow.session.noSources')}
+        description={t('flow.session.noSourcesHint')}
+        action={
+          <Button variant="outline" onClick={onCapture}>
+            <Mic /> {t('flow.session.toCaptureShort')}
+          </Button>
+        }
+      />
+    )
+  }
+  return (
+    <SectionCard icon={FileText} title={t('capture.sources')}>
+      <ul className="divide-y text-sm">
+        {sources.map((s) => (
+          <SourceRow key={s.id} source={s} patientId={patient.id} />
+        ))}
+      </ul>
+    </SectionCard>
+  )
+}
+
+function NoteCard({ view, unreviewed }: { view: SessionView; unreviewed: number }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const navigate = useNavigate()
-  const { session, sources } = view
+  const { session } = view
   const create = useMutation({
     mutationFn: () => api.createSessionNote(session.id),
     onSuccess: (note) => {
@@ -76,53 +195,102 @@ function NoteCard({ view }: { view: SessionView }) {
     },
     onError: (e) => toast.error(errorMessage(e)),
   })
-  const unconfirmed = sources.some((s) => s.transcript?.status === 'draft' || jobActive(s.job))
+  const signed = session.note_status === 'signed' || session.note_status === 'exported'
 
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0">
-        <CardTitle className="flex items-center gap-3 text-base">
+    <SectionCard
+      icon={ClipboardList}
+      title={
+        <span className="flex items-center gap-3">
           {t('note.title')}
           {session.note_status && <StatusBadge status={session.note_status} />}
           <ExportOutdatedBadge show={session.note_export_outdated} />
-        </CardTitle>
-        {session.note_id ? (
-          <Button asChild size="sm">
+        </span>
+      }
+      actions={
+        session.note_id ? (
+          <Button asChild size="sm" variant={signed ? 'outline' : 'default'}>
             <Link to="/reports/$reportId" params={{ reportId: session.note_id }}>
-              <ClipboardList /> {t('note.open')}
+              <ClipboardList /> {t(signed ? 'note.open' : 'flow.session.writeNote')}
             </Link>
           </Button>
         ) : (
           <Button size="sm" onClick={() => create.mutate()} disabled={create.isPending}>
             <ClipboardList /> {t('note.create')}
           </Button>
-        )}
-      </CardHeader>
-      {(!session.note_id || unconfirmed) && (
-        <CardContent className="space-y-1 text-sm text-muted-foreground">
-          {!session.note_id && <p>{t('note.none')} {t('note.prefillHint')}</p>}
-          {unconfirmed && <p>{t('note.unconfirmed')}</p>}
-        </CardContent>
+        )
+      }
+      contentClassName="space-y-1 text-sm text-muted-foreground"
+    >
+      {!session.note_id && (
+        <p>
+          {t('note.none')} {t('note.prefillHint')}
+        </p>
       )}
-    </Card>
+      {session.note_id && !signed && <p>{t('flow.session.noteDraftHint')}</p>}
+      {signed && <p>{t('flow.session.noteSignedHint')}</p>}
+      {unreviewed > 0 && <p className="text-warning-foreground">{t('note.unconfirmed')}</p>}
+    </SectionCard>
   )
 }
 
-function CapturePanel({ view }: { view: SessionView }) {
+function FinishStep({ view }: { view: SessionView }) {
+  const { t } = useTranslation()
+  const { session } = view
+  const note = useQuery({ ...q.report(session.note_id ?? ''), enabled: !!session.note_id })
+  const exportAs = useReportExport(note.data)
+  const status = session.note_status
+  if (!session.note_id || !status) {
+    return <EmptyState icon={ClipboardList} title={t('flow.session.finishNoNote')} description={t('flow.session.finishNoNoteHint')} />
+  }
+  if (status === 'draft' || status === 'in_review') {
+    return (
+      <EmptyState
+        icon={FileSignature}
+        title={t('flow.session.finishUnsigned')}
+        description={t('flow.session.finishUnsignedHint')}
+        action={
+          <Button asChild>
+            <Link to="/reports/$reportId" params={{ reportId: session.note_id }}>
+              <FileSignature /> {t('flow.session.signNote')}
+            </Link>
+          </Button>
+        }
+      />
+    )
+  }
+  const done = status === 'exported' && !session.note_export_outdated
+  return (
+    <SectionCard
+      icon={done ? CheckCircle2 : Download}
+      title={done ? t('flow.session.done') : t('flow.session.exportNote')}
+      contentClassName="space-y-4 text-sm"
+    >
+      {session.note_export_outdated && (
+        <p className="flex items-start gap-2 text-warning-foreground">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+          {t('note.exportOutdatedSince', { date: formatDate(note.data?.report.exported_at, true) })}
+        </p>
+      )}
+      <p className="text-muted-foreground">{done ? t('flow.session.doneHint') : t('flow.session.exportHint')}</p>
+      <div className="flex gap-2">
+        <Button variant={done ? 'outline' : 'default'} onClick={() => exportAs.mutate('pdf')} disabled={exportAs.isPending || !note.data}>
+          <Download /> {t('report.exportPdf')}
+        </Button>
+        <Button variant="outline" onClick={() => exportAs.mutate('docx')} disabled={exportAs.isPending || !note.data}>
+          <Download /> {t('report.exportDocx')}
+        </Button>
+      </div>
+    </SectionCard>
+  )
+}
+
+function CapturePanel({ view, primary }: { view: SessionView; primary: boolean }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const { session, patient } = view
   const status = useQuery(q.recording())
-  const devices = useQuery(q.audioDevices())
-  // Remembered across sessions; a device that disappeared falls back to the system default.
-  const savedDevice = useQuery(q.setting<string>('audio_device'))
-  const [picked, setPicked] = useState<string | null>(null)
-  const preferred = picked ?? savedDevice.data ?? 'default'
-  const deviceId = devices.data?.some((d) => d.id === preferred) ? preferred : 'default'
-  const setDeviceId = (id: string) => {
-    setPicked(id)
-    void api.setSetting('audio_device', id).then(() => qc.invalidateQueries({ queryKey: ['setting', 'audio_device'] }))
-  }
+  const { devices, deviceId, setDeviceId, startId } = useCaptureDevice()
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['recording'] })
@@ -130,7 +298,7 @@ function CapturePanel({ view }: { view: SessionView }) {
     void qc.invalidateQueries({ queryKey: ['sessions'] })
   }
   const start = useMutation({
-    mutationFn: (kind: SourceKind) => api.startRecording(session.id, kind, deviceId === 'default' ? null : deviceId),
+    mutationFn: (kind: SourceKind) => api.startRecording(session.id, kind, startId),
     onSuccess: refresh,
     onError: (e) => toast.error(errorMessage(e)),
   })
@@ -153,69 +321,81 @@ function CapturePanel({ view }: { view: SessionView }) {
 
   if (active && active.session_id !== session.id) {
     return (
-      <Card>
-        <CardContent className="flex items-center justify-between pt-6 text-sm">
-          {t('capture.elsewhere')}
+      <EmptyState
+        icon={Mic}
+        title={t('capture.elsewhere')}
+        action={
           <Button asChild size="sm" variant="outline">
             <Link to="/sessions/$sessionId" params={{ sessionId: active.session_id }}>
               {t('capture.goThere')}
             </Link>
           </Button>
-        </CardContent>
-      </Card>
+        }
+      />
     )
   }
 
+  // Without recording consent, dictating is the way forward.
+  const consent = patient.consent_recording
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{t('capture.title')}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {active ? (
-          <RecordingControls status={active} onStop={() => stop.mutate()} stopping={stop.isPending} />
-        ) : (
-          <>
-            <div className="flex flex-wrap items-end gap-3">
-              <Button
-                onClick={() => start.mutate('session_audio')}
-                disabled={!patient.consent_recording || start.isPending}
-              >
-                <Mic /> {t('capture.record')}
-              </Button>
-              <Button variant="outline" onClick={() => start.mutate('dictation')} disabled={start.isPending}>
-                <NotebookPen /> {t('capture.dictate')}
-              </Button>
-              <div className="ml-auto w-72 space-y-1.5">
-                <Label>{t('capture.device')}</Label>
-                <Select value={deviceId} onValueChange={setDeviceId}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="default">{t('capture.defaultDevice')}</SelectItem>
-                    {devices.data?.map((d) => (
-                      <SelectItem key={d.id} value={d.id}>
-                        {d.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+    <SectionCard
+      icon={Mic}
+      title={t('capture.title')}
+      actions={
+        <StatusPill tone={consent ? 'primary' : 'sand'}>
+          {t(consent ? 'flow.session.consentOk' : 'flow.session.consentMissing')}
+        </StatusPill>
+      }
+      contentClassName="space-y-4"
+    >
+      {active ? (
+        <RecordingControls status={active} onStop={() => stop.mutate()} stopping={stop.isPending} />
+      ) : (
+        <>
+          <div className="flex flex-wrap items-end gap-3">
+            <Button
+              variant={primary && consent ? 'default' : 'outline'}
+              onClick={() => start.mutate('session_audio')}
+              disabled={!consent || start.isPending}
+            >
+              <Mic /> {t('capture.record')}
+            </Button>
+            <Button
+              variant={primary && !consent ? 'default' : 'outline'}
+              onClick={() => start.mutate('dictation')}
+              disabled={start.isPending}
+            >
+              <NotebookPen /> {t('capture.dictate')}
+            </Button>
+            <div className="ml-auto w-72 space-y-1.5">
+              <Label>{t('capture.device')}</Label>
+              <Select value={deviceId} onValueChange={setDeviceId}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">{t('capture.defaultDevice')}</SelectItem>
+                  {devices.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>
+                      {d.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-            {!patient.consent_recording && (
-              <p className="text-sm text-muted-foreground">
-                {t('capture.noConsent')}{' '}
-                <Link to="/patients/$patientId" params={{ patientId: patient.id }} className="underline">
-                  {t('capture.consentLink')}
-                </Link>
-              </p>
-            )}
-          </>
-        )}
-        <p className="text-xs text-muted-foreground">{t('capture.encryptedNote')}</p>
-      </CardContent>
-    </Card>
+          </div>
+          {!consent && (
+            <p className="text-sm text-muted-foreground">
+              {t('capture.noConsent')}{' '}
+              <Link to="/patients/$patientId" params={{ patientId: patient.id }} className="underline">
+                {t('capture.consentLink')}
+              </Link>
+            </p>
+          )}
+        </>
+      )}
+      <p className="text-xs text-muted-foreground">{t('capture.encryptedNote')}</p>
+    </SectionCard>
   )
 }
 
@@ -350,7 +530,7 @@ function SourceRow({ source, patientId }: { source: SourceView; patientId: strin
                   </button>
                 ))}
               </span>
-              <Button size="sm" variant="outline" onClick={() => start.mutate()} disabled={start.isPending || !!problem}>
+              <Button size="sm" onClick={() => start.mutate()} disabled={start.isPending || !!problem}>
                 {transcript || job ? t('transcript.retry') : t('transcript.start')}
               </Button>
             </>
@@ -397,15 +577,9 @@ function SourceRow({ source, patientId }: { source: SourceView; patientId: strin
           <Cloud className="size-4 shrink-0" /> {t('transcript.cloudHint', { label: stt.cloud_label })}
         </p>
       )}
-      {transcript && expanded && <TranscriptView transcript={transcript} sessionId={source.session_id} />}
+      {transcript && expanded && (
+        <TranscriptView transcript={transcript} sessionId={source.session_id} playable={!source.audio_deleted_at} />
+      )}
     </li>
   )
-}
-
-function formatDuration(ms: number): string {
-  const s = Math.floor(ms / 1000)
-  const h = Math.floor(s / 3600)
-  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0')
-  const ss = String(s % 60).padStart(2, '0')
-  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`
 }

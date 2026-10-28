@@ -36,6 +36,9 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V11__draft_quality.sql"),
 ];
 
+/// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).
+pub const MAX_CLIP_MS: u64 = 10 * 60 * 1000;
+
 pub struct Store {
     conn: Connection,
 }
@@ -709,6 +712,23 @@ impl Store {
             .optional()?
             .ok_or_else(|| Error::NotFound(format!("audio for source {source_id}")))?;
         Ok((PathBuf::from(path), AudioKey::from_hex(&dek)?))
+    }
+
+    /// `from_ms..to_ms` of a finished recording as an in-memory WAV, for listening while the
+    /// transcript is reviewed. Gone once the transcript is confirmed (the audio is deleted then).
+    pub fn audio_clip(&self, source_id: &str, from_ms: u64, to_ms: u64) -> Result<Vec<u8>> {
+        if self.source(source_id)?.status == SourceStatus::Recording {
+            return Err(Error::Invalid("Die Aufnahme läuft noch".into()));
+        }
+        if to_ms <= from_ms || to_ms - from_ms > MAX_CLIP_MS {
+            return Err(Error::Invalid("Ungültiger Ausschnitt".into()));
+        }
+        let (dir, key) = self.audio_location(source_id)?;
+        let per_ms = u64::from(audio::SAMPLE_RATE) / 1000;
+        let mut pcm = audio::read_range(&dir, &key, from_ms * per_ms, to_ms * per_ms)?;
+        let wav = audio::wav_bytes(&pcm);
+        zeroize::Zeroize::zeroize(&mut pcm);
+        Ok(wav)
     }
 
     // ---------- transcription ----------
@@ -2251,6 +2271,32 @@ mod tests {
         let (src, mut w) = store.start_source(&s.id, SourceKind::Dictation, dir).unwrap();
         w.write(&vec![5i16; 8_000]).unwrap();
         store.finish_source(&src.id, "stopped", &w).unwrap()
+    }
+
+    #[test]
+    fn audio_clip_until_the_transcript_is_confirmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let s = session(&store, &p);
+        let (live, mut w) = store.start_source(&s.id, SourceKind::Dictation, dir.path()).unwrap();
+        w.write(&(0..8_000).map(|i| i as i16).collect::<Vec<_>>()).unwrap();
+        assert!(store.audio_clip(&live.id, 0, 100).is_err(), "not while recording");
+        let src = store.finish_source(&live.id, "stopped", &w).unwrap();
+
+        let wav = store.audio_clip(&src.id, 100, 200).unwrap();
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(wav.len(), 44 + 1_600 * 2);
+        assert_eq!(i16::from_le_bytes([wav[44], wav[45]]), 1_600, "starts at 100 ms");
+        assert_eq!(store.audio_clip(&src.id, 400, 9_000).unwrap().len(), 44 + 1_600 * 2, "clamped to the end");
+        assert!(store.audio_clip(&src.id, 200, 100).is_err());
+        assert!(store.audio_clip(&src.id, 0, MAX_CLIP_MS + 1).is_err());
+
+        let job = store.enqueue_transcription(&src.id, None).unwrap();
+        store.claim_next_job().unwrap();
+        let t = store.finish_transcription(&job.id, "e", "m", &[seg(0, "Hallo.")]).unwrap();
+        store.confirm_transcript(&t.id).unwrap();
+        assert!(store.audio_clip(&src.id, 0, 100).is_err(), "audio is gone after confirming");
     }
 
     fn seg(start_ms: i64, text: &str) -> stt::Segment {

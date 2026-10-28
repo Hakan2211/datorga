@@ -63,7 +63,8 @@ function Meter({ label, level, testId }: { label: string; level: number; testId?
 
 type Start = { digest: string; tokens: TokenView[]; deviceId: string | null }
 
-export function PrepCard({ sessionId }: { sessionId: string }) {
+/** `primary`: the start button is the page's main action (off when the page has its own). */
+export function PrepCard({ sessionId, primary = true }: { sessionId: string; primary?: boolean }) {
   const { t } = useTranslation()
   const prep = useQuery(q.prep(sessionId))
   const live = useQuery(q.live())
@@ -85,7 +86,7 @@ export function PrepCard({ sessionId }: { sessionId: string }) {
         {prep.data && <PrepResult prep={prep.data} />}
         <div className="flex flex-wrap items-center gap-3">
           <Button
-            variant={prep.data ? 'outline' : 'default'}
+            variant={prep.data || !primary ? 'outline' : 'default'}
             disabled={!enabled || !!problem || busyRecording}
             onClick={() => setStage('preview')}
           >

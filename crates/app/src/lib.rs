@@ -749,6 +749,13 @@ fn source_stt(state: &AppState, src: &SessionSource, patient_id: &str) -> CmdRes
     })
 }
 
+/// A stretch of a recording as WAV bytes, decrypted in memory for playback in the transcript
+/// viewer. Nothing is written to disk; the UI plays it from a blob URL.
+#[tauri::command]
+async fn source_audio_wav(app: AppHandle, source_id: String, from_ms: u64, to_ms: u64) -> CmdResult<tauri::ipc::Response> {
+    blocking(app, move |state| Ok(tauri::ipc::Response::new(state.with(|s| s.audio_clip(&source_id, from_ms, to_ms))?))).await
+}
+
 #[tauri::command]
 fn session_get(state: State<'_, AppState>, id: String) -> CmdResult<SessionView> {
     let (session, patient, rows) = state.with(|s| {
@@ -2299,6 +2306,7 @@ pub fn run() {
             recording_status,
             recording_stop,
             session_get,
+            source_audio_wav,
             transcription_start,
             transcription_cancel,
             transcript_edit_segment,

@@ -133,23 +133,61 @@ pub fn samples_on_disk(dir: &Path) -> Result<u64> {
 pub fn read_pcm(dir: &Path, key: &AudioKey) -> Result<Vec<i16>> {
     let cipher = key.cipher();
     let mut out = Vec::new();
-    for (idx, path) in chunk_files(dir)?.iter().enumerate() {
+    for (idx, path) in ordered_chunks(dir)?.iter().enumerate() {
+        decrypt_chunk(&cipher, path, idx as u32, &mut out)?;
+    }
+    Ok(out)
+}
+
+/// Samples `from..to` (clamped to the recording), decrypting only the chunks that overlap them.
+/// Chunk lengths come from the file sizes, so the rest stays sealed.
+pub fn read_range(dir: &Path, key: &AudioKey, from: u64, to: u64) -> Result<Vec<i16>> {
+    let cipher = key.cipher();
+    let mut out = Vec::new();
+    let mut start = 0u64;
+    for (idx, path) in ordered_chunks(dir)?.iter().enumerate() {
+        if start >= to {
+            break;
+        }
+        let len = fs::metadata(path)?.len().saturating_sub((NONCE_LEN + TAG_LEN) as u64) / 2;
+        let end = start + len;
+        if end > from {
+            let mut pcm = Vec::with_capacity(len as usize);
+            decrypt_chunk(&cipher, path, idx as u32, &mut pcm)?;
+            let lo = from.saturating_sub(start) as usize;
+            let hi = (to.min(end) - start) as usize;
+            out.extend_from_slice(&pcm[lo.min(pcm.len())..hi.min(pcm.len())]);
+            pcm.zeroize();
+        }
+        start = end;
+    }
+    Ok(out)
+}
+
+/// The chunk files, checked to be numbered without gaps.
+fn ordered_chunks(dir: &Path) -> Result<Vec<PathBuf>> {
+    let files = chunk_files(dir)?;
+    for (idx, path) in files.iter().enumerate() {
         if *path != chunk_path(dir, idx as u32) {
             return Err(Error::Crypto(format!("audio chunk {idx} is missing")));
         }
-        let raw = fs::read(path)?;
-        if raw.len() < NONCE_LEN + TAG_LEN {
-            return Err(Error::Crypto(format!("audio chunk {idx} is truncated")));
-        }
-        let (nonce, ct) = raw.split_at(NONCE_LEN);
-        let aad = aad(idx as u32);
-        let mut plain = cipher
-            .decrypt(Nonce::from_slice(nonce), Payload { msg: ct, aad: &aad })
-            .map_err(|_| Error::Crypto(format!("audio chunk {idx} failed authentication")))?;
-        out.extend(plain.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])));
-        plain.zeroize();
     }
-    Ok(out)
+    Ok(files)
+}
+
+fn decrypt_chunk(cipher: &Aes256Gcm, path: &Path, idx: u32, out: &mut Vec<i16>) -> Result<()> {
+    let raw = fs::read(path)?;
+    if raw.len() < NONCE_LEN + TAG_LEN {
+        return Err(Error::Crypto(format!("audio chunk {idx} is truncated")));
+    }
+    let (nonce, ct) = raw.split_at(NONCE_LEN);
+    let aad = aad(idx);
+    let mut plain = cipher
+        .decrypt(Nonce::from_slice(nonce), Payload { msg: ct, aad: &aad })
+        .map_err(|_| Error::Crypto(format!("audio chunk {idx} failed authentication")))?;
+    out.extend(plain.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])));
+    plain.zeroize();
+    Ok(())
 }
 
 /// Plain 16-bit mono WAV, for handing to the transcription sidecar. The caller deletes it.
@@ -226,6 +264,30 @@ mod tests {
         fs::write(&p0, &b0).unwrap();
         fs::remove_file(&p1).unwrap();
         assert!(read_pcm(dir.path(), &key).is_err(), "gap");
+    }
+
+    #[test]
+    fn range_reads_only_the_requested_samples() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = AudioKey::generate().unwrap();
+        let mut w = ChunkWriter::create(dir.path(), &key).unwrap();
+        let parts = [pcm(1000, 1), pcm(1000, 2), pcm(500, 3)];
+        for p in &parts {
+            w.write(p).unwrap();
+        }
+        let all = parts.concat();
+        assert_eq!(read_range(dir.path(), &key, 0, 2500).unwrap(), all);
+        assert_eq!(read_range(dir.path(), &key, 900, 2100).unwrap(), all[900..2100]);
+        assert_eq!(read_range(dir.path(), &key, 1000, 2000).unwrap(), all[1000..2000]);
+        assert_eq!(read_range(dir.path(), &key, 2400, 9999).unwrap(), all[2400..]);
+        assert!(read_range(dir.path(), &key, 3000, 4000).unwrap().is_empty());
+        // A damaged chunk outside the range isn't read; inside it, the read fails.
+        let p0 = chunk_path(dir.path(), 0);
+        let mut b0 = fs::read(&p0).unwrap();
+        *b0.last_mut().unwrap() ^= 1;
+        fs::write(&p0, &b0).unwrap();
+        assert_eq!(read_range(dir.path(), &key, 1000, 1500).unwrap(), all[1000..1500]);
+        assert!(read_range(dir.path(), &key, 500, 1500).is_err());
     }
 
     #[test]

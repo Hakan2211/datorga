@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type UseMutationResult } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { save } from '@tauri-apps/plugin-dialog'
 import { toast } from 'sonner'
 import {
   AlertTriangle,
+  ArrowRight,
   CheckCircle2,
   ChevronDown,
   CircleSlash,
@@ -28,7 +28,8 @@ import { Addenda } from '@/components/addenda'
 import { FactDraftCard } from '@/components/fact-draft'
 import { DraftDialog, DraftProposal, DraftSources, ReportDraftCard } from '@/components/report-draft'
 import { Page, PageHeader } from '@/components/app-shell'
-import { StatusBadge, formatDate } from '@/components/bits'
+import { StatusBadge, Stepper, StickyActionBar, formatDate, stepStates } from '@/components/bits'
+import { useReportExport, type ExportFormat } from '@/components/report-export'
 import { RichField } from '@/components/rich-field'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -172,6 +173,36 @@ function ReportEditor({ view }: { view: ReportView }) {
     [bodies, template.sections],
   )
 
+  // Guided flow for a Bericht; a note's flow is its session's.
+  const flowOn = !isNote && !!application
+  const sources = useQuery({ ...q.draftSources(report.id), enabled: flowOn && !readOnly })
+  const llm = useQuery({ ...q.llm(), enabled: flowOn && !readOnly })
+  const checklist = useQuery(q.checklist(report.id))
+  const exportAs = useReportExport(view)
+  const anyFilled = template.sections.some((s) => !isBlank(bodies[s.key] ?? ''))
+  const proposals = drafts.data?.filter((d) => d.status === 'proposed') ?? []
+  const blocked = checklist.data?.some((c) => !c.ok && c.severity === 'block') ?? true
+  const exported = report.status === 'exported' && !report.export_outdated
+  const states = stepStates<ReportStep>([
+    { key: 'facts', done: readOnly || anyFilled || (sources.data?.facts.length ?? 0) > 0 },
+    { key: 'draft', done: readOnly || (anyFilled && proposals.length === 0) },
+    { key: 'edit', done: readOnly || !blocked },
+    { key: 'check', done: readOnly },
+    { key: 'export', done: exported },
+  ])
+  const current = REPORT_FLOW.find((k) => states[k] === 'current')
+  const emptyDraftable = draftable.filter((s) => isBlank(bodies[s.key] ?? '')).map((s) => s.key)
+  const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  const jump = (step: ReportStep) => {
+    if (step === 'draft' && proposals[0]) scrollTo(`section-${proposals[0].section_key}`)
+    else if (step === 'edit') {
+      const failing = checklist.data?.find((c) => !c.ok && c.section_key)?.section_key
+      scrollTo(`section-${failing ?? template.sections[0]?.key}`)
+    } else scrollTo(STEP_ANCHOR[step])
+  }
+  // A note's bar only leads to signing and exporting; the rest of its flow is on the session page.
+  const barStep: ReportStep | null = flowOn ? (current ?? null) : isNote ? (readOnly ? (exported ? null : 'export') : 'check') : null
+
   const subtitle = isNote
     ? `${template.title} · ${formatDate(session?.scheduled_at ?? session?.started_at ?? report.created_at)}`
     : application
@@ -179,7 +210,7 @@ function ReportEditor({ view }: { view: ReportView }) {
       : template.title
 
   return (
-    <>
+    <div className="flex min-h-full flex-col">
       <PageHeader
         title={
           <span className="flex items-center gap-3">
@@ -204,11 +235,15 @@ function ReportEditor({ view }: { view: ReportView }) {
             <span className="text-xs">· {template.source}</span>
           </span>
         }
-        actions={
-          <span className="text-xs text-muted-foreground">{pending > 0 ? t('report.saving') : t('report.allSaved')}</span>
-        }
       />
       <Page>
+        {flowOn && (
+          <Stepper
+            steps={REPORT_FLOW.map((k) => ({ key: k, label: t(`flow.report.${k}`), state: states[k] }))}
+            onSelect={jump}
+            className="mx-auto max-w-4xl"
+          />
+        )}
         <div className="grid grid-cols-[minmax(0,1fr)_20rem] gap-6">
           <div className="space-y-6">
             {readOnly && (
@@ -226,12 +261,14 @@ function ReportEditor({ view }: { view: ReportView }) {
               />
             )}
             {drafting && (
-              <ReportDraftCard
-                reportId={report.id}
-                sections={draftable}
-                isEmpty={(key) => isBlank(bodies[key] ?? '')}
-                onDraft={openDraft}
-              />
+              <div id="flow-draft" className="scroll-mt-6">
+                <ReportDraftCard
+                  reportId={report.id}
+                  sections={draftable}
+                  isEmpty={(key) => isBlank(bodies[key] ?? '')}
+                  onDraft={openDraft}
+                />
+              </div>
             )}
             {template.sections.map((s) => {
               const canDraft = drafting && draftable.some((d) => d.key === s.key)
@@ -286,7 +323,7 @@ function ReportEditor({ view }: { view: ReportView }) {
           <aside className="space-y-4">
             <div className="sticky top-6 space-y-4">
               <LengthMeter pages={pages} target={template.rules.target_pages} />
-              <ChecklistCard reportId={report.id} readOnly={readOnly} busy={pending > 0} />
+              <ChecklistCard reportId={report.id} readOnly={readOnly} busy={pending > 0} primary={barStep === 'check'} />
               {isNote && !readOnly && (
                 <TranscriptPicker
                   segments={view.segments}
@@ -296,12 +333,104 @@ function ReportEditor({ view }: { view: ReportView }) {
                   onInsert={(key, text) => update(key, appendParagraph(bodies[key] ?? '', text))}
                 />
               )}
-              <ExportCard view={view} />
+              <ExportCard view={view} exportAs={exportAs} />
             </div>
           </aside>
         </div>
       </Page>
-    </>
+      <ReportBar
+        info={
+          <>
+            <span>{pending > 0 ? t('report.saving') : t('report.allSaved')}</span>
+            {template.rules.target_pages && (
+              <span>
+                ≈ {pages.toFixed(1)} / {template.rules.target_pages} {t('report.pages')}
+              </span>
+            )}
+          </>
+        }
+        step={barStep}
+        canDraftEmpty={
+          drafting && !!llm.data?.config.active && emptyDraftable.length > 0 && (sources.data?.facts.length ?? 0) > 0
+        }
+        proposals={proposals.length}
+        onDraftEmpty={() => openDraft(emptyDraftable)}
+        onJump={jump}
+        onExport={() => exportAs.mutate('pdf')}
+        exporting={exportAs.isPending}
+      />
+    </div>
+  )
+}
+
+const REPORT_FLOW = ['facts', 'draft', 'edit', 'check', 'export'] as const
+type ReportStep = (typeof REPORT_FLOW)[number]
+const STEP_ANCHOR: Record<ReportStep, string> = {
+  facts: 'flow-draft',
+  draft: 'flow-draft',
+  edit: 'flow-draft',
+  check: 'flow-check',
+  export: 'flow-export',
+}
+
+/** The bottom bar: save state on the left, the one next action of the current step on the right. */
+function ReportBar({
+  info,
+  step,
+  canDraftEmpty,
+  proposals,
+  onDraftEmpty,
+  onJump,
+  onExport,
+  exporting,
+}: {
+  info: ReactNode
+  step: ReportStep | null
+  canDraftEmpty: boolean
+  proposals: number
+  onDraftEmpty: () => void
+  onJump: (step: ReportStep) => void
+  onExport: () => void
+  exporting: boolean
+}) {
+  const { t } = useTranslation()
+  let action: ReactNode = null
+  if (step === 'facts') {
+    info = (
+      <>
+        {info}
+        <span>{t('flow.report.noFacts')}</span>
+      </>
+    )
+  } else if (step === 'draft' && proposals > 0) {
+    action = (
+      <Button onClick={() => onJump('draft')}>
+        {t('flow.report.toProposal', { count: proposals })} <ArrowRight />
+      </Button>
+    )
+  } else if (step === 'draft' && canDraftEmpty) {
+    action = (
+      <Button onClick={onDraftEmpty}>
+        <Sparkles /> {t('draft.draftEmpty')}
+      </Button>
+    )
+  } else if (step === 'draft' || step === 'edit' || step === 'check') {
+    action = (
+      <Button onClick={() => onJump('check')} variant={step === 'draft' ? 'outline' : 'default'} data-testid="flow-next">
+        {t('flow.report.toCheck')} <ArrowRight />
+      </Button>
+    )
+  } else if (step === 'export') {
+    action = (
+      <Button onClick={onExport} disabled={exporting} data-testid="flow-export">
+        <Download /> {t('report.exportPdf')}
+      </Button>
+    )
+  }
+  return (
+    <StickyActionBar info={info} className="mt-auto">
+      {action}
+    </StickyActionBar>
   )
 }
 
@@ -468,7 +597,7 @@ function LengthMeter({ pages, target }: { pages: number; target: number | null }
   )
 }
 
-function ChecklistCard({ reportId, readOnly, busy }: { reportId: string; readOnly: boolean; busy: boolean }) {
+function ChecklistCard({ reportId, readOnly, busy, primary }: { reportId: string; readOnly: boolean; busy: boolean; primary: boolean }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const checklist = useQuery(q.checklist(reportId))
@@ -491,7 +620,7 @@ function ChecklistCard({ reportId, readOnly, busy }: { reportId: string; readOnl
   const failedOnly = items.filter((c) => !c.ok || !c.key.startsWith('pseudonym:'))
 
   return (
-    <Card>
+    <Card id="flow-check" className="scroll-mt-6">
       <CardHeader className="pb-2">
         <CardTitle className="text-sm">{t('report.checklist')}</CardTitle>
       </CardHeader>
@@ -522,7 +651,7 @@ function ChecklistCard({ reportId, readOnly, busy }: { reportId: string; readOnl
               {t('report.signAs')}
             </Label>
             <Input id="signer" value={signAs} onChange={(e) => setSigner(e.target.value)} />
-            <Button className="w-full" disabled={busy || blocked || !signAs.trim() || sign.isPending} onClick={() => sign.mutate()}>
+            <Button className="w-full" variant={primary ? 'default' : 'outline'} disabled={busy || blocked || !signAs.trim() || sign.isPending} onClick={() => sign.mutate()}>
               <FileSignature /> {t('report.sign')}
             </Button>
           </div>
@@ -532,35 +661,16 @@ function ChecklistCard({ reportId, readOnly, busy }: { reportId: string; readOnl
   )
 }
 
-function ExportCard({ view }: { view: ReportView }) {
+function ExportCard({
+  view,
+  exportAs,
+}: {
+  view: ReportView
+  exportAs: UseMutationResult<boolean, Error, ExportFormat>
+}) {
   const { t } = useTranslation()
-  const qc = useQueryClient()
-  const exportAs = useMutation({
-    mutationFn: async (format: 'pdf' | 'docx') => {
-      const chiffre = view.patient.chiffre ?? 'ohne-Chiffre'
-      const day = (view.session?.scheduled_at ?? view.session?.started_at ?? view.report.created_at).slice(0, 10)
-      const base = view.session
-        ? `Sitzungsnotiz-${chiffre}-${day}`
-        : `Bericht-${chiffre}-${view.application?.kind ?? 'bericht'}`
-      const path = await save({
-        defaultPath: `${base}.${format}`,
-        filters: [{ name: format.toUpperCase(), extensions: [format] }],
-      })
-      if (!path) return false
-      await api.exportReport(view.report.id, format, path)
-      return true
-    },
-    onSuccess: (done) => {
-      if (!done) return
-      toast.success(t('report.exported'))
-      void qc.invalidateQueries({ queryKey: ['report', view.report.id] })
-      void qc.invalidateQueries({ queryKey: ['reports'] })
-    },
-    onError: (e) => toast.error(errorMessage(e)),
-  })
-
   return (
-    <Card>
+    <Card id="flow-export" className="scroll-mt-6">
       <CardContent className="grid gap-2 pt-5">
         {view.report.export_outdated && (
           <p className="flex items-start gap-2 text-sm text-warning-foreground">
