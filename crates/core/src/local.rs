@@ -51,21 +51,6 @@ pub struct LocalModel {
 pub const MODELS: &[LocalModel] = &[
     LocalModel {
         file: ModelInfo {
-            id: "mistral-small-3.2-24b",
-            file: "Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf",
-            url: "https://huggingface.co/unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/resolve/main/Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf",
-            sha256: "a3cc56310807ed0d145eaf9f018ccda9ae7ad8edb41ec870aa2454b0d4700b3c",
-            bytes: 14_333_922_848,
-        },
-        label: "Mistral Small 3.2 (24B)",
-        ctx: 16_384,
-        kv_bytes: 2 * 40 * 8 * 128 * 2 * 16_384,
-        reasoning: false,
-        cpu_ok: false,
-        experimental: false,
-    },
-    LocalModel {
-        file: ModelInfo {
             id: "qwen3-14b",
             file: "Qwen3-14B-Q4_K_M.gguf",
             url: "https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf",
@@ -363,12 +348,11 @@ mod tests {
 
     #[test]
     fn recommendation_follows_ram_and_vram() {
-        // 32 GB laptop without a GPU: 14B on the CPU, not the slow 24B.
+        // 32 GB laptop without a GPU: 14B on the CPU.
         assert_eq!(rec(&hw(31, &[])), (Some("qwen3-14b"), false));
-        // 64 GB without a GPU: still the 14B (24B is too slow on a CPU).
         assert_eq!(rec(&hw(64, &[])), (Some("qwen3-14b"), false));
-        // 24 GB GPU: the 24B fits entirely.
-        assert_eq!(rec(&hw(32, &[24])), (Some("mistral-small-3.2-24b"), false));
+        // 24 GB GPU: the 14B, the biggest model in the catalog.
+        assert_eq!(rec(&hw(32, &[24])), (Some("qwen3-14b"), false));
         // 12 GB GPU: the 14B fits entirely, fast even with 16 GB RAM.
         assert_eq!(rec(&hw(16, &[12])), (Some("qwen3-14b"), false));
         // 16 GB laptop: only the 8B, experimental.
@@ -397,7 +381,5 @@ mod tests {
             assert!(joined.contains(want), "{want} missing in {joined}");
         }
         assert!(!joined.contains("api-key"), "the key goes through the environment");
-        let mistral = server_args(Path::new("m.gguf"), model("mistral-small-3.2-24b").unwrap(), 1);
-        assert!(!mistral.iter().any(|a| a == "--reasoning-budget"));
     }
 }

@@ -16,6 +16,7 @@ use thera_core::backup::{self, BackupSummary, Unlocked};
 use thera_core::consent::{self, ConsentText};
 use thera_core::crypto::{self, KeyStore, MasterKey, Unlock};
 use thera_core::domain::*;
+use thera_core::catalog::{self, CloudModel, Tier};
 use thera_core::draft;
 use thera_core::extract;
 use thera_core::llm::{self, Endpoint, LlmConfig, ProviderId, ProviderInfo, RemoteModel};
@@ -1278,6 +1279,31 @@ async fn llm_test(app: AppHandle, provider: ProviderId) -> CmdResult<LlmTestResu
     .await
 }
 
+#[derive(Serialize)]
+struct LlmCatalog {
+    models: Vec<CloudModel>,
+    recommended: Tier,
+}
+
+/// The curated OpenRouter models with tiers and cost estimates.
+#[tauri::command]
+fn llm_catalog() -> LlmCatalog {
+    LlmCatalog { models: catalog::models(), recommended: catalog::RECOMMENDED }
+}
+
+#[derive(Serialize)]
+struct LlmSpendView {
+    month: thera_core::store::LlmSpend,
+    total: thera_core::store::LlmSpend,
+}
+
+/// Billed cost of AI calls this month (UTC) and overall, from the audit log.
+#[tauri::command]
+fn llm_spend(state: State<'_, AppState>) -> CmdResult<LlmSpendView> {
+    let month: String = now().chars().take(7).collect();
+    Ok(state.with(|s| Ok(LlmSpendView { month: s.llm_spend(&month)?, total: s.llm_spend("")? }))?)
+}
+
 // ---------- fact extraction (Phase 2) ----------
 
 fn provider_str(id: ProviderId) -> String {
@@ -1771,6 +1797,8 @@ pub fn run() {
             llm_key_set,
             llm_models,
             llm_test,
+            llm_catalog,
+            llm_spend,
             extract_preview,
             extract_run,
             pseudo_term_add,

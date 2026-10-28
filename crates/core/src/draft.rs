@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 
 use crate::domain::{AgeGroup, ApplicationKind, Method, Patient};
 use crate::extract::{citation_number, json_list, sha256, Preview, TokenView, ICD};
-use crate::llm::ChatOptions;
+use crate::llm::{ChatOptions, Effort};
 use crate::pseudo::{DetectionSource, Dictionary, EntityKind, Pseudonymized, Pseudonymizer, TokenMap};
 use crate::templates::{FieldKind, SectionDef, Template};
 use crate::{Error, Result};
@@ -30,7 +30,7 @@ pub const FACT_CHARS: usize = 24_000;
 
 /// Request options for one section draft (the eval harness uses the same).
 pub fn chat_options() -> ChatOptions {
-    ChatOptions { temperature: 0.2, max_tokens: 2048, timeout: Duration::from_secs(900) }
+    ChatOptions { temperature: 0.2, max_tokens: 8192, timeout: Duration::from_secs(900), reasoning: Some(Effort::Medium) }
 }
 
 /// Longest sentence kept.

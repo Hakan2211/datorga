@@ -25,7 +25,10 @@ import type { SourceSegment } from '@/bindings/SourceSegment'
 import type { Template } from '@/bindings/Template'
 import type { Transcript } from '@/bindings/Transcript'
 import type { BackupSummary } from '@/bindings/BackupSummary'
+import type { CloudModel } from '@/bindings/CloudModel'
 import type { LlmConfig } from '@/bindings/LlmConfig'
+import type { LlmSpend } from '@/bindings/LlmSpend'
+import type { Tier } from '@/bindings/Tier'
 import type { ProviderId } from '@/bindings/ProviderId'
 import type { ProviderInfo } from '@/bindings/ProviderInfo'
 import type { RemoteModel } from '@/bindings/RemoteModel'
@@ -83,6 +86,8 @@ export type SttOverview = {
 
 export type LlmOverview = { config: LlmConfig; providers: (ProviderInfo & { has_key: boolean })[] }
 export type LlmTestResult = { model: string; latency_ms: number; answer: string }
+export type LlmCatalog = { models: CloudModel[]; recommended: Tier }
+export type LlmSpendView = { month: LlmSpend; total: LlmSpend }
 /** Redaction preview: the outgoing text, the local token table and where it would go. */
 export type ExtractPreview = Preview & { terms: PseudoTerm[]; provider: ProviderInfo | null; model: string | null }
 export type ExtractResult = { facts: NoteFact[]; dropped: number; chunks: number }
@@ -184,6 +189,8 @@ export const api = {
   setLlmKey: (provider: ProviderId, key: string | null) => invoke<void>('llm_key_set', { provider, key }),
   llmModels: (provider: ProviderId) => invoke<RemoteModel[]>('llm_models', { provider }),
   testLlm: (provider: ProviderId) => invoke<LlmTestResult>('llm_test', { provider }),
+  llmCatalog: () => invoke<LlmCatalog>('llm_catalog'),
+  llmSpend: () => invoke<LlmSpendView>('llm_spend'),
 
   extractPreview: (reportId: string) => invoke<ExtractPreview>('extract_preview', { reportId }),
   extractRun: (reportId: string, digest: string) => invoke<ExtractResult>('extract_run', { reportId, digest }),
@@ -257,6 +264,8 @@ export const q = {
         query.state.data?.models.some((m) => m.transfer && !m.transfer.error) ? 500 : false,
     }),
   llm: () => queryOptions({ queryKey: ['llm'], queryFn: api.llm }),
+  llmCatalog: () => queryOptions({ queryKey: ['llmCatalog'], queryFn: api.llmCatalog, staleTime: Infinity }),
+  llmSpend: () => queryOptions({ queryKey: ['llm', 'spend'], queryFn: api.llmSpend }),
   noteFacts: (reportId: string) => queryOptions({ queryKey: ['noteFacts', reportId], queryFn: () => api.noteFacts(reportId) }),
   draftSources: (reportId: string) =>
     queryOptions({ queryKey: ['draftSources', reportId], queryFn: () => api.draftSources(reportId) }),

@@ -84,6 +84,29 @@ fn chat_sends_only_tokens_and_restores_the_answer() {
 }
 
 #[test]
+fn cost_and_reasoning_tokens_are_read() {
+    let (base, h) = serve_once(
+        200,
+        r#"{"model":"m","choices":[{"message":{"content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":300,"completion_tokens_details":{"reasoning_tokens":290},"cost":0.00042}}"#,
+    );
+    let c = llm::ping(&ep(base), "m").unwrap();
+    h.join().unwrap();
+    assert_eq!((c.completion_tokens, c.reasoning_tokens), (Some(300), Some(290)));
+    assert_eq!(c.cost, Some(0.00042));
+}
+
+#[test]
+fn a_budget_spent_on_thinking_is_reported_not_returned_empty() {
+    let (base, h) = serve_once(
+        200,
+        r#"{"model":"m","choices":[{"message":{"content":""},"finish_reason":"length"}],"usage":{"prompt_tokens":10,"completion_tokens":2048}}"#,
+    );
+    let err = llm::ping(&ep(base), "m").unwrap_err().to_string();
+    h.join().unwrap();
+    assert!(err.contains("Token-Budget"), "{err}");
+}
+
+#[test]
 fn models_are_listed_sorted() {
     let (base, h) = serve_once(200, r#"{"data":[{"id":"z/b","name":"B","context_length":32000},{"id":"a/a"},{"bad":1}]}"#);
     let models = llm::list_models(&ep(base)).unwrap();

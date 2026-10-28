@@ -164,11 +164,28 @@ impl Store {
         let meta = match outcome {
             Ok(c) => json!({
                 "provider": provider, "model": c.model, "ok": true,
-                "prompt_tokens": c.prompt_tokens, "completion_tokens": c.completion_tokens, "latency_ms": c.latency_ms,
+                "prompt_tokens": c.prompt_tokens, "completion_tokens": c.completion_tokens,
+                "reasoning_tokens": c.reasoning_tokens, "cost_usd": c.cost, "latency_ms": c.latency_ms,
             }),
             Err(_) => json!({ "provider": provider, "model": model, "ok": false }),
         };
         audit::append(&self.conn, Entry { actor: ACTOR, action, entity_type: "llm", entity_id: None, meta })
+    }
+
+    /// What the LLM calls since `since` (RFC 3339 prefix, e.g. "2026-10") cost, from the audit
+    /// log. Calls without a reported cost (local, Requesty, custom) count as requests only.
+    pub fn llm_spend(&self, since: &str) -> Result<LlmSpend> {
+        let mut stmt = self.conn.prepare("SELECT meta_json FROM audit_event WHERE action LIKE 'llm.%' AND at >= ?1")?;
+        let mut spend = LlmSpend::default();
+        for meta in stmt.query_map([since], |r| r.get::<_, String>(0))? {
+            let meta: serde_json::Value = serde_json::from_str(&meta?)?;
+            if meta.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+                continue;
+            }
+            spend.requests += 1;
+            spend.usd += meta.get("cost_usd").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+        }
+        Ok(spend)
     }
 
     // ---------- recovery key ----------
@@ -1754,6 +1771,14 @@ fn parse_col<T: std::str::FromStr<Err = Error>>(r: &rusqlite::Row<'_>, idx: usiz
     })
 }
 
+/// Billed LLM cost over a period ([`Store::llm_spend`]).
+#[derive(Debug, Clone, Default, serde::Serialize, ts_rs::TS)]
+#[ts(export)]
+pub struct LlmSpend {
+    pub requests: u32,
+    pub usd: f64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1768,6 +1793,28 @@ mod tests {
                 ..Default::default()
             })
             .unwrap()
+    }
+
+    #[test]
+    fn llm_spend_sums_billed_cost_of_successful_calls() {
+        let store = Store::open_in_memory().unwrap();
+        let call = |cost: Option<f64>| crate::llm::Completion {
+            text: "OK".into(),
+            model: "m".into(),
+            prompt_tokens: Some(10),
+            completion_tokens: Some(5),
+            reasoning_tokens: None,
+            cost,
+            latency_ms: 1,
+        };
+        store.log_llm_call("llm.extract", crate::llm::ProviderId::Openrouter, "m", Ok(&call(Some(0.012)))).unwrap();
+        store.log_llm_call("llm.draft", crate::llm::ProviderId::Openrouter, "m", Ok(&call(Some(0.003)))).unwrap();
+        store.log_llm_call("llm.draft", crate::llm::ProviderId::Local, "m", Ok(&call(None))).unwrap();
+        store.log_llm_call("llm.draft", crate::llm::ProviderId::Openrouter, "m", Err("x")).unwrap();
+        let s = store.llm_spend("2000").unwrap();
+        assert_eq!(s.requests, 3);
+        assert!((s.usd - 0.015).abs() < 1e-12);
+        assert_eq!(store.llm_spend("9999").unwrap().requests, 0);
     }
 
     #[test]

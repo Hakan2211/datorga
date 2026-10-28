@@ -28,7 +28,7 @@ usage: cargo run -p eval -- [options]
   --suite <name|dir>      golden set (default de-therapy-v1, in crates/eval/suites)
   --check                 load and validate the suite, no model
   --provider <p>          local | openrouter | requesty | custom
-  --model <id>            local: qwen3-8b | qwen3-14b | mistral-small-3.2-24b; else the provider's model id
+  --model <id>            local: qwen3-8b | qwen3-14b; else the provider's model id
   --base-url <url>        override the provider URL (custom: required)
   --gguf <path>           local: model file (default: target/eval-models, then the app's models folder)
   --server <path>         local: llama-server.exe (default: crates/app/llama)
@@ -36,6 +36,7 @@ usage: cargo run -p eval -- [options]
   --case <id>             only this case / episode (repeatable)
   --sources <yaml>        draft with a per-section source mapping (Bericht section -> note sections)
   --runs <n>              repeat everything n times (default 1)
+  --max-cost <usd>        stop before the next request once the billed cost (OpenRouter) reaches this
 
 API key for remote providers: environment variable THERA_EVAL_API_KEY.";
 
@@ -52,6 +53,7 @@ struct Args {
     cases: Vec<String>,
     sources: Option<PathBuf>,
     runs: usize,
+    max_cost: Option<f64>,
 }
 
 fn parse_args() -> Res<Args> {
@@ -85,6 +87,7 @@ fn parse_args() -> Res<Args> {
             "--case" => a.cases.push(value()?),
             "--sources" => a.sources = Some(value()?.into()),
             "--runs" => a.runs = value()?.parse().map_err(|_| "--runs needs a number")?,
+            "--max-cost" => a.max_cost = Some(value()?.parse().map_err(|_| "--max-cost needs a number (USD)")?),
             "-h" | "--help" => return Err(USAGE.into()),
             other => return Err(format!("unknown option {other}\n\n{USAGE}")),
         }
@@ -144,8 +147,16 @@ struct Usage {
     requests: usize,
     failed: usize,
     prompt_tokens: u64,
+    /// Includes reasoning tokens.
     completion_tokens: u64,
+    reasoning_tokens: u64,
+    /// Billed by the router (OpenRouter); 0 for local and providers that don't report it.
+    cost_usd: f64,
     latency_ms: u64,
+    /// Requests skipped because `--max-cost` was reached.
+    skipped: usize,
+    #[serde(skip)]
+    max_cost: Option<f64>,
 }
 
 impl Usage {
@@ -153,7 +164,13 @@ impl Usage {
         self.requests += 1;
         self.prompt_tokens += c.prompt_tokens.unwrap_or(0) as u64;
         self.completion_tokens += c.completion_tokens.unwrap_or(0) as u64;
+        self.reasoning_tokens += c.reasoning_tokens.unwrap_or(0) as u64;
+        self.cost_usd += c.cost.unwrap_or(0.0);
         self.latency_ms += c.latency_ms;
+    }
+
+    fn over_budget(&self) -> bool {
+        self.max_cost.is_some_and(|cap| self.cost_usd >= cap)
     }
 }
 
@@ -227,7 +244,7 @@ fn run() -> Res<()> {
         filter,
         extract: Vec::new(),
         draft: Vec::new(),
-        usage: Usage::default(),
+        usage: Usage { max_cost: a.max_cost, ..Default::default() },
     };
     for run in 1..=a.runs {
         if a.only.as_deref() != Some("draft") {
@@ -256,6 +273,10 @@ fn run() -> Res<()> {
 }
 
 fn chat(t: &Target, system: &thera_core::pseudo::Pseudonymized<String>, user: &thera_core::pseudo::Pseudonymized<String>, opts: &llm::ChatOptions, usage: &mut Usage, answered_by: &mut Option<String>) -> Res<String> {
+    if usage.over_budget() {
+        usage.skipped += 1;
+        return Err(format!("--max-cost {:.2} USD reached, request skipped", usage.max_cost.unwrap_or(0.0)));
+    }
     match llm::chat(&t.ep, &t.model, &[(Role::System, system), (Role::User, user)], opts) {
         Ok(c) => {
             usage.add(&c);
@@ -481,11 +502,14 @@ fn print_summary(r: &Report) {
     }
     let u = &r.usage;
     println!(
-        "\n{} requests ({} failed), {} prompt + {} completion tokens, {:.1} s model time{}",
+        "\n{} requests ({} failed, {} skipped by --max-cost), {} prompt + {} completion tokens ({} reasoning), {:.4} USD billed, {:.1} s model time{}",
         u.requests,
         u.failed,
+        u.skipped,
         u.prompt_tokens,
         u.completion_tokens,
+        u.reasoning_tokens,
+        u.cost_usd,
         u.latency_ms as f64 / 1000.0,
         r.answered_by.as_deref().map(|m| format!(", answered by {m}")).unwrap_or_default()
     );

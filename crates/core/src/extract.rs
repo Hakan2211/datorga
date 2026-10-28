@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use ts_rs::TS;
 
 use crate::domain::{SourceSegment, Speaker};
-use crate::llm::ChatOptions;
+use crate::llm::{ChatOptions, Effort};
 use crate::pseudo::{DetectionSource, Dictionary, EntityKind, Pseudonymized, Pseudonymizer, TokenEntry, TokenMap};
 use crate::templates::{FieldKind, Template};
 use crate::{Error, Result};
@@ -31,7 +31,7 @@ pub const CHUNK_CHARS: usize = 24_000;
 
 /// Request options for one extraction chunk (the eval harness uses the same).
 pub fn chat_options() -> ChatOptions {
-    ChatOptions { temperature: 0.1, max_tokens: 4096, timeout: Duration::from_secs(900) }
+    ChatOptions { temperature: 0.1, max_tokens: 8192, timeout: Duration::from_secs(900), reasoning: Some(Effort::Low) }
 }
 
 /// Longest fact kept; anything longer is a paraphrase of the transcript, not a fact.

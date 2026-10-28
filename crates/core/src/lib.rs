@@ -3,6 +3,7 @@
 pub mod audio;
 pub mod backup;
 pub mod audit;
+pub mod catalog;
 pub mod consent;
 pub mod crypto;
 pub mod domain;

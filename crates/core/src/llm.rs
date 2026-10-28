@@ -23,7 +23,7 @@ pub const CONFIG_SETTING: &str = "llm_config";
 pub enum ProviderId {
     Openrouter,
     Requesty,
-    /// Any other OpenAI-compatible endpoint (Mistral, a practice gateway, a self-run server).
+    /// Any other OpenAI-compatible endpoint (a practice gateway, a self-run server).
     Custom,
     /// The bundled llama.cpp server with a downloaded model ([`crate::local`]). Nothing leaves
     /// the machine. Its address and key are new on every start, so they aren't configured.
@@ -223,16 +223,29 @@ pub enum Role {
     Assistant,
 }
 
+/// How much the model may think before answering. Set per task by the app, never by the therapist.
+/// Reasoning tokens are billed as output and come out of `max_tokens` (OpenRouter gives low ≈ 20 %,
+/// medium ≈ 50 %, high ≈ 80 % of it), so tasks size `max_tokens` with that in mind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Effort {
+    Low,
+    Medium,
+    High,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ChatOptions {
     pub temperature: f32,
     pub max_tokens: u32,
     pub timeout: Duration,
+    /// Sent to OpenRouter only. `None` leaves the model's default, which for some models is "max".
+    pub reasoning: Option<Effort>,
 }
 
 impl Default for ChatOptions {
     fn default() -> Self {
-        Self { temperature: 0.2, max_tokens: 2048, timeout: Duration::from_secs(180) }
+        Self { temperature: 0.2, max_tokens: 2048, timeout: Duration::from_secs(180), reasoning: None }
     }
 }
 
@@ -243,7 +256,11 @@ pub struct Completion {
     /// The model that answered (routers may report a more specific id).
     pub model: String,
     pub prompt_tokens: Option<u32>,
+    /// Includes reasoning tokens.
     pub completion_tokens: Option<u32>,
+    pub reasoning_tokens: Option<u32>,
+    /// What the router billed in USD (OpenRouter reports it; others don't).
+    pub cost: Option<f64>,
     pub latency_ms: u64,
 }
 
@@ -260,6 +277,11 @@ pub fn chat_body(ep: &Endpoint, model: &str, messages: &[(Role, &Pseudonymized<S
     if ep.provider == ProviderId::Openrouter {
         // Only zero-retention endpoints that don't collect data. No match = error, not a fallback.
         body["provider"] = json!({ "zdr": true, "data_collection": "deny" });
+        if let Some(wanted) = opts.reasoning {
+            // The reasoning text isn't needed and shouldn't travel back; it is billed either way.
+            let effort = crate::catalog::effort_for(model, wanted);
+            body["reasoning"] = json!({ "effort": effort, "exclude": true });
+        }
     }
     body
 }
@@ -287,16 +309,23 @@ pub fn chat(ep: &Endpoint, model: &str, messages: &[(Role, &Pseudonymized<String
     if v.get("error").is_some() {
         return Err(Error::Llm(api_error(status, &text)));
     }
-    let content = v
-        .pointer("/choices/0/message/content")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::Llm("Antwort ohne Text".into()))?;
+    let content = v.pointer("/choices/0/message/content").and_then(Value::as_str).unwrap_or("");
+    if content.trim().is_empty() {
+        let cut = v.pointer("/choices/0/finish_reason").and_then(Value::as_str) == Some("length");
+        return Err(Error::Llm(if cut {
+            "Antwort abgeschnitten: das Modell hat sein Token-Budget mit Nachdenken aufgebraucht".into()
+        } else {
+            "Antwort ohne Text".into()
+        }));
+    }
     let usage = |k: &str| v.pointer(&format!("/usage/{k}")).and_then(Value::as_u64).map(|n| n as u32);
     Ok(Completion {
         text: content.to_string(),
         model: v.get("model").and_then(Value::as_str).unwrap_or(model).to_string(),
         prompt_tokens: usage("prompt_tokens"),
         completion_tokens: usage("completion_tokens"),
+        reasoning_tokens: usage("completion_tokens_details/reasoning_tokens"),
+        cost: v.pointer("/usage/cost").and_then(Value::as_f64),
         latency_ms,
     })
 }
@@ -305,7 +334,13 @@ pub fn chat(ep: &Endpoint, model: &str, messages: &[(Role, &Pseudonymized<String
 pub fn ping(ep: &Endpoint, model: &str) -> Result<Completion> {
     let mut p = Pseudonymizer::new(Dictionary::new());
     let msg = p.pseudonymize("Antworte nur mit dem Wort: OK")?;
-    chat(ep, model, &[(Role::User, &msg)], &ChatOptions { max_tokens: 16, timeout: Duration::from_secs(60), ..Default::default() })
+    chat(ep, model, &[(Role::User, &msg)], &ChatOptions {
+        // Some models always reason (Anthropic needs a budget of at least 1024), so 16 tokens would come back empty.
+        max_tokens: 2048,
+        timeout: Duration::from_secs(60),
+        reasoning: Some(Effort::Low),
+        ..Default::default()
+    })
 }
 
 fn net(e: ureq::Error) -> Error {
@@ -366,7 +401,7 @@ mod tests {
         assert!(ep(ProviderId::Custom, "ftp://x").url("/models").is_err());
         assert_eq!(ep(ProviderId::Custom, "http://127.0.0.1:8080/v1/").url("/models").unwrap(), "http://127.0.0.1:8080/v1/models");
         assert!(ep(ProviderId::Custom, "http://localhost:8080/v1").url("/models").is_ok());
-        assert!(ep(ProviderId::Custom, "https://api.mistral.ai/v1").url("/models").is_ok());
+        assert!(ep(ProviderId::Custom, "https://api.example.eu/v1").url("/models").is_ok());
     }
 
     #[test]
@@ -379,6 +414,22 @@ mod tests {
         assert_eq!(b["messages"][0]["role"], "user");
         let b = chat_body(&ep(ProviderId::Requesty, "https://router.eu.requesty.ai/v1"), "x/y", &[(Role::User, &m)], &ChatOptions::default());
         assert!(b.get("provider").is_none());
+    }
+
+    #[test]
+    fn reasoning_effort_goes_to_openrouter_only() {
+        let mut p = Pseudonymizer::new(Dictionary::new());
+        let m = p.pseudonymize("Hallo").unwrap();
+        let opts = ChatOptions { reasoning: Some(Effort::Medium), ..Default::default() };
+        let b = chat_body(&ep(ProviderId::Openrouter, "https://openrouter.ai/api/v1"), "x/y", &[(Role::User, &m)], &opts);
+        assert_eq!(b["reasoning"]["effort"], "medium");
+        assert_eq!(b["reasoning"]["exclude"], true);
+        let b = chat_body(&ep(ProviderId::Openrouter, "https://openrouter.ai/api/v1"), "x/y", &[(Role::User, &m)], &ChatOptions::default());
+        assert!(b.get("reasoning").is_none(), "no effort set = model default");
+        for other in [ProviderId::Requesty, ProviderId::Custom, ProviderId::Local] {
+            let b = chat_body(&ep(other, "http://127.0.0.1:1/v1"), "x/y", &[(Role::User, &m)], &opts);
+            assert!(b.get("reasoning").is_none(), "{other:?}");
+        }
     }
 
     #[test]

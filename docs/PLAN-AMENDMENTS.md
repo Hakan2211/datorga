@@ -159,3 +159,29 @@ Whisper (increment b) will need LLVM/clang.
 - 13 Per-session fact extraction with citations to transcript segments, plus a redaction preview, producing a Sitzungsnotiz draft (done 2026-10-27: facts are proposals the therapist reviews and applies as bullets; the preview shows the exact outgoing text, and terms she adds there are stored per patient and used for every later request; run provenance = provider, model, prompt version + hash).
 - 14 Bericht drafting per section from confirmed facts (later plus style exemplars). Each report stores model/provider/prompt version/hash (PLAN §5). (done 2026-10-27: input = facts the therapist applied to the episode's Sitzungsnotizen; the patient is written "Pat." before pseudonymizing and sentences naming anyone else are dropped, since the Bericht goes to the Gutachter; every sentence cites facts (`report_citation` → `note_fact` → `fact_citation` → segment); drafts are proposals applied per section by replace or append.)
 - 15 Eval set (synthetic German sessions → expected facts), `cargo run -p eval`. (done 2026-10-27: suite `de-therapy-v1`, 6 synthetic sessions, 80 expected facts with note and Bericht sections, 3 episodes; deterministic regex scoring for extraction and per-section drafting; Qwen3 8B: extraction 97 % recall / 84 % right section, drafting 50 % precision / 88 % recall after `draft-2026.2`. A per-section source mapping by note section was measured and rejected: it barely separates Bericht sections.)
+
+## 10. Cloud models, reasoning, cost (user, 2026-10-28)
+
+| # | Decision | Consequence |
+|---|---|---|
+| M1 | **No OpenRouter batch.** | Batch is async (minutes to 24 h) and OpenRouter stores requests and results for 30 days, which breaks zero retention. The saving would be a few dollars per quarter. |
+| M2 | **Reasoning is set by the app per task**, never shown to the therapist: extraction `low`, drafts `medium` (agent later `medium`), `exclude: true`. | `llm::Effort` in `ChatOptions`, sent to OpenRouter only. `catalog::effort_for` maps a level a model lacks to the next lower one (DeepSeek has no `medium`). `max_tokens` 8192 for extraction and drafts, since reasoning comes out of it. An empty answer with `finish_reason: length` becomes a clear error. |
+| M3 | **Guidance: three tiers + a curated list.** Günstig = Claude Haiku 5.5, Ausgewogen (Empfohlen) = Gemini 3.8 Flash, Beste Qualität = GPT-6.1 Sol Pro; further tested models listed with quality stars; free model id only under "Erweitert". | `core::catalog` (prices of 28.10.2026, eval-measured reasoning share, cost per note / Bericht / month at 20 sessions a week). Settings shows what was billed this month and overall (`Store::llm_spend` over the audit log, which now records `cost_usd` and `reasoning_tokens`). |
+| M4 | **Never Mistral.** | Removed from the local catalog (Mistral Small 3.2) and every example. |
+
+Eval 2026-10-28 (`de-therapy-v1`, OpenRouter, ZDR enforced, production reasoning settings; total spend 0.57 $):
+
+| Model | Facts found | Right section | Draft precision | Draft recall | Forbidden | Errors | USD / full suite |
+|---|---|---|---|---|---|---|---|
+| Gemini 3.8 Flash | 100 % | 99 % | 86 % | 100 % | 0 | 0 | 0.101 |
+| Claude Haiku 5.5 | 100 % | 99 % | 72 % | 98 % | 0 | 0 | 0.022 |
+| DeepSeek V4.1 Flash | 100 % | 99 % | 74 % | 94 % | 0 | 1 (tokens, before effort mapping) | 0.024 |
+| GPT-6 Luna Pro | 91 % | 100 % | 72 % | 98 % | 0 | 0 | 0.024 |
+| MiniMax M3.1 Flash | 100 % | 96 % | 64 % | 88 % | 4 | 1 (invalid JSON) | 0.013 |
+| Qwen3.8 27B | 97 % | 100 % | 70 % | 100 % | 2 | 0 | 0.100 |
+| Mini suite only (vt-panik-1, tp-depression-1, episode tp-depression): GPT-6.1 Sol Pro | 97 % | 100 % | 90 % | 100 % | 0 | 0 | ~0.37 (×3) |
+| … Gemini 4 Argon | 100 % | 100 % | 73 % | 100 % | 0 | 0 | ~0.14 (×3) |
+| … Claude Sonnet 5.5 | 97 % | 100 % | 70 % | 100 % | 1 | 0 | ~0.25 (×3) |
+| Local Qwen3 8B (earlier, for comparison) | | | 52 % | 93 % | 12 | | 0 |
+
+Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.5 (not measured to save cost). The suite has only 3 Bericht episodes: precision differences of a few points are noise.
