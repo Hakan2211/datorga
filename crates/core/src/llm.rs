@@ -356,11 +356,10 @@ pub fn chat_body(ep: &Endpoint, model: &str, messages: &[(Role, &Pseudonymized<S
 /// The request body with tools. `tools` are the app's own definitions (no patient data).
 pub fn tools_body(ep: &Endpoint, model: &str, messages: &[Message], tools: &Value, opts: &ChatOptions) -> Value {
     let mut body = request_body(ep, model, messages.iter().map(Message::json).collect(), opts);
+    // No `provider.require_parameters` for OpenRouter: it demands every parameter, and models that
+    // reject `temperature` (Claude, GPT reasoning models) then have no endpoint at all (404). The
+    // UI warns when the chosen model doesn't list `tools` instead.
     body["tools"] = tools.clone();
-    if ep.provider == ProviderId::Openrouter {
-        // Route only to endpoints that support tool calls instead of dropping the tools silently.
-        body["provider"]["require_parameters"] = json!(true);
-    }
     body
 }
 

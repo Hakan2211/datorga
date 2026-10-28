@@ -355,9 +355,11 @@ fn tool_calls_in_a_plain_json_answer_are_read() {
 }
 
 #[test]
-fn openrouter_requires_tool_support_when_tools_are_sent() {
+fn openrouter_tools_keep_zero_retention_but_dont_demand_every_parameter() {
     let ep = Endpoint { provider: ProviderId::Openrouter, base_url: "https://openrouter.ai/api/v1".into(), api_key: None };
     let b = llm::tools_body(&ep, "x/y", &[llm::Message::Text(Role::User, hello())], &serde_json::json!([]), &ChatOptions::default());
-    assert_eq!(b["provider"]["require_parameters"], true);
+    // Demanding every parameter left Claude/GPT (no `temperature`) without an endpoint: HTTP 404.
+    assert!(b["provider"].get("require_parameters").is_none());
     assert_eq!(b["provider"]["zdr"], true);
+    assert_eq!(b["provider"]["data_collection"], "deny");
 }
