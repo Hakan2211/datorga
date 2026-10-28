@@ -617,6 +617,8 @@ export const de = {
     empty: 'Noch keine unterschriebene Dokumentation: Die Assistentin hilft trotzdem beim Sammeln von Schwerpunkten.',
     mic: 'Mikrofon',
     micDefault: 'Standardmikrofon',
+    micTest: 'Pegel',
+    playFailed: 'Ton der Assistentin kann nicht abgespielt werden: {{error}}',
     noNames: 'Nennen Sie im Gespräch keine Namen: Ton lässt sich nicht pseudonymisieren.',
     begin: 'Gespräch starten',
     connecting: 'Verbinde…',

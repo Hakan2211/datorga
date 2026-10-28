@@ -80,6 +80,10 @@ womit sie anfangen möchte.";
 const NO_DOCS: &str = "Für diese Patientin bzw. diesen Patienten liegt noch keine unterschriebene Dokumentation vor. \
 Hilf ihr trotzdem, sich zu sammeln und Schwerpunkte für die Sitzung zu überlegen.";
 
+/// Sent as the first (developer) message so the assistant opens the conversation: with
+/// instructions alone GPT-Live waits for the user to speak.
+const OPENING: &str = "Begrüße die Therapeutin jetzt kurz auf Deutsch, sag in einem Satz, worauf die Dokumentation beruht, und frag, womit sie anfangen möchte.";
+
 /// What the voice model says when it asks for backend work (client delegation).
 pub const NO_BACKEND: &str = "Dazu liegen mir keine weiteren Informationen vor als die Dokumentation, die ich habe.";
 
@@ -97,6 +101,7 @@ pub fn session_body(voice: &str, brief: &Pseudonymized<String>, sdp: &str) -> Va
             "model": MODEL,
             "instructions": instructions(brief),
             "audio": { "output": { "voice": voice } },
+            "input": [{ "type": "message", "role": "developer", "content": [{ "type": "input_text", "text": OPENING }] }],
             "delegation": { "type": "client" },
             "store": false,
         },
@@ -239,6 +244,8 @@ mod tests {
         assert_eq!(b["session"]["audio"]["output"]["voice"], "juni");
         assert_eq!(b["session"]["delegation"]["type"], "client");
         assert_eq!(b["session"]["store"], false);
+        assert_eq!(b["session"]["input"][0]["role"], "developer");
+        assert!(b["session"]["input"][0]["content"][0]["text"].as_str().unwrap().starts_with("Begrüße"));
         assert_eq!(b["transport"]["type"], "webrtc");
         assert!(b["session"]["instructions"].as_str().unwrap().ends_with("Pat. schläft besser."));
         assert!(b["session"].get("audio").unwrap().get("format").is_none(), "WebRTC negotiates the format");

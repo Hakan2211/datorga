@@ -256,6 +256,8 @@ export const api = {
   prepStart: (sessionId: string, digest: string, sdp: string) => invoke<LiveSession>('prep_start', { sessionId, digest, sdp }),
   prepFinish: (sessionId: string, turns: PrepTurn[], seconds: number | null, reason: string) =>
     invoke<SessionPrep>('prep_finish', { sessionId, turns, seconds, reason }),
+  prepAbort: (sessionId: string, seconds: number | null, reason: string) =>
+    invoke<void>('prep_abort', { sessionId, seconds, reason }),
   prep: (sessionId: string) => invoke<SessionPrep | null>('prep_get', { sessionId }),
   setPrepSheet: (sessionId: string, sheet: string) => invoke<void>('prep_sheet_set', { sessionId, sheet }),
   prepSheetRun: (sessionId: string, requestId: string) => invoke<SessionPrep | null>('prep_sheet_run', { sessionId, requestId }),

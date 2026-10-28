@@ -1961,6 +1961,12 @@ fn prep_finish(state: State<'_, AppState>, session_id: String, turns: Vec<PrepTu
     })
 }
 
+/// A conversation in which nothing was said: only the billed seconds are audited.
+#[tauri::command]
+fn prep_abort(state: State<'_, AppState>, session_id: String, seconds: Option<f64>, reason: String) -> CmdResult<()> {
+    state.with(|s| s.log_prep_empty(&session_id, seconds, live::MODEL, &reason))
+}
+
 #[tauri::command]
 fn prep_get(state: State<'_, AppState>, session_id: String) -> CmdResult<Option<SessionPrep>> {
     state.with(|s| s.session_prep(&session_id))
@@ -2216,6 +2222,7 @@ pub fn run() {
             prep_preview,
             prep_start,
             prep_finish,
+            prep_abort,
             prep_get,
             prep_sheet_set,
             prep_sheet_run,

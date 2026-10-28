@@ -1325,12 +1325,14 @@ impl Store {
              ON CONFLICT(session_id) DO UPDATE SET transcript = ?2, seconds = ?3, sheet = NULL, sheet_model = NULL, updated_at = ?4",
             params![session_id, serde_json::to_string(turns)?, seconds, t],
         )?;
-        audit::append(&tx, Entry {
-            actor: ACTOR, action: "prep.live", entity_type: "session", entity_id: Some(session_id),
-            meta: json!({ "provider": "openai", "model": model, "ok": true, "seconds": seconds, "turns": turns.len(), "reason": reason, "cost_usd": seconds.map(|s| (s / 60.0 * crate::live::USD_PER_MINUTE * 10000.0).round() / 10000.0) }),
-        })?;
+        log_prep_live(&tx, session_id, model, seconds, turns.len(), reason)?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// A voice prep that ended with nothing said: billed all the same, so audited, not stored.
+    pub fn log_prep_empty(&self, session_id: &str, seconds: Option<f64>, model: &str, reason: &str) -> Result<()> {
+        log_prep_live(&self.conn, session_id, model, seconds, 0, reason)
     }
 
     pub fn set_prep_sheet(&self, session_id: &str, sheet: &str, model: Option<&str>) -> Result<()> {
@@ -1957,6 +1959,14 @@ fn parse_col<T: std::str::FromStr<Err = Error>>(r: &rusqlite::Row<'_>, idx: usiz
 pub struct LlmSpend {
     pub requests: u32,
     pub usd: f64,
+}
+
+fn log_prep_live(conn: &Connection, session_id: &str, model: &str, seconds: Option<f64>, turns: usize, reason: &str) -> Result<()> {
+    let cost = seconds.map(|s| (s / 60.0 * crate::live::USD_PER_MINUTE * 10000.0).round() / 10000.0);
+    audit::append(conn, Entry {
+        actor: ACTOR, action: "prep.live", entity_type: "session", entity_id: Some(session_id),
+        meta: json!({ "provider": "openai", "model": model, "ok": true, "seconds": seconds, "turns": turns, "reason": reason, "cost_usd": cost }),
+    })
 }
 
 #[cfg(test)]
@@ -2636,3 +2646,4 @@ mod tests {
         assert!(!bytes.windows(8).any(|w| w == b"Beispiel"), "plaintext must not appear on disk");
     }
 }
+

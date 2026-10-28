@@ -20,6 +20,46 @@ import { api, errorMessage, q, type PrepPreview } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 const DEFAULT_MIC = 'default'
+/** The microphone chosen last time (WebView device id; not the capture panel's cpal id). */
+const MIC_KEY = 'thera.prepMic'
+
+/** Input level 0..1 of `stream`, for a meter. */
+function useLevel(stream: MediaStream | null) {
+  const [level, setLevel] = useState(0)
+  useEffect(() => {
+    if (!stream || stream.getAudioTracks().length === 0) return
+    const ctx = new AudioContext()
+    void ctx.resume()
+    const analyser = ctx.createAnalyser()
+    analyser.fftSize = 512
+    ctx.createMediaStreamSource(stream).connect(analyser)
+    const buf = new Float32Array(analyser.fftSize)
+    let frame = 0
+    const tick = () => {
+      analyser.getFloatTimeDomainData(buf)
+      const rms = Math.sqrt(buf.reduce((a, v) => a + v * v, 0) / buf.length)
+      setLevel(Math.min(1, rms * 6))
+      frame = requestAnimationFrame(tick)
+    }
+    tick()
+    return () => {
+      cancelAnimationFrame(frame)
+      void ctx.close()
+    }
+  }, [stream])
+  return level
+}
+
+function Meter({ label, level, testId }: { label: string; level: number; testId?: string }) {
+  return (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid={testId} data-level={level.toFixed(2)}>
+      <span className="w-20 shrink-0">{label}</span>
+      <div className="h-1.5 w-32 overflow-hidden rounded-full bg-muted">
+        <div className="h-full bg-primary transition-[width] duration-75" style={{ width: `${Math.round(level * 100)}%` }} />
+      </div>
+    </div>
+  )
+}
 
 type Start = { digest: string; tokens: TokenView[]; deviceId: string | null }
 
@@ -87,13 +127,35 @@ function PreviewDialog({ sessionId, onClose, onBegin }: { sessionId: string; onC
   const { t } = useTranslation()
   const preview = useQuery({ queryKey: ['prep-preview', sessionId], queryFn: () => api.prepPreview(sessionId), gcTime: 0 })
   const [mics, setMics] = useState<MediaDeviceInfo[]>([])
-  const [mic, setMic] = useState(DEFAULT_MIC)
+  const [mic, setMic] = useState(() => localStorage.getItem(MIC_KEY) ?? DEFAULT_MIC)
+  const [test, setTest] = useState<MediaStream | null>(null)
+  const [micError, setMicError] = useState<string | null>(null)
+  const level = useLevel(test)
+  // Opens the chosen mic for the meter (this also asks for permission, which the device names need).
   useEffect(() => {
+    let stream: MediaStream | null = null
+    let gone = false
     navigator.mediaDevices
-      ?.enumerateDevices()
-      .then((d) => setMics(d.filter((x) => x.kind === 'audioinput' && x.deviceId && x.deviceId !== 'default' && x.label)))
-      .catch(() => {})
-  }, [])
+      .getUserMedia({ audio: mic === DEFAULT_MIC ? true : { deviceId: { exact: mic } } })
+      .then(async (st) => {
+        if (gone) return st.getTracks().forEach((tr) => tr.stop())
+        stream = st
+        setTest(st)
+        setMicError(null)
+        const all = await navigator.mediaDevices.enumerateDevices()
+        setMics(all.filter((x) => x.kind === 'audioinput' && x.deviceId && x.deviceId !== 'default' && x.deviceId !== 'communications'))
+      })
+      .catch((e) => {
+        setMicError(errorMessage(e))
+        // A remembered device that is gone: fall back to the default.
+        if (mic !== DEFAULT_MIC) setMic(DEFAULT_MIC)
+      })
+    return () => {
+      gone = true
+      stream?.getTracks().forEach((tr) => tr.stop())
+      setTest(null)
+    }
+  }, [mic])
   const data: PrepPreview | undefined = preview.data
   const empty = data && data.stats.notes === 0 && data.stats.facts === 0
 
@@ -149,15 +211,21 @@ function PreviewDialog({ sessionId, onClose, onBegin }: { sessionId: string; onC
                   <SelectItem value={DEFAULT_MIC}>{t('prep.micDefault')}</SelectItem>
                   {mics.map((m) => (
                     <SelectItem key={m.deviceId} value={m.deviceId}>
-                      {m.label}
+                      {m.label || m.deviceId.slice(0, 8)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              <Meter label={t('prep.micTest')} level={level} testId="prep-mic-meter" />
+              {micError && <p className="text-xs text-destructive">{t('prep.micDenied', { error: micError })}</p>}
             </div>
             <Button
-              disabled={!data}
-              onClick={() => data && onBegin({ digest: data.digest, tokens: data.tokens, deviceId: mic === DEFAULT_MIC ? null : mic })}
+              disabled={!data || !!micError}
+              onClick={() => {
+                if (!data) return
+                localStorage.setItem(MIC_KEY, mic)
+                onBegin({ digest: data.digest, tokens: data.tokens, deviceId: mic === DEFAULT_MIC ? null : mic })
+              }}
             >
               <Mic className="size-4" /> {t('prep.begin')}
             </Button>
@@ -192,7 +260,12 @@ function LiveDialog({
   const [turns, setTurns] = useState<PrepTurn[]>([])
   const [seconds, setSeconds] = useState<number | null>(null)
   const [muted, setMuted] = useState(false)
-  const conn = useRef<{ pc: RTCPeerConnection; dc: RTCDataChannel; mic: MediaStream; audio: HTMLAudioElement } | null>(null)
+  const [micStream, setMicStream] = useState<MediaStream | null>(null)
+  const [remote, setRemote] = useState<MediaStream | null>(null)
+  const micLevel = useLevel(micStream)
+  const remoteLevel = useLevel(remote)
+  const audioEl = useRef<HTMLAudioElement>(null)
+  const conn = useRef<{ pc: RTCPeerConnection; dc: RTCDataChannel; mic: MediaStream } | null>(null)
   const turnsRef = useRef<PrepTurn[]>([])
   const secondsRef = useRef<number | null>(null)
   const closedRef = useRef<((c: Closed | null) => void) | null>(null)
@@ -212,7 +285,7 @@ function LiveDialog({
     c.mic.getTracks().forEach((tr) => tr.stop())
     c.dc.close()
     c.pc.close()
-    c.audio.srcObject = null
+    if (audioEl.current) audioEl.current.srcObject = null
     conn.current = null
   }
 
@@ -225,12 +298,14 @@ function LiveDialog({
     const said = turnsRef.current
       .map((tn) => ({ ...tn, text: restore(tn.text, start.tokens).trim() }))
       .filter((tn) => tn.text)
-    if (said.length > 0) {
-      try {
-        await api.prepFinish(sessionId, said, closed?.seconds ?? secondsRef.current, closed?.reason ?? 'connection_lost')
-      } catch (e) {
-        toast.error(errorMessage(e))
-      }
+    const billed = closed?.seconds ?? secondsRef.current
+    const reason = closed?.reason ?? 'connection_lost'
+    try {
+      // Nothing said is still billed: then only the seconds go into the audit log.
+      if (said.length > 0) await api.prepFinish(sessionId, said, billed, reason)
+      else if (billed != null) await api.prepAbort(sessionId, billed, reason)
+    } catch (e) {
+      toast.error(errorMessage(e))
     }
     void qc.invalidateQueries({ queryKey: ['prep', sessionId] })
     onDone()
@@ -263,15 +338,21 @@ function LiveDialog({
         return
       }
       if (cancelled) return mic.getTracks().forEach((tr) => tr.stop())
+      setMicStream(mic)
       const pc = new RTCPeerConnection()
-      const audio = new Audio()
-      audio.autoplay = true
       pc.ontrack = (e) => {
-        audio.srcObject = e.streams[0]
+        const stream = e.streams[0] ?? new MediaStream([e.track])
+        setRemote(stream)
+        const el = audioEl.current
+        if (el) {
+          el.srcObject = stream
+          // Explicit play: autoplay of a stream that arrives later isn't guaranteed.
+          el.play().catch((err) => toast.error(t('prep.playFailed', { error: errorMessage(err) })))
+        }
       }
       mic.getAudioTracks().forEach((tr) => pc.addTrack(tr, mic))
       const dc = pc.createDataChannel('oai-events')
-      conn.current = { pc, dc, mic, audio }
+      conn.current = { pc, dc, mic }
       dc.onmessage = (m) => {
         let ev: Record<string, any>
         try {
@@ -357,7 +438,13 @@ function LiveDialog({
 
   return (
     <Dialog open onOpenChange={(o) => !o && void end()}>
-      <DialogContent className="max-h-[90vh] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-2xl" data-testid="prep-live">
+      <DialogContent
+        className="max-h-[90vh] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-2xl"
+        data-testid="prep-live"
+        // A stray click or Escape must not hang up a running (billed) conversation.
+        onInteractOutside={(e) => e.preventDefault()}
+        onEscapeKeyDown={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {status === 'connecting' ? (
@@ -371,6 +458,7 @@ function LiveDialog({
             {t('prep.minutes', { time, cost: ((secs / 60) * usdPerMinute).toFixed(2) })} · {t('prep.noNames')}
           </DialogDescription>
         </DialogHeader>
+        <audio ref={audioEl} autoPlay className="hidden" />
         <div ref={scroller} className="min-h-48 space-y-3 overflow-y-auto text-sm" data-testid="prep-captions">
           {turns.length === 0 && status === 'live' && <p className="text-muted-foreground">{t('prep.listening')}</p>}
           {turns.map((tn, i) => (
@@ -382,7 +470,11 @@ function LiveDialog({
             </div>
           ))}
         </div>
-        <div className="flex justify-end gap-2 border-t pt-3">
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t pt-3">
+          <div className="mr-auto space-y-1">
+            <Meter label={t('prep.therapist')} level={muted ? 0 : micLevel} testId="prep-meter-mic" />
+            <Meter label={t('prep.assistant')} level={remoteLevel} testId="prep-meter-remote" />
+          </div>
           <Button variant="outline" disabled={status !== 'live'} onClick={toggleMute}>
             {muted ? <Mic className="size-4" /> : <MicOff className="size-4" />}
             {muted ? t('prep.unmute') : t('prep.mute')}
