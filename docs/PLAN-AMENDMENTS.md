@@ -184,4 +184,6 @@ Eval 2026-10-28 (`de-therapy-v1`, OpenRouter, ZDR enforced, production reasoning
 | … Claude Sonnet 5.5 | 97 % | 100 % | 70 % | 100 % | 1 | 0 | ~0.25 (×3) |
 | Local Qwen3 8B (earlier, for comparison) | | | 52 % | 93 % | 12 | | 0 |
 
+After slice 19 (`extract-2026.2` / `draft-2026.3`, tag-filtered drafts, 2026-10-28): Gemini 3.8 Flash draft precision 93 %, recall 96 % (0.098 $); Claude Haiku 5.5 97 % / 96 % (0.023 $); local Qwen3 8B 83 % / 75 % (3 runs). Forbidden 0 for all three. Haiku is now the cheapest and the most precise of the measured models.
+
 Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.5 (not measured to save cost). The suite has only 3 Bericht episodes: precision differences of a few points are noise.
