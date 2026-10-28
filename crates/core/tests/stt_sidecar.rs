@@ -36,7 +36,7 @@ fn run(
     progress: impl FnMut(u8),
     cancel: &AtomicBool,
 ) -> thera_core::Result<Vec<stt::Segment>> {
-    stt::transcribe(SourceKind::Dictation, audio, key, &SttEngine::Local(cli), work, progress, cancel).map(|t| {
+    stt::transcribe(SourceKind::Dictation, false, audio, key, &SttEngine::Local(cli), work, progress, cancel).map(|t| {
         assert!(t.cloud.is_none());
         t.segments
     })
@@ -62,7 +62,7 @@ fn session_recordings_run_locally_and_the_process_is_handed_out() {
     let mut c = cli("model");
     let s2 = spawned.clone();
     c.on_spawn = Some(Arc::new(move |_| s2.store(true, Ordering::Relaxed)));
-    let t = stt::transcribe(SourceKind::SessionAudio, &tmp.path().join("audio"), &key, &SttEngine::Local(c), &tmp.path().join("work"), |_| {}, &AtomicBool::new(false)).unwrap();
+    let t = stt::transcribe(SourceKind::SessionAudio, false, &tmp.path().join("audio"), &key, &SttEngine::Local(c), &tmp.path().join("work"), |_| {}, &AtomicBool::new(false)).unwrap();
     assert_eq!(t.segments.len(), 1);
     assert!(spawned.load(Ordering::Relaxed), "on_spawn saw the sidecar");
 }

@@ -3,8 +3,9 @@ import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { AlertTriangle, ClipboardList, FileText, Mic, NotebookPen, Square, X } from 'lucide-react'
+import { AlertTriangle, ClipboardList, Cloud, FileText, Laptop, Mic, NotebookPen, Square, X } from 'lucide-react'
 import type { SourceKind } from '@/bindings/SourceKind'
+import type { SttTarget } from '@/bindings/SttTarget'
 import { Page, PageHeader } from '@/components/app-shell'
 import { ExportOutdatedBadge, StatusBadge, formatDate } from '@/components/bits'
 import { Badge } from '@/components/ui/badge'
@@ -13,7 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { TranscriptView } from '@/components/transcript-view'
-import { api, errorMessage, jobActive, q, type RecordingStatus, type SessionView, type SourceView, type SttOverview } from '@/lib/api'
+import { api, errorMessage, jobActive, q, type RecordingStatus, type SessionView, type SourceView } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/sessions/$sessionId')({ component: SessionPage })
@@ -22,7 +23,6 @@ function SessionPage() {
   const { sessionId } = Route.useParams()
   const { t } = useTranslation()
   const view = useQuery(q.session(sessionId))
-  const stt = useQuery(q.stt())
   if (!view.data) return null
   const { session, patient, sources } = view.data
 
@@ -49,7 +49,7 @@ function SessionPage() {
             ) : (
               <ul className="divide-y text-sm">
                 {sources.map((s) => (
-                  <SourceRow key={s.id} source={s} sttReady={sttReady(stt.data)} />
+                  <SourceRow key={s.id} source={s} patientId={patient.id} />
                 ))}
               </ul>
             )}
@@ -263,18 +263,24 @@ function LevelMeter({ level }: { level: number }) {
   )
 }
 
-const sttReady = (o: SttOverview | undefined) => !!o?.engine && !!o.models.find((m) => m.id === o.active)?.installed
+const TARGETS: SttTarget[] = ['local', 'cloud']
 
-function SourceRow({ source, sttReady }: { source: SourceView; sttReady: boolean }) {
+function SourceRow({ source, patientId }: { source: SourceView; patientId: string }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
-  const { job, transcript } = source
+  const { job, transcript, stt } = source
+  // Preselected from Settings; the therapist can switch per recording.
+  const [picked, setPicked] = useState<SttTarget | null>(null)
+  const target = picked ?? stt.default
+  const problem = target === 'local' ? stt.local_problem : stt.cloud_problem
+  const running = job?.engine ?? stt.default
+  const cloudDone = transcript?.engine.startsWith('cloud:')
   // Drafts open by default: they need review. Confirmed ones stay collapsed.
   const [open, setOpen] = useState<boolean | null>(null)
   const expanded = open ?? transcript?.status === 'draft'
   const refresh = () => void qc.invalidateQueries({ queryKey: ['session', source.session_id] })
   const start = useMutation({
-    mutationFn: () => api.startTranscription(source.id),
+    mutationFn: () => api.startTranscription(source.id, target),
     onSuccess: refresh,
     onError: (e) => toast.error(errorMessage(e)),
   })
@@ -304,6 +310,11 @@ function SourceRow({ source, sttReady }: { source: SourceView; sttReady: boolean
             {t(`transcript.${transcript.status}`)}
           </Badge>
         )}
+        {transcript && (
+          <Badge variant="outline" className="gap-1 font-normal" data-testid="stt-engine-used">
+            {cloudDone ? <Cloud /> : <Laptop />} {cloudDone ? t('transcript.doneCloud') : t('transcript.doneLocal')}
+          </Badge>
+        )}
         {source.audio_deleted_at && <span className="text-muted-foreground">{t('transcript.audioDeleted')}</span>}
         {reason && <span className="text-muted-foreground">{reason}</span>}
         <span className="ml-auto flex items-center gap-2">
@@ -312,17 +323,44 @@ function SourceRow({ source, sttReady }: { source: SourceView; sttReady: boolean
               <FileText /> {expanded ? t('transcript.hide') : transcript.status === 'draft' ? t('transcript.review') : t('transcript.show')}
             </Button>
           )}
-          {canTranscribe && sttReady && (
-            <Button size="sm" variant="outline" onClick={() => start.mutate()} disabled={start.isPending}>
-              {transcript || job ? t('transcript.retry') : t('transcript.start')}
-            </Button>
+          {canTranscribe && (
+            <>
+              <span
+                className="inline-flex rounded-md border p-0.5"
+                role="radiogroup"
+                aria-label={t('transcript.targetLabel')}
+                data-testid="stt-target"
+              >
+                {TARGETS.map((tg) => (
+                  <button
+                    key={tg}
+                    type="button"
+                    role="radio"
+                    aria-checked={target === tg}
+                    onClick={() => setPicked(tg)}
+                    title={(tg === 'local' ? stt.local_problem : stt.cloud_problem) ?? undefined}
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs',
+                      target === tg ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted',
+                    )}
+                  >
+                    {tg === 'local' ? <Laptop className="size-3.5" /> : <Cloud className="size-3.5" />} {t(`transcript.target.${tg}`)}
+                  </button>
+                ))}
+              </span>
+              <Button size="sm" variant="outline" onClick={() => start.mutate()} disabled={start.isPending || !!problem}>
+                {transcript || job ? t('transcript.retry') : t('transcript.start')}
+              </Button>
+            </>
           )}
         </span>
       </div>
       {jobActive(job) && job && (
         <div className="flex items-center gap-3">
           <span className="text-muted-foreground">
-            {job.status === 'queued' ? t('transcript.queued') : `${t('transcript.running')} · ${job.progress} %`}
+            {job.status === 'queued'
+              ? t(running === 'cloud' ? 'transcript.queuedCloud' : 'transcript.queuedLocal')
+              : `${running === 'cloud' ? t('transcript.runningCloud', { label: stt.cloud_label }) : t('transcript.runningLocal')} · ${job.progress} %`}
           </span>
           <div className="h-2 w-48 overflow-hidden rounded-full bg-muted">
             <div className="h-full bg-primary transition-[width]" style={{ width: `${job.progress}%` }} />
@@ -338,12 +376,23 @@ function SourceRow({ source, sttReady }: { source: SourceView; sttReady: boolean
         </p>
       )}
       {job?.status === 'cancelled' && !transcript && <p className="text-muted-foreground">{t('transcript.cancelled')}</p>}
-      {canTranscribe && !sttReady && !transcript && (
-        <p className="text-muted-foreground">
-          {t('transcript.noModel')}{' '}
-          <Link to="/settings" className="underline">
-            {t('transcript.settingsLink')}
-          </Link>
+      {canTranscribe && problem && (
+        <p className="flex items-center gap-2 text-muted-foreground" data-testid="stt-problem">
+          <AlertTriangle className="size-4 shrink-0" /> {problem}{' '}
+          {target === 'cloud' && stt.cloud_needs_consent ? (
+            <Link to="/patients/$patientId" params={{ patientId }} className="underline">
+              {t('transcript.consentLink')}
+            </Link>
+          ) : (
+            <Link to="/settings" className="underline">
+              {t('transcript.settingsLink')}
+            </Link>
+          )}
+        </p>
+      )}
+      {canTranscribe && !problem && target === 'cloud' && (
+        <p className="flex items-center gap-2 text-[13px] text-muted-foreground">
+          <Cloud className="size-4 shrink-0" /> {t('transcript.cloudHint', { label: stt.cloud_label })}
         </p>
       )}
       {transcript && expanded && <TranscriptView transcript={transcript} sessionId={source.session_id} />}

@@ -19,7 +19,7 @@ What already exists (from exploration):
 - **Context sources** for prep and agent: `Store::episode_facts`, applied `note_fact`, signed notes, Berichte. Pseudonymizer: `Pseudonymizer::with_map` keeps tokens stable across texts. The "Pat." rule comes from slice 14 (`core::draft`).
 
 User decisions (2026-10-28):
-- **Cloud STT only for the therapist's own voice**: dictation, editor voice mode, the Diktat-Werkstatt. Session recordings with the patient's voice always stay local.
+- ~~**Cloud STT only for the therapist's own voice**~~ **Changed by the user (2026-10-28):** dictations may use the cloud; **session recordings too, but only with a separate patient consent "Cloud-Transkription"** (own versioned text and form; the recording consent still promises local processing and stays unchanged). The engine is chosen per recording in the session, preselected from Settings.
 - **Voice prep uses OpenAI Realtime directly**: a separate OpenAI key, WebRTC.
 - **The agent proposes, the therapist confirms**: it never signs, exports or sets diagnoses.
 - **The calendar is in-app only**, with optional .ics export.

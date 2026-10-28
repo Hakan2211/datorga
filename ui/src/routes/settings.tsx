@@ -327,7 +327,10 @@ function SttEngineChoice({ data, onSaved }: { data: SttOverview; onSaved: () => 
                         {m.label}
                         <span className="text-xs text-muted-foreground">
                           {' '}
-                          · {t('settings.stt.perHour', { price: m.usd_per_hour.toFixed(m.usd_per_hour < 0.1 ? 3 : 2) })}
+                          ·{' '}
+                          {m.usd_per_hour == null
+                            ? t('settings.stt.priceUnknown')
+                            : t('settings.stt.perHour', { price: m.usd_per_hour.toFixed(m.usd_per_hour < 0.1 ? 3 : 2) })}
                         </span>
                       </SelectItem>
                     ))}

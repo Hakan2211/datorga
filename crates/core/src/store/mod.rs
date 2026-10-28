@@ -31,6 +31,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V6__export_state.sql"),
     include_str!("migrations/V7__extraction.sql"),
     include_str!("migrations/V8__report_draft.sql"),
+    include_str!("migrations/V9__job_engine.sql"),
 ];
 
 pub struct Store {
@@ -679,7 +680,8 @@ impl Store {
     // ---------- transcription ----------
 
     /// Queues a transcription of a finished recording. Re-running replaces a draft transcript.
-    pub fn enqueue_transcription(&self, source_id: &str) -> Result<Job> {
+    /// `engine` is the choice made in the session (`None` = Settings decide when it runs).
+    pub fn enqueue_transcription(&self, source_id: &str, engine: Option<SttTarget>) -> Result<Job> {
         let src = self.source(source_id)?;
         if src.status == SourceStatus::Recording {
             return Err(Error::Invalid("Die Aufnahme läuft noch".into()));
@@ -697,12 +699,12 @@ impl Store {
         let ts = now();
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO job (id, kind, source_id, created_at, updated_at) VALUES (?1, 'transcribe', ?2, ?3, ?3)",
-            params![id, source_id, ts],
+            "INSERT INTO job (id, kind, source_id, engine, created_at, updated_at) VALUES (?1, 'transcribe', ?2, ?3, ?4, ?4)",
+            params![id, source_id, engine.map(SttTarget::as_str), ts],
         )?;
         audit::append(&tx, Entry {
             actor: ACTOR, action: "transcription.enqueue", entity_type: "job", entity_id: Some(&id),
-            meta: json!({ "source_id": source_id }),
+            meta: json!({ "source_id": source_id, "engine": engine.map(SttTarget::as_str) }),
         })?;
         tx.commit()?;
         self.job(&id)
@@ -1640,7 +1642,7 @@ const SESSION_SELECT: &str = "SELECT s.id, s.patient_id, s.episode_id, s.schedul
     FROM session s LEFT JOIN report n ON n.session_id = s.id AND n.kind = 'sitzungsnotiz'";
 
 const JOB_SELECT: &str =
-    "SELECT id, kind, source_id, status, progress, attempts, last_error, created_at, updated_at FROM job";
+    "SELECT id, kind, source_id, status, progress, attempts, last_error, created_at, updated_at, engine FROM job";
 const TRANSCRIPT_SELECT: &str =
     "SELECT id, source_id, engine, model, language, status, created_at, confirmed_at FROM transcript";
 
@@ -1653,6 +1655,9 @@ fn row_to_job(r: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
         progress: r.get(4)?,
         attempts: r.get(5)?,
         last_error: r.get(6)?,
+        engine: r.get::<_, Option<String>>(9)?.map(|e| e.parse()).transpose().map_err(|e: Error| {
+            rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(e))
+        })?,
         created_at: r.get(7)?,
         updated_at: r.get(8)?,
     })
@@ -2043,9 +2048,9 @@ mod tests {
         let s = session(&store, &p);
         let src = recorded_dictation(&store, &s, dir.path());
 
-        let job = store.enqueue_transcription(&src.id).unwrap();
+        let job = store.enqueue_transcription(&src.id, None).unwrap();
         assert_eq!(job.status, JobStatus::Queued);
-        assert!(store.enqueue_transcription(&src.id).is_err(), "one active job per source");
+        assert!(store.enqueue_transcription(&src.id, None).is_err(), "one active job per source");
 
         let claimed = store.claim_next_job().unwrap().unwrap();
         assert_eq!((claimed.id.as_str(), claimed.status, claimed.attempts), (job.id.as_str(), JobStatus::Running, 1));
@@ -2063,13 +2068,13 @@ mod tests {
         assert_eq!(store.job(&job.id).unwrap().status, JobStatus::Done);
 
         // Re-running replaces the draft.
-        let j2 = store.enqueue_transcription(&src.id).unwrap();
+        let j2 = store.enqueue_transcription(&src.id, None).unwrap();
         store.claim_next_job().unwrap();
         let t2 = store.finish_transcription(&j2.id, "whisper.cpp-test", "small-q5_1", &[seg(0, "Neu.")]).unwrap();
         assert_eq!(t2.segments.len(), 1);
         assert!(store.transcript(&t.id).is_err());
 
-        let j3 = store.enqueue_transcription(&src.id).unwrap();
+        let j3 = store.enqueue_transcription(&src.id, None).unwrap();
         assert!(store.cancel_queued_job(&j3.id).unwrap());
         assert_eq!(store.job(&j3.id).unwrap().status, JobStatus::Cancelled);
         assert_eq!(store.latest_job(&src.id).unwrap().unwrap().id, j3.id);
@@ -2083,7 +2088,7 @@ mod tests {
         let p = patient(&store);
         let s = session(&store, &p);
         let src = recorded_dictation(&store, &s, dir.path());
-        let job = store.enqueue_transcription(&src.id).unwrap();
+        let job = store.enqueue_transcription(&src.id, None).unwrap();
         store.claim_next_job().unwrap();
         let t = store.finish_transcription(&job.id, "e", "m", &[seg(0, "Schlaf schlecht."), seg(1000, "Panik im Supermarkt.")]).unwrap();
         assert!(store.source_segments(&s.id).unwrap().is_empty(), "drafts do not feed the pipeline");
@@ -2103,7 +2108,7 @@ mod tests {
 
         assert!(store.edit_segment(&t.id, 0, "x").is_err(), "confirmed is read-only");
         assert!(store.confirm_transcript(&t.id).is_err());
-        assert!(store.enqueue_transcription(&src.id).is_err(), "no audio left to transcribe");
+        assert!(store.enqueue_transcription(&src.id, None).is_err(), "no audio left to transcribe");
 
         let segs = store.source_segments(&s.id).unwrap();
         assert_eq!(segs.len(), 2);
@@ -2151,7 +2156,7 @@ mod tests {
         let p = patient(&store);
         let s = session(&store, &p);
         let src = recorded_dictation(&store, &s, dir.path());
-        let job = store.enqueue_transcription(&src.id).unwrap();
+        let job = store.enqueue_transcription(&src.id, None).unwrap();
         store.claim_next_job().unwrap();
         let t = store
             .finish_transcription(&job.id, "e", "m", &[seg(0, "Schläft schlecht."), seg(61_000, "Hausaufgabe Schlaftagebuch.")])
@@ -2352,7 +2357,7 @@ mod tests {
         // A confirmed dictation (prefilled) and a draft one (ignored).
         for (texts, confirm) in [(&["Thema: Konflikt mit <Chef> & Kollegen.", "  "][..], true), (&["Entwurf."][..], false)] {
             let src = recorded_dictation(&store, &s, dir.path());
-            let job = store.enqueue_transcription(&src.id).unwrap();
+            let job = store.enqueue_transcription(&src.id, None).unwrap();
             store.claim_next_job().unwrap();
             let segs: Vec<_> = texts.iter().enumerate().map(|(i, t)| seg(i as i64 * 1000, t)).collect();
             let t = store.finish_transcription(&job.id, "e", "m", &segs).unwrap();

@@ -1,5 +1,6 @@
 //! Speech-to-text: locally through a whisper.cpp sidecar (`whisper-cli`, a separate process), or
-//! for the therapist's own dictations through an OpenAI-compatible cloud endpoint.
+//! through an OpenAI-compatible cloud endpoint: the therapist's own dictations always may, session
+//! recordings only with the patient's consent to cloud transcription.
 //!
 //! whisper-cli reads a WAV file and writes JSON, so plaintext audio and text exist on disk while
 //! it runs. Both live in a per-job work directory that is always removed afterwards, also on
@@ -18,7 +19,7 @@ use serde_json::{json, Value};
 use ts_rs::TS;
 
 use crate::audio::{self, AudioKey};
-use crate::domain::SourceKind;
+use crate::domain::{SourceKind, SttTarget};
 use crate::llm::{Endpoint, ProviderId};
 use crate::{Error, Result};
 
@@ -167,9 +168,9 @@ pub enum SttMode {
     /// Everything on this computer.
     #[default]
     Local,
-    /// Own dictations in the cloud; session recordings stay local.
+    /// Dictations in the cloud; session recordings too where the patient consented to it.
     Cloud,
-    /// Own dictations locally, in the cloud only when no local model is ready.
+    /// Locally, in the cloud only when no local model is ready (same consent rule).
     Fallback,
 }
 
@@ -214,32 +215,50 @@ impl SttConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Choice {
-    Local,
-    Cloud,
+/// Whether `kind` may go to the cloud. A session recording holds the patient's voice and needs
+/// the patient's active `cloud_transcription` consent; a dictation is the therapist alone.
+pub fn cloud_allowed(kind: SourceKind, cloud_consent: bool) -> bool {
+    kind == SourceKind::Dictation || cloud_consent
 }
 
-/// Which engine a recording gets. A session recording holds the patient's voice and always stays
-/// local, whatever the mode. `local_ready`: sidecar and speech model are installed.
-pub fn choose(config: &SttConfig, kind: SourceKind, local_ready: bool) -> Choice {
-    match (kind, config.mode) {
-        (SourceKind::SessionAudio, _) | (_, SttMode::Local) => Choice::Local,
-        (_, SttMode::Cloud) => Choice::Cloud,
-        (_, SttMode::Fallback) if local_ready => Choice::Local,
-        (_, SttMode::Fallback) => Choice::Cloud,
+/// The engine Settings pick for a recording. `local_ready`: sidecar and speech model installed.
+pub fn default_target(config: &SttConfig, kind: SourceKind, local_ready: bool, cloud_consent: bool) -> SttTarget {
+    let cloud = match config.mode {
+        SttMode::Local => false,
+        SttMode::Cloud => true,
+        SttMode::Fallback => !local_ready,
+    };
+    if cloud && cloud_allowed(kind, cloud_consent) { SttTarget::Cloud } else { SttTarget::Local }
+}
+
+/// The engine a job runs on: the one chosen in the session, else [`default_target`]. A cloud
+/// choice for a session recording without consent is refused, not quietly run locally.
+pub fn choose(
+    config: &SttConfig,
+    kind: SourceKind,
+    local_ready: bool,
+    cloud_consent: bool,
+    requested: Option<SttTarget>,
+) -> Result<SttTarget> {
+    match requested {
+        Some(SttTarget::Cloud) if !cloud_allowed(kind, cloud_consent) => Err(Error::Invalid(NO_CLOUD_CONSENT.into())),
+        Some(t) => Ok(t),
+        None => Ok(default_target(config, kind, local_ready, cloud_consent)),
     }
 }
 
-/// A transcription model on OpenRouter, curated: German-capable, with a zero-retention endpoint
-/// (requests are sent with `zdr: true` and fail without one). No Mistral models.
+pub const NO_CLOUD_CONSENT: &str =
+    "Für die Cloud-Transkription dieser Sitzungsaufnahme fehlt die Einwilligung der Patientin bzw. des Patienten";
+
+/// A transcription model on OpenRouter, chosen by the user (2026-10-28): German-capable, with a
+/// zero-retention endpoint (requests are sent with `zdr: true` and fail without one).
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export)]
 pub struct CloudSttModel {
     pub id: &'static str,
     pub label: &'static str,
-    /// OpenRouter price per hour of audio (2026-10-28).
-    pub usd_per_hour: f64,
+    /// OpenRouter price per hour of audio (2026-10-28). `None`: the listed price has no clear unit.
+    pub usd_per_hour: Option<f64>,
     /// Who serves it with zero retention.
     pub zdr_via: &'static str,
 }
@@ -247,11 +266,11 @@ pub struct CloudSttModel {
 pub const CLOUD_DEFAULT_MODEL: &str = "openai/whisper-large-v3-turbo";
 
 pub const CLOUD_MODELS: &[CloudSttModel] = &[
-    CloudSttModel { id: "openai/whisper-large-v3-turbo", label: "Whisper Large v3 Turbo", usd_per_hour: 0.012, zdr_via: "Groq, DeepInfra" },
-    CloudSttModel { id: "openai/whisper-large-v3", label: "Whisper Large v3", usd_per_hour: 0.027, zdr_via: "Groq, Together, DeepInfra" },
-    CloudSttModel { id: "elevenlabs/scribe-v2-medical", label: "ElevenLabs Scribe v2 Medical", usd_per_hour: 0.22, zdr_via: "ElevenLabs" },
-    CloudSttModel { id: "elevenlabs/scribe-v2", label: "ElevenLabs Scribe v2", usd_per_hour: 0.22, zdr_via: "ElevenLabs" },
-    CloudSttModel { id: "deepgram/nova-3", label: "Deepgram Nova 3", usd_per_hour: 0.258, zdr_via: "Deepgram" },
+    CloudSttModel { id: "openai/whisper-large-v3-turbo", label: "Whisper Large v3 Turbo", usd_per_hour: Some(0.012), zdr_via: "Groq, DeepInfra" },
+    CloudSttModel { id: "openai/whisper-large-v3", label: "Whisper Large v3", usd_per_hour: Some(0.027), zdr_via: "Groq, Together, DeepInfra" },
+    // Listed as 0.1 per unit of audio; read as per second (like the others) that would be 360 $/h.
+    CloudSttModel { id: "microsoft/mai-transcribe-2", label: "Microsoft MAI-Transcribe 2", usd_per_hour: None, zdr_via: "Azure" },
+    CloudSttModel { id: "elevenlabs/scribe-v2", label: "ElevenLabs Scribe v2", usd_per_hour: Some(0.22), zdr_via: "ElevenLabs" },
 ];
 
 // ---------- engines ----------
@@ -282,9 +301,12 @@ pub struct Transcribed {
 
 /// Decrypts a recording and transcribes it with `engine`. The local engine's work directory
 /// holds the only plaintext copies (WAV, JSON) and is removed in every case; the cloud engine
-/// keeps the audio in memory. Cloud is refused for anything but a dictation.
+/// keeps the audio in memory. Cloud is refused for a session recording without `cloud_consent`
+/// (the patient's active consent, looked up when the job runs).
+#[allow(clippy::too_many_arguments)]
 pub fn transcribe(
     kind: SourceKind,
+    cloud_consent: bool,
     audio_dir: &Path,
     key: &AudioKey,
     engine: &SttEngine,
@@ -292,8 +314,8 @@ pub fn transcribe(
     progress: impl FnMut(u8),
     cancel: &AtomicBool,
 ) -> Result<Transcribed> {
-    if matches!(engine, SttEngine::Cloud(_)) && kind != SourceKind::Dictation {
-        return Err(Error::Invalid("Sitzungsaufnahmen werden nur lokal transkribiert".into()));
+    if matches!(engine, SttEngine::Cloud(_)) && !cloud_allowed(kind, cloud_consent) {
+        return Err(Error::Invalid(NO_CLOUD_CONSENT.into()));
     }
     let result = (|| {
         let pcm = audio::read_pcm(audio_dir, key)?;
@@ -639,18 +661,26 @@ mod tests {
     }
 
     #[test]
-    fn session_recordings_always_stay_local() {
+    fn session_recordings_go_to_the_cloud_only_with_consent() {
+        use SttTarget::{Cloud, Local};
         for mode in [SttMode::Local, SttMode::Cloud, SttMode::Fallback] {
             let c = SttConfig { mode, ..Default::default() };
             for ready in [true, false] {
-                assert_eq!(choose(&c, SourceKind::SessionAudio, ready), Choice::Local, "{mode:?} {ready}");
+                assert_eq!(choose(&c, SourceKind::SessionAudio, ready, false, None).unwrap(), Local, "{mode:?} {ready}");
             }
+            // Asking for the cloud in the session doesn't get around the missing consent.
+            let err = choose(&c, SourceKind::SessionAudio, true, false, Some(Cloud)).unwrap_err().to_string();
+            assert!(err.contains("Einwilligung"), "{err}");
+            assert_eq!(choose(&c, SourceKind::SessionAudio, true, true, Some(Cloud)).unwrap(), Cloud);
+            assert_eq!(choose(&c, SourceKind::Dictation, false, false, Some(Local)).unwrap(), Local, "explicit local wins");
         }
         let c = |mode| SttConfig { mode, ..Default::default() };
-        assert_eq!(choose(&c(SttMode::Local), SourceKind::Dictation, false), Choice::Local);
-        assert_eq!(choose(&c(SttMode::Cloud), SourceKind::Dictation, true), Choice::Cloud);
-        assert_eq!(choose(&c(SttMode::Fallback), SourceKind::Dictation, true), Choice::Local);
-        assert_eq!(choose(&c(SttMode::Fallback), SourceKind::Dictation, false), Choice::Cloud);
+        assert_eq!(choose(&c(SttMode::Cloud), SourceKind::SessionAudio, true, true, None).unwrap(), Cloud);
+        assert_eq!(choose(&c(SttMode::Local), SourceKind::Dictation, false, false, None).unwrap(), Local);
+        assert_eq!(choose(&c(SttMode::Cloud), SourceKind::Dictation, true, false, None).unwrap(), Cloud);
+        assert_eq!(choose(&c(SttMode::Fallback), SourceKind::Dictation, true, false, None).unwrap(), Local);
+        assert_eq!(choose(&c(SttMode::Fallback), SourceKind::Dictation, false, false, None).unwrap(), Cloud);
+        assert_eq!(choose(&c(SttMode::Fallback), SourceKind::SessionAudio, false, true, None).unwrap(), Cloud);
     }
 
     #[test]

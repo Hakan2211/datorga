@@ -46,12 +46,17 @@ str_enum!(
 str_enum!(ReportStatus { Draft => "draft", InReview => "in_review", Signed => "signed", Exported => "exported" });
 str_enum!(SectionOrigin { Ai => "ai", Human => "human", Mixed => "mixed" });
 str_enum!(
-    /// What a consent covers. `cloud_processing` follows with the Phase 2 LLM adapter.
-    ConsentKind { Recording => "recording" }
+    /// What a consent covers. `cloud_transcription` adds sending session recordings to a cloud
+    /// speech service; without it they are transcribed only on this computer.
+    ConsentKind { Recording => "recording", CloudTranscription => "cloud_transcription" }
 );
 str_enum!(
     /// `session_audio` records the patient and needs consent; `dictation` is the therapist alone.
     SourceKind { SessionAudio => "session_audio", Dictation => "dictation" }
+);
+str_enum!(
+    /// Where a recording is transcribed: whisper.cpp on this computer or a cloud speech service.
+    SttTarget { Local => "local", Cloud => "cloud" }
 );
 str_enum!(SourceStatus { Recording => "recording", Recorded => "recorded", Interrupted => "interrupted" });
 str_enum!(
@@ -230,6 +235,8 @@ pub struct Job {
     #[ts(type = "number")]
     pub attempts: i64,
     pub last_error: Option<String>,
+    /// Engine chosen when queued (`None` = what Settings say when it runs).
+    pub engine: Option<SttTarget>,
     pub created_at: String,
     pub updated_at: String,
 }

@@ -3,8 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { save } from '@tauri-apps/plugin-dialog'
-import { Mic, MicOff, Printer, ShieldCheck } from 'lucide-react'
+import { Cloud, CloudOff, Mic, MicOff, Printer, ShieldCheck } from 'lucide-react'
 import type { Consent } from '@/bindings/Consent'
+import type { ConsentKind } from '@/bindings/ConsentKind'
 import { formatDate } from '@/components/bits'
 import {
   AlertDialog,
@@ -26,12 +27,15 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api, errorMessage, q } from '@/lib/api'
 
-/** Recording consent for one patient: current state, grant/revoke, history. */
-export function ConsentCard({ patientId }: { patientId: string }) {
+/** One kind of consent for one patient: current state, grant/revoke, history. */
+export function ConsentCard({ patientId, kind = 'recording' }: { patientId: string; kind?: ConsentKind }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const consents = useQuery(q.consents(patientId))
-  const active = consents.data?.find((c) => c.kind === 'recording' && !c.revoked_at)
+  const mine = consents.data?.filter((c) => c.kind === kind)
+  const active = mine?.find((c) => !c.revoked_at)
+  const k = (key: string) => t(`consent.kinds.${kind}.${key}`)
+  const [On, Off] = kind === 'recording' ? [Mic, MicOff] : [Cloud, CloudOff]
 
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ['consents', patientId] })
@@ -46,9 +50,9 @@ export function ConsentCard({ patientId }: { patientId: string }) {
   const printForm = useMutation({
     mutationFn: async () => {
       // No patient name in the file name: the file may end up in a downloads folder.
-      const path = await save({ defaultPath: 'Einwilligung-Tonaufnahme.pdf', filters: [{ name: 'PDF', extensions: ['pdf'] }] })
+      const path = await save({ defaultPath: k('file'), filters: [{ name: 'PDF', extensions: ['pdf'] }] })
       if (!path) return false
-      await api.exportConsentForm(patientId, 'recording', path)
+      await api.exportConsentForm(patientId, kind, path)
       return true
     },
     onSuccess: (done) => done && toast.success(t('consent.formSaved')),
@@ -56,17 +60,17 @@ export function ConsentCard({ patientId }: { patientId: string }) {
   })
 
   return (
-    <Card>
+    <Card data-testid={`consent-${kind}`}>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <CardTitle className="flex items-center gap-3 text-base">
-          {t('consent.title')}
+          {k('title')}
           {active ? (
             <Badge variant="secondary" className="bg-success/15 font-normal text-success">
-              <Mic /> {t('consent.active')}
+              <On /> {t('consent.active')}
             </Badge>
           ) : (
             <Badge variant="secondary" className="font-normal">
-              <MicOff /> {t('consent.none')}
+              <Off /> {t('consent.none')}
             </Badge>
           )}
         </CardTitle>
@@ -80,7 +84,7 @@ export function ConsentCard({ patientId }: { patientId: string }) {
             <AlertDialogContent>
               <AlertDialogHeader>
                 <AlertDialogTitle>{t('consent.revoke')}</AlertDialogTitle>
-                <AlertDialogDescription>{t('consent.revokeConfirm')}</AlertDialogDescription>
+                <AlertDialogDescription>{k('revokeConfirm')}</AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
@@ -94,15 +98,15 @@ export function ConsentCard({ patientId }: { patientId: string }) {
             </AlertDialogContent>
           </AlertDialog>
         ) : (
-          <GrantConsentDialog patientId={patientId} onGranted={invalidate} />
+          <GrantConsentDialog patientId={patientId} kind={kind} onGranted={invalidate} />
         )}
       </CardHeader>
       <CardContent className="space-y-3">
-        <p className="text-sm text-muted-foreground">{active ? t('consent.activeHint') : t('consent.noneHint')}</p>
+        <p className="text-sm text-muted-foreground">{active ? k('activeHint') : k('noneHint')}</p>
         <Button size="sm" variant="outline" onClick={() => printForm.mutate()} disabled={printForm.isPending}>
           <Printer /> {t('consent.printForm')}
         </Button>
-        {!!consents.data?.length && <ConsentHistory consents={consents.data} />}
+        {!!mine?.length && <ConsentHistory consents={mine} />}
       </CardContent>
     </Card>
   )
@@ -135,14 +139,22 @@ function ConsentHistory({ consents }: { consents: Consent[] }) {
   )
 }
 
-function GrantConsentDialog({ patientId, onGranted }: { patientId: string; onGranted: () => void }) {
+function GrantConsentDialog({
+  patientId,
+  kind,
+  onGranted,
+}: {
+  patientId: string
+  kind: ConsentKind
+  onGranted: () => void
+}) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
   const [note, setNote] = useState('')
-  const text = useQuery({ ...q.consentText('recording'), enabled: open })
+  const text = useQuery({ ...q.consentText(kind), enabled: open })
   const grant = useMutation({
-    mutationFn: () => api.grantConsent(patientId, 'recording', note),
+    mutationFn: () => api.grantConsent(patientId, kind, note),
     onSuccess: () => {
       onGranted()
       setOpen(false)
@@ -167,7 +179,7 @@ function GrantConsentDialog({ patientId, onGranted }: { patientId: string; onGra
       </DialogTrigger>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{t('consent.grantTitle')}</DialogTitle>
+          <DialogTitle>{t(`consent.kinds.${kind}.grantTitle`)}</DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">{t('consent.paperHint')}</p>
         <p className="text-sm text-muted-foreground">{t('consent.shown')}</p>

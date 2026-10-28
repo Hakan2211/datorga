@@ -134,6 +134,28 @@ export const de = {
     noChiffre: 'keine Chiffre',
   },
   consent: {
+    kinds: {
+      recording: {
+        title: 'Einwilligung Tonaufnahme',
+        grantTitle: 'Einwilligung in die Tonaufnahme',
+        noneHint: 'Ohne Einwilligung wird nicht aufgenommen. Nach der Sitzung können Sie eine Zusammenfassung diktieren.',
+        activeHint: 'Sitzungen dürfen aufgenommen werden. Ein Widerruf beendet laufende Aufnahmen sofort.',
+        revokeConfirm:
+          'Der Widerruf gilt ab sofort. Weitere Aufnahmen sind dann nicht mehr möglich; der Eintrag bleibt als Nachweis erhalten.',
+        file: 'Einwilligung-Tonaufnahme.pdf',
+      },
+      cloud_transcription: {
+        title: 'Einwilligung Cloud-Transkription',
+        grantTitle: 'Einwilligung in die Cloud-Transkription',
+        noneHint:
+          'Ohne diese Einwilligung werden Sitzungsaufnahmen nur auf diesem Computer in Text umgewandelt. Ihre eigenen Diktate betrifft sie nicht.',
+        activeHint:
+          'Sitzungsaufnahmen dürfen zur Transkription in die Cloud gesendet werden (ohne Datenspeicherung beim Anbieter). Ein Widerruf bricht eine laufende Cloud-Transkription ab.',
+        revokeConfirm:
+          'Der Widerruf gilt ab sofort: Sitzungsaufnahmen werden dann nur noch lokal transkribiert, eine laufende Cloud-Transkription wird abgebrochen. Der Eintrag bleibt als Nachweis erhalten.',
+        file: 'Einwilligung-Cloud-Transkription.pdf',
+      },
+    },
     title: 'Einwilligung Tonaufnahme',
     active: 'Erteilt',
     none: 'Nicht erteilt',
@@ -227,7 +249,17 @@ export const de = {
     confirmAction: 'Bestätigen und Audio löschen',
     noModel: 'Für die Transkription zuerst ein Sprachmodell installieren:',
     settingsLink: 'Einstellungen',
+    consentLink: 'Einwilligung auf der Patientenseite erfassen',
     localNote: 'Die Transkription läuft vollständig auf diesem Rechner.',
+    target: { local: 'Lokal', cloud: 'Cloud' },
+    targetLabel: 'Transkribieren mit',
+    runningLocal: 'Wird lokal transkribiert',
+    runningCloud: 'Wird in der Cloud transkribiert ({{label}})',
+    queuedLocal: 'Wartet auf lokale Transkription…',
+    queuedCloud: 'Wartet auf Cloud-Transkription…',
+    doneLocal: 'lokal transkribiert',
+    doneCloud: 'in der Cloud transkribiert',
+    cloudHint: '{{label}}. Die Tonaufnahme verlässt dafür diesen Computer.',
   },
   note: {
     title: 'Sitzungsnotiz',
@@ -501,21 +533,22 @@ export const de = {
       where: 'Wo transkribiert wird',
       mode: {
         local: 'Lokal (auf diesem Computer)',
-        cloud: 'Cloud (nur eigene Diktate)',
+        cloud: 'Cloud',
         fallback: 'Lokal, Cloud als Ausweichlösung',
       },
       modeHint: {
         local: 'Alle Aufnahmen bleiben auf diesem Computer.',
-        cloud: 'Ihre eigenen Diktate werden in der Cloud transkribiert, Sitzungsaufnahmen weiterhin lokal.',
-        fallback: 'Diktate werden lokal transkribiert. Nur wenn kein lokales Sprachmodell bereit ist, gehen sie in die Cloud.',
+        cloud: 'Diktate werden in der Cloud transkribiert. Sitzungsaufnahmen nur, wenn die Patientin bzw. der Patient in die Cloud-Transkription eingewilligt hat, sonst lokal. In jeder Sitzung können Sie es pro Aufnahme ändern.',
+        fallback: 'Aufnahmen werden lokal transkribiert. Nur wenn kein lokales Sprachmodell bereit ist, gehen sie in die Cloud (Sitzungsaufnahmen nur mit Einwilligung). In jeder Sitzung können Sie es pro Aufnahme ändern.',
       },
       cloudWarning:
-        'In der Cloud verlässt die Tonaufnahme Ihres Diktats diesen Computer. Ton lässt sich nicht pseudonymisieren: Was Sie diktieren, hört der Anbieter so, wie Sie es sagen. Nennen Sie im Diktat keine Namen, Adressen oder Geburtsdaten. Sitzungsaufnahmen mit der Stimme der Patientin oder des Patienten werden nie in die Cloud gesendet.',
+        'In der Cloud verlässt die Tonaufnahme diesen Computer. Ton lässt sich nicht pseudonymisieren: Der Dienst hört alles so, wie es gesagt wurde. Nennen Sie in Diktaten keine Namen, Adressen oder Geburtsdaten. Sitzungsaufnahmen mit der Stimme der Patientin oder des Patienten gehen nur mit deren eigener Einwilligung in die Cloud (Patientenseite → Einwilligung Cloud-Transkription).',
       provider: 'Anbieter',
       providers: { openrouter: 'OpenRouter', custom: 'Eigener Endpunkt (aus KI-Entwürfe)' },
       model: 'Sprachmodell',
       modelPlaceholder: 'z. B. whisper-1',
       perHour: '≈ {{price}} $ pro Stunde Audio',
+      priceUnknown: 'Preis siehe OpenRouter',
       zdr: 'ohne Datenspeicherung über {{via}}',
       fallbackLocal: 'Ein lokales Sprachmodell ist bereit: Diktate werden zurzeit lokal transkribiert.',
       fallbackCloud: 'Kein lokales Sprachmodell bereit: Diktate gehen zurzeit in die Cloud.',

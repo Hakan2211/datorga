@@ -100,7 +100,8 @@ function PatientDetail() {
         }
       />
       <Page>
-        <ConsentCard patientId={patientId} />
+        <ConsentCard patientId={patientId} kind="recording" />
+        <ConsentCard patientId={patientId} kind="cloud_transcription" />
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold">{t('episodes.title')}</h2>
           <NewEpisodeDialog patientId={patientId} />

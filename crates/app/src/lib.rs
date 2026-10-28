@@ -109,6 +109,8 @@ struct RunningJob {
     job_id: String,
     source_id: String,
     cancel: Arc<AtomicBool>,
+    /// Set once the job runs in the cloud, with the patient whose consent it relies on.
+    cloud_patient: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -584,7 +586,14 @@ fn consent_revoke(state: State<'_, AppState>, id: String) -> CmdResult<Consent> 
     if affected {
         stop_recording(&state, "consent_revoked")?;
     }
-    state.with(|s| s.revoke_consent(&id))
+    let revoked = state.with(|s| s.revoke_consent(&id))?;
+    // Revoking cloud transcription stops a cloud run of this patient's recording mid-way.
+    if revoked.kind == ConsentKind::CloudTranscription {
+        if let Some(r) = lock(&state.transcribing)?.as_ref().filter(|r| r.cloud_patient.as_deref() == Some(patient_id.as_str())) {
+            r.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+    Ok(revoked)
 }
 
 // ---------- capture ----------
@@ -698,26 +707,78 @@ struct SourceView {
     /// Latest transcription job, if any.
     job: Option<Job>,
     transcript: Option<Transcript>,
+    stt: SourceStt,
+}
+
+/// The engines a recording can be transcribed with right now, for the choice in the session.
+#[derive(Serialize)]
+struct SourceStt {
+    /// What Settings pick (preselected).
+    default: SttTarget,
+    /// Why local can't run (no sidecar, no speech model), or `None`.
+    local_problem: Option<String>,
+    /// Why cloud can't run (no consent for a session recording, no key, no model), or `None`.
+    cloud_problem: Option<String>,
+    /// The cloud problem is the patient's missing consent (fixed on the patient page).
+    cloud_needs_consent: bool,
+    /// e.g. "OpenRouter · openai/whisper-large-v3-turbo".
+    cloud_label: String,
+}
+
+fn source_stt(state: &AppState, src: &SessionSource, patient_id: &str) -> CmdResult<SourceStt> {
+    let config = state.with(|s| s.stt_config())?;
+    let consent = state.with(|s| s.active_consent(patient_id, ConsentKind::CloudTranscription))?.is_some();
+    let local_problem = local_stt(state, &src.language).err().map(|e| e.to_string());
+    let model = config.model();
+    let cloud_problem = if !stt::cloud_allowed(src.kind, consent) {
+        Some(stt::NO_CLOUD_CONSENT.to_string())
+    } else if model.is_none() {
+        Some("Kein Cloud-Sprachmodell eingetragen (Einstellungen → Transkription)".to_string())
+    } else {
+        llm_endpoint(state, config.cloud_provider, &AtomicBool::new(false)).err().map(|e| e.to_string())
+    };
+    Ok(SourceStt {
+        default: stt::default_target(&config, src.kind, local_problem.is_none(), consent),
+        local_problem,
+        cloud_problem,
+        cloud_needs_consent: !stt::cloud_allowed(src.kind, consent),
+        cloud_label: format!("{} · {}", llm::provider(config.cloud_provider).label, model.unwrap_or_default()),
+    })
 }
 
 #[tauri::command]
 fn session_get(state: State<'_, AppState>, id: String) -> CmdResult<SessionView> {
-    state.with(|s| {
+    let (session, patient, rows) = state.with(|s| {
         let session = s.session(&id)?;
-        let sources = s
+        let rows = s
             .list_sources(&id)?
             .into_iter()
-            .map(|src| Ok(SourceView { job: s.latest_job(&src.id)?, transcript: s.transcript_for_source(&src.id)?, source: src }))
-            .collect::<thera_core::Result<_>>()?;
-        Ok(SessionView { patient: s.patient(&session.patient_id)?, sources, session })
-    })
+            .map(|src| Ok((s.latest_job(&src.id)?, s.transcript_for_source(&src.id)?, src)))
+            .collect::<thera_core::Result<Vec<_>>>()?;
+        let patient = s.patient(&session.patient_id)?;
+        Ok((session, patient, rows))
+    })?;
+    let sources = rows
+        .into_iter()
+        .map(|(job, transcript, source)| Ok(SourceView { stt: source_stt(&state, &source, &patient.id)?, job, transcript, source }))
+        .collect::<CmdResult<_>>()?;
+    Ok(SessionView { patient, sources, session })
 }
 
 // ---------- transcription ----------
 
+/// Queues a transcription. `engine` is the choice made in the session (`None` = Settings); a
+/// cloud choice the rules forbid is refused here already.
 #[tauri::command]
-fn transcription_start(state: State<'_, AppState>, source_id: String) -> CmdResult<Job> {
-    let job = state.with(|s| s.enqueue_transcription(&source_id))?;
+fn transcription_start(state: State<'_, AppState>, source_id: String, engine: Option<SttTarget>) -> CmdResult<Job> {
+    if engine == Some(SttTarget::Cloud) {
+        let src = state.with(|s| s.source(&source_id))?;
+        let patient_id = state.with(|s| s.session(&src.session_id))?.patient_id;
+        if let Some(problem) = source_stt(&state, &src, &patient_id)?.cloud_problem {
+            return Err(CmdError::Other(problem));
+        }
+    }
+    let job = state.with(|s| s.enqueue_transcription(&source_id, engine))?;
     state.wake_worker();
     Ok(job)
 }
@@ -764,7 +825,7 @@ fn run_job(state: &AppState, job: Job) {
     let Some(source_id) = job.source_id.clone() else { return };
     let cancel = Arc::new(AtomicBool::new(false));
     if let Ok(mut slot) = state.transcribing.lock() {
-        *slot = Some(RunningJob { job_id: job.id.clone(), source_id: source_id.clone(), cancel: cancel.clone() });
+        *slot = Some(RunningJob { job_id: job.id.clone(), source_id: source_id.clone(), cancel: cancel.clone(), cloud_patient: None });
     }
     let result = transcribe_job(state, &job, &source_id, &cancel)
         .and_then(|(engine, model, segments)| state.with(|s| s.finish_transcription(&job.id, &engine, &model, &segments)));
@@ -787,6 +848,9 @@ fn run_job(state: &AppState, job: Job) {
 /// reach the cloud (`stt::choose`, enforced again in `stt::transcribe`).
 fn transcribe_job(state: &AppState, job: &Job, source_id: &str, cancel: &AtomicBool) -> CmdResult<(String, String, Vec<stt::Segment>)> {
     let (source, (dir, key)) = state.with(|s| Ok((s.source(source_id)?, s.audio_location(source_id)?)))?;
+    let patient_id = state.with(|s| s.session(&source.session_id))?.patient_id;
+    // Looked up now, not when queued: a consent revoked meanwhile counts.
+    let consent = state.with(|s| s.active_consent(&patient_id, ConsentKind::CloudTranscription))?.is_some();
     let config = state.with(|s| s.stt_config())?;
     let local = local_stt(state, &source.language);
     let mut last = None;
@@ -797,25 +861,30 @@ fn transcribe_job(state: &AppState, job: &Job, source_id: &str, cancel: &AtomicB
         }
     };
     let work = state.stt_tmp().join(&job.id);
-    match stt::choose(&config, source.kind, local.is_ok()) {
-        stt::Choice::Local => {
-            let (engine, model_id, cli) = local.map_err(|e| match (source.kind, config.mode) {
-                (SourceKind::SessionAudio, stt::SttMode::Cloud | stt::SttMode::Fallback) => {
-                    CmdError::Other(format!("{e}. Sitzungsaufnahmen werden immer lokal transkribiert, nie in der Cloud."))
-                }
+    match stt::choose(&config, source.kind, local.is_ok(), consent, job.engine)? {
+        SttTarget::Local => {
+            let (engine, model_id, cli) = local.map_err(|e| match (source.kind, config.mode, consent) {
+                (SourceKind::SessionAudio, stt::SttMode::Cloud | stt::SttMode::Fallback, false) => CmdError::Other(format!(
+                    "{e}. In die Cloud darf diese Sitzungsaufnahme nicht: es fehlt die Einwilligung zur Cloud-Transkription."
+                )),
                 _ => e,
             })?;
-            let t = stt::transcribe(source.kind, &dir, &key, &SttEngine::Local(cli), &work, on_progress, cancel)?;
+            let t = stt::transcribe(source.kind, consent, &dir, &key, &SttEngine::Local(cli), &work, on_progress, cancel)?;
             Ok((engine, model_id, t.segments))
         }
-        stt::Choice::Cloud => {
+        SttTarget::Cloud => {
+            if let Ok(mut slot) = state.transcribing.lock() {
+                if let Some(r) = slot.as_mut() {
+                    r.cloud_patient = Some(patient_id.clone());
+                }
+            }
             let provider = config.cloud_provider;
             let model = config
                 .model()
                 .ok_or_else(|| CmdError::Other("Kein Cloud-Sprachmodell gewählt (Einstellungen → Transkription)".into()))?;
             let (endpoint, _) = llm_endpoint(state, provider, &AtomicBool::new(false))?;
             let engine = SttEngine::Cloud(CloudStt { endpoint, model: model.clone(), language: source.language.clone() });
-            let result = stt::transcribe(source.kind, &dir, &key, &engine, &work, on_progress, cancel);
+            let result = stt::transcribe(source.kind, consent, &dir, &key, &engine, &work, on_progress, cancel);
             let reason = if matches!(result, Err(thera_core::Error::Cancelled)) { "cancelled" } else { "error" };
             let usage = result.as_ref().map(|t| t.cloud.clone().unwrap_or_default()).map_err(|_| reason);
             state.with(|s| s.log_stt_cloud(source_id, provider, &model, usage.as_ref().map_err(|r| *r)))?;

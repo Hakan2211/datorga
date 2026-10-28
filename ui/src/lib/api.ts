@@ -46,6 +46,7 @@ import type { EpisodeFact } from '@/bindings/EpisodeFact'
 import type { SectionDraft } from '@/bindings/SectionDraft'
 import type { SttConfig } from '@/bindings/SttConfig'
 import type { CloudSttModel } from '@/bindings/CloudSttModel'
+import type { SttTarget } from '@/bindings/SttTarget'
 
 export type InitResult = {
   status: 'ready' | 'recovery_required' | 'new'
@@ -71,7 +72,15 @@ export type ReportView = {
   segments: SourceSegment[]
 }
 
-export type SourceView = SessionSource & { job: Job | null; transcript: Transcript | null }
+/** What a recording can be transcribed with right now (choice in the session). */
+export type SourceStt = {
+  default: SttTarget
+  local_problem: string | null
+  cloud_problem: string | null
+  cloud_needs_consent: boolean
+  cloud_label: string
+}
+export type SourceView = SessionSource & { job: Job | null; transcript: Transcript | null; stt: SourceStt }
 
 export type SessionView = {
   session: Session
@@ -166,7 +175,7 @@ export const api = {
   updatePatient: (id: string, input: PatientInput) => invoke<Patient>('patient_update', { id, input }),
   erasePatient: (id: string) => invoke<void>('patient_erase', { id }),
 
-  exportConsentForm: (patientId: string, kind: 'recording', path: string) =>
+  exportConsentForm: (patientId: string, kind: ConsentKind, path: string) =>
     invoke<void>('consent_form_export', { patientId, kind, path }),
   consentText: (kind: ConsentKind) => invoke<ConsentText>('consent_text', { kind }),
   consents: (patientId: string) => invoke<Consent[]>('consents_list', { patientId }),
@@ -191,7 +200,8 @@ export const api = {
   recordingStatus: () => invoke<RecordingStatus | null>('recording_status'),
   stopRecording: () => invoke<SessionSource>('recording_stop'),
 
-  startTranscription: (sourceId: string) => invoke<Job>('transcription_start', { sourceId }),
+  startTranscription: (sourceId: string, engine: SttTarget | null) =>
+    invoke<Job>('transcription_start', { sourceId, engine }),
   cancelTranscription: (jobId: string) => invoke<void>('transcription_cancel', { jobId }),
   editSegment: (transcriptId: string, idx: number, text: string) =>
     invoke<void>('transcript_edit_segment', { transcriptId, idx, text }),

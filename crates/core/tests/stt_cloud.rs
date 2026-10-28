@@ -68,8 +68,19 @@ fn engine(provider: ProviderId, base: String) -> SttEngine {
 }
 
 fn run(kind: SourceKind, audio: &Path, key: &AudioKey, engine: &SttEngine, cancel: &AtomicBool) -> thera_core::Result<stt::Transcribed> {
+    run_with(kind, false, audio, key, engine, cancel)
+}
+
+fn run_with(
+    kind: SourceKind,
+    cloud_consent: bool,
+    audio: &Path,
+    key: &AudioKey,
+    engine: &SttEngine,
+    cancel: &AtomicBool,
+) -> thera_core::Result<stt::Transcribed> {
     let work = audio.parent().unwrap().join("work");
-    let r = stt::transcribe(kind, audio, key, engine, &work, |_| {}, cancel);
+    let r = stt::transcribe(kind, cloud_consent, audio, key, engine, &work, |_| {}, cancel);
     assert!(!work.exists(), "the cloud engine writes nothing to disk");
     r
 }
@@ -168,14 +179,19 @@ fn long_dictations_are_split_and_silent_pieces_are_not_sent() {
 }
 
 #[test]
-fn session_recordings_never_go_to_the_cloud() {
-    let (base, seen) = serve(|_, _| (200, r#"{"text":"darf nicht passieren"}"#.into()));
+fn session_recordings_go_to_the_cloud_only_with_consent() {
+    let (base, seen) = serve(|_, _| (200, r#"{"text":"Mit Einwilligung."}"#.into()));
     let tmp = tempfile::tempdir().unwrap();
     let key = recording(&tmp.path().join("audio"), 2);
-    let err = run(SourceKind::SessionAudio, &tmp.path().join("audio"), &key, &engine(ProviderId::Openrouter, base), &AtomicBool::new(false)).unwrap_err();
-    assert!(err.to_string().contains("nur lokal"), "{err}");
+    let eng = engine(ProviderId::Openrouter, base);
+    let err = run(SourceKind::SessionAudio, &tmp.path().join("audio"), &key, &eng, &AtomicBool::new(false)).unwrap_err();
+    assert!(err.to_string().contains("Einwilligung"), "{err}");
     thread::sleep(Duration::from_millis(100));
-    assert!(seen.lock().unwrap().is_empty(), "nothing was sent");
+    assert!(seen.lock().unwrap().is_empty(), "nothing was sent without consent");
+
+    let t = run_with(SourceKind::SessionAudio, true, &tmp.path().join("audio"), &key, &eng, &AtomicBool::new(false)).unwrap();
+    assert_eq!(t.segments[0].text, "Mit Einwilligung.");
+    assert_eq!(seen.lock().unwrap().len(), 1);
 }
 
 #[test]

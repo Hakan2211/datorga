@@ -47,6 +47,6 @@
 #v(0.2em)
 #text(12pt, weight: "bold")[Widerruf der Einwilligung]
 
-Hiermit widerrufe ich meine Einwilligung in die Tonaufnahme meiner Therapiesitzungen (#d.patient_name). Der Widerruf gilt ab sofort für alle künftigen Sitzungen.
+#d.revoke_text
 
 #sigline[#if d.guardians [Unterschrift Patientin / Patient bzw. Sorgeberechtigte/r] else [Unterschrift Patientin / Patient]]

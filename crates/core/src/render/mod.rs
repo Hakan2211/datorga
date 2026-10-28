@@ -7,7 +7,7 @@ use typst::foundations::{Dict, IntoValue};
 use typst_as_lib::typst_kit_options::TypstKitFontOptions;
 use typst_as_lib::TypstEngine;
 
-use crate::domain::{Application, ApplicationKind, Diagnosis, Episode, Patient, Report, Session};
+use crate::domain::{Application, ApplicationKind, ConsentKind, Diagnosis, Episode, Patient, Report, Session};
 use crate::pii::DiagnosesBody;
 use crate::templates::{FieldKind, Template};
 use crate::{Error, Result};
@@ -166,6 +166,8 @@ pub struct ConsentForm {
     pub guardians: bool,
     pub version: String,
     pub hash_short: String,
+    /// The revocation slip at the bottom, worded for the consent kind.
+    pub revoke_text: String,
     /// The text is still the unreviewed draft: the form says so.
     pub draft: bool,
     pub created: String,
@@ -182,7 +184,17 @@ impl ConsentForm {
     ) -> Self {
         let mut parts = text.text.split("\n\n").map(|p| p.trim().replace('\n', " ")).filter(|p| !p.is_empty());
         let title = parts.next().unwrap_or_default();
+        let name = format!("{} {}", patient.first_name, patient.last_name);
+        let revoke_text = match text.kind {
+            ConsentKind::Recording => format!(
+                "Hiermit widerrufe ich meine Einwilligung in die Tonaufnahme meiner Therapiesitzungen ({name}). Der Widerruf gilt ab sofort für alle künftigen Sitzungen."
+            ),
+            ConsentKind::CloudTranscription => format!(
+                "Hiermit widerrufe ich meine Einwilligung in die Cloud-Transkription meiner Sitzungsaufnahmen ({name}). Der Widerruf gilt ab sofort; Aufnahmen werden dann nur noch auf dem Praxisrechner in Text umgewandelt."
+            ),
+        };
         Self {
+            revoke_text,
             title,
             paragraphs: parts.collect(),
             patient_name: format!("{} {}", patient.first_name, patient.last_name),
@@ -486,6 +498,11 @@ mod tests {
         let form = ConsentForm::new(&text, &patient, Some("M. Muster".into()), Some("Praxis Muster".into()), true, "2026-10-27T13:05:00Z");
         assert_eq!(form.title, "Einwilligung in die Tonaufnahme von Therapiesitzungen");
         assert_eq!(form.paragraphs.len(), 4);
+        assert!(form.revoke_text.contains("Tonaufnahme") && form.revoke_text.contains("Anna Beispiel"));
+        let cloud = ConsentForm::new(&crate::consent::current(ConsentKind::CloudTranscription), &patient, None, None, false, "2026-10-27T13:05:00Z");
+        assert_eq!(cloud.title, "Einwilligung in die Cloud-Transkription von Sitzungsaufnahmen");
+        assert!(cloud.revoke_text.contains("Cloud-Transkription") && cloud.draft);
+        assert!(consent_form_pdf(&cloud).unwrap().starts_with(b"%PDF"));
         let joined = form.paragraphs.join("\n\n");
         assert!(text.text.ends_with(&joined), "body is the recorded text, unchanged");
         assert_eq!((form.patient_name.as_str(), form.birth_date.as_deref()), ("Anna Beispiel", Some("14.03.2012")));
