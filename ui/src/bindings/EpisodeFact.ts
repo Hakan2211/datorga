@@ -15,4 +15,8 @@ session_no: number,
 /**
  * Sitzungsnotiz section the fact was filed under.
  */
-section_key: string, text: string, };
+section_key: string, text: string, 
+/**
+ * Bericht sections it belongs to; `None` for a fact from before tagging (every section).
+ */
+bericht: Array<string> | null, };

@@ -30,6 +30,23 @@ pub struct ExtractScore {
     pub misfiled: Vec<String>,
     /// Entries the parser dropped.
     pub dropped: usize,
+    /// Repeated proposals folded by `extract::merge` before scoring.
+    pub merged: usize,
+    /// Expected facts (required or not) that more than one proposal matches: duplicates the
+    /// merge missed.
+    pub duplicates: Vec<String>,
+    /// Bericht tags on the best match of each found fact, and how many of them are expected or
+    /// acceptable for it (tag precision).
+    pub tags: usize,
+    pub tags_ok: usize,
+    /// Expected Bericht sections of the found facts, and how many their best match names (tag recall).
+    pub tags_expected: usize,
+    pub tags_recalled: usize,
+    /// `fact id → tag` for tags outside the expected and acceptable sections.
+    pub wrong_tags: Vec<String>,
+    /// Per expected fact of the case: the index of its best-placed proposal.
+    #[serde(skip)]
+    pub matched: Vec<Option<usize>>,
 }
 
 impl ExtractScore {
@@ -40,6 +57,13 @@ impl ExtractScore {
         self.citation_ok += o.citation_ok;
         self.proposed += o.proposed;
         self.dropped += o.dropped;
+        self.merged += o.merged;
+        self.tags += o.tags;
+        self.tags_ok += o.tags_ok;
+        self.tags_expected += o.tags_expected;
+        self.tags_recalled += o.tags_recalled;
+        self.duplicates.extend(o.duplicates.iter().cloned());
+        self.wrong_tags.extend(o.wrong_tags.iter().cloned());
         self.extra.extend(o.extra.iter().cloned());
         self.forbidden.extend(o.forbidden.iter().cloned());
         self.missed.extend(o.missed.iter().cloned());
@@ -49,27 +73,51 @@ impl ExtractScore {
 
 /// One proposal may cover several expected facts (a model that merges "gedrückt, angespannt"
 /// into one line still found both); each expected fact takes its best-placed match.
-pub fn extraction(case: &Case, proposed: &[DraftFact], dropped: usize) -> ExtractScore {
-    let mut s = ExtractScore { proposed: proposed.len(), dropped, ..Default::default() };
+pub fn extraction(case: &Case, proposed: &[DraftFact], dropped: usize, merged: usize) -> ExtractScore {
+    let mut s = ExtractScore { proposed: proposed.len(), dropped, merged, ..Default::default() };
     let mut used = vec![false; proposed.len()];
+    let matches = |f: &crate::suite::Fact, i: usize| f.patterns.iter().all(|p| p.is_match(&proposed[i].text));
+    // Which expected facts each proposal matches: two proposals with the same set, filed under the
+    // same note section, say the same point twice ("Klassenlehrerin …" also matches the "Klasse"
+    // fact, so it is no duplicate of "vierte Klasse").
+    let sig: Vec<Vec<usize>> = (0..proposed.len()).map(|i| (0..case.facts.len()).filter(|&k| matches(&case.facts[k], i)).collect()).collect();
     for f in &case.facts {
-        let hits: Vec<usize> = (0..proposed.len()).filter(|&i| f.patterns.iter().all(|p| p.is_match(&proposed[i].text))).collect();
+        let hits: Vec<usize> = (0..proposed.len()).filter(|&i| matches(f, i)).collect();
         for &i in &hits {
             used[i] = true;
         }
-        if !f.def.required {
-            continue;
+        let twice = |n: usize, i: usize| {
+            hits[..n].iter().any(|&j| proposed[j].section == proposed[i].section && sig[j] == sig[i] && similar(&proposed[j].text, &proposed[i].text))
+        };
+        if hits.iter().enumerate().any(|(n, &i)| twice(n, i)) {
+            s.duplicates.push(f.def.id.clone());
         }
-        s.expected += 1;
         let score = |i: &usize| {
             let p = &proposed[*i];
             (f.sections.contains(&p.section), p.segments.iter().any(|x| f.segments.contains(x)))
         };
-        let Some(best) = hits.iter().max_by_key(|i| score(i)) else {
+        let best = hits.iter().max_by_key(|i| score(i)).copied();
+        s.matched.push(best);
+        if !f.def.required {
+            continue;
+        }
+        s.expected += 1;
+        let Some(best) = best.as_ref() else {
             s.missed.push(f.def.id.clone());
             continue;
         };
         s.found += 1;
+        let tags = &proposed[*best].bericht;
+        s.tags += tags.len();
+        for t in tags {
+            if f.def.bericht.contains(t) || f.def.bericht_ok.contains(t) {
+                s.tags_ok += 1;
+            } else {
+                s.wrong_tags.push(format!("{} → {t}", f.def.id));
+            }
+        }
+        s.tags_expected += f.def.bericht.len();
+        s.tags_recalled += f.def.bericht.iter().filter(|b| tags.contains(b)).count();
         let (section, citation) = score(best);
         if section {
             s.section_ok += 1;
@@ -87,6 +135,17 @@ pub fn extraction(case: &Case, proposed: &[DraftFact], dropped: usize) -> Extrac
         }
     }
     s
+}
+
+/// Half or more of the shorter text's longer words recur in the other: the same statement, not
+/// two halves of one fact ("lebt mit Mutter und Schwester" / "Eltern getrennt").
+fn similar(a: &str, b: &str) -> bool {
+    let words = |t: &str| -> BTreeSet<String> {
+        t.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() > 3).map(|w| w.chars().take(5).collect()).collect()
+    };
+    let (a, b) = (words(a), words(b));
+    let small = a.len().min(b.len());
+    small > 0 && a.intersection(&b).count() * 2 >= small
 }
 
 // ---------- drafting ----------
@@ -237,7 +296,12 @@ mod tests {
     fn gold(case: &Case) -> Vec<DraftFact> {
         case.facts
             .iter()
-            .map(|f| DraftFact { section: f.sections[0].clone(), text: f.def.text.clone(), segments: f.segments.clone() })
+            .map(|f| DraftFact {
+                section: f.sections[0].clone(),
+                text: f.def.text.clone(),
+                segments: f.segments.clone(),
+                bericht: f.def.bericht.clone(),
+            })
             .collect()
     }
 
@@ -245,9 +309,11 @@ mod tests {
     fn the_expected_facts_score_perfectly() {
         let s = suite();
         for c in &s.cases {
-            let r = extraction(c, &gold(c), 0);
+            let r = extraction(c, &gold(c), 0, 0);
             assert_eq!((r.found, r.section_ok, r.citation_ok), (r.expected, r.expected, r.expected), "{}", c.id);
             assert!(r.extra.is_empty() && r.forbidden.is_empty(), "{}: {:?} {:?}", c.id, r.extra, r.forbidden);
+            assert_eq!((r.tags_ok, r.tags_recalled), (r.tags, r.tags_expected), "{}", c.id);
+            assert!(r.duplicates.is_empty(), "{}: {:?}", c.id, r.duplicates);
         }
     }
 
@@ -262,8 +328,19 @@ mod tests {
         facts[first].segments = vec![c.segments.len() + 5];
         let second = c.facts.iter().enumerate().skip(first + 1).find(|(_, f)| f.def.required).unwrap().0;
         facts.remove(second);
-        facts.push(DraftFact { section: "verlauf".into(), text: "Wetter war schön".into(), segments: vec![0] });
-        let r = extraction(c, &facts, 2);
+        facts.push(DraftFact { section: "verlauf".into(), text: "Wetter war schön".into(), segments: vec![0], bericht: vec![] });
+        // The same fact once more, and a wrong tag on another.
+        let third = c.facts.iter().enumerate().skip(second + 1).find(|(_, f)| f.def.required && !f.def.bericht.is_empty()).unwrap().0;
+        let at = |facts: &[DraftFact], k: usize| facts.iter().position(|f| f.text == c.facts[k].def.text).unwrap();
+        let again = facts[at(&facts, third)].clone();
+        facts.push(again);
+        let fourth = c.facts.iter().enumerate().skip(third + 1).find(|(_, f)| f.def.required).unwrap().0;
+        let i = at(&facts, fourth);
+        facts[i].bericht.push("somatik_nope".into());
+        let r = extraction(c, &facts, 2, 0);
+        assert_eq!(r.duplicates, vec![c.facts[third].def.id.clone()]);
+        assert_eq!(r.tags, r.tags_ok + 1);
+        assert_eq!(r.wrong_tags, vec![format!("{} → somatik_nope", c.facts[fourth].def.id)]);
         assert_eq!(r.found, r.expected - 1);
         assert_eq!(r.section_ok, r.found - 1);
         assert_eq!(r.citation_ok, r.found - 1);

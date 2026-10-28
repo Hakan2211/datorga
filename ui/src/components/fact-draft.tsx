@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
-import { AlertTriangle, Check, ShieldCheck, Sparkles, X } from "lucide-react";
+import { AlertTriangle, Check, Plus, ShieldCheck, Sparkles, X } from "lucide-react";
 import type { EntityKind } from "@/bindings/EntityKind";
 import type { FactEdit } from "@/bindings/FactEdit";
 import type { NoteFact } from "@/bindings/NoteFact";
@@ -67,7 +67,14 @@ function showSegment(segmentId: string) {
   setTimeout(() => el.classList.remove("ring-2", "ring-primary"), 1600);
 }
 
-type Draft = { checked: boolean; text: string; section: string };
+type Draft = { checked: boolean; text: string; section: string; tags: string[] };
+
+/** A Bericht section as a short chip label ("2 Symptomatik und psychischer…"). */
+export function tagLabel(s: SectionDef): string {
+  const h = s.heading.trim();
+  const short = h.length > 30 ? `${h.slice(0, 28).trimEnd()}…` : h;
+  return s.number ? `${s.number} ${short}` : short;
+}
 
 /**
  * AI-proposed facts for a Sitzungsnotiz. Nothing reaches the note until the therapist picks
@@ -88,6 +95,8 @@ export function FactDraftCard({
   const qc = useQueryClient();
   const llm = useQuery(q.llm());
   const facts = useQuery(q.noteFacts(reportId));
+  // Bericht sections facts can be tagged with (none without a treatment case).
+  const tagSections = useQuery(q.factTagSections(reportId)).data ?? [];
   const [previewOpen, setPreviewOpen] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [applying, setApplying] = useState(false);
@@ -106,6 +115,7 @@ export function FactDraftCard({
           checked: true,
           text: f.text,
           section: f.section_key,
+          tags: f.bericht ?? [],
         };
       return next;
     });
@@ -130,6 +140,7 @@ export function FactDraftCard({
           id: f.id,
           section_key: drafts[f.id].section,
           text: drafts[f.id].text,
+          ...(tagSections.length ? { bericht: drafts[f.id].tags } : {}),
         })),
       );
       void qc.invalidateQueries({ queryKey: ["noteFacts", reportId] });
@@ -144,6 +155,10 @@ export function FactDraftCard({
   const active = llm.data?.config.active;
   const heading = (key: string) =>
     sections.find((s) => s.key === key)?.heading ?? key;
+  const tagHeading = (key: string) => {
+    const s = tagSections.find((d) => d.key === key);
+    return s ? tagLabel(s) : key;
+  };
 
   return (
     <Card>
@@ -196,9 +211,11 @@ export function FactDraftCard({
                               checked: true,
                               text: f.text,
                               section: f.section_key,
+                              tags: f.bericht ?? [],
                             }
                           }
                           sections={sections}
+                          tagSections={tagSections}
                           onChange={(d) =>
                             setDrafts((all) => ({ ...all, [f.id]: d }))
                           }
@@ -240,6 +257,12 @@ export function FactDraftCard({
                 >
                   <span className="text-foreground">{f.text}</span>
                   <span className="text-xs">· {heading(f.section_key)}</span>
+                  {f.bericht && f.bericht.length > 0 && (
+                    <span className="text-xs">
+                      · {t("facts.tagsShort")}:{" "}
+                      {f.bericht.map(tagHeading).join(", ")}
+                    </span>
+                  )}
                   <Citations fact={f} />
                 </li>
               ))}
@@ -295,16 +318,19 @@ function FactRow({
   fact,
   draft,
   sections,
+  tagSections,
   onChange,
   onReject,
 }: {
   fact: NoteFact;
   draft: Draft;
   sections: SectionDef[];
+  tagSections: SectionDef[];
   onChange: (d: Draft) => void;
   onReject: () => void;
 }) {
   const { t } = useTranslation();
+  const missing = tagSections.filter((s) => !draft.tags.includes(s.key));
   return (
     <li
       className={cn(
@@ -347,6 +373,72 @@ function FactRow({
             </SelectContent>
           </Select>
         </div>
+        {tagSections.length > 0 && (
+          <div
+            className="flex flex-wrap items-center gap-1"
+            data-testid="fact-tags"
+          >
+            <span className="text-xs text-muted-foreground">
+              {t("facts.tags")}:
+            </span>
+            {draft.tags.length === 0 && (
+              <span className="text-xs text-muted-foreground italic">
+                {t("facts.noTags")}
+              </span>
+            )}
+            {draft.tags.map((key) => {
+              const s = tagSections.find((d) => d.key === key);
+              return (
+                <span
+                  key={key}
+                  title={s?.heading}
+                  className="flex items-center gap-0.5 rounded-full bg-primary/10 py-0.5 pr-0.5 pl-2 text-[11px] text-primary"
+                >
+                  {s ? tagLabel(s) : key}
+                  <button
+                    type="button"
+                    className="rounded-full p-0.5 hover:bg-primary/20"
+                    onClick={() =>
+                      onChange({
+                        ...draft,
+                        tags: draft.tags.filter((k) => k !== key),
+                      })
+                    }
+                    aria-label={t("facts.removeTag", {
+                      section: s?.heading ?? key,
+                    })}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              );
+            })}
+            {missing.length > 0 && (
+              <Select
+                value=""
+                onValueChange={(key) =>
+                  onChange({ ...draft, tags: [...draft.tags, key] })
+                }
+              >
+                <SelectTrigger
+                  size="sm"
+                  className="h-6 w-auto gap-1 border-dashed px-2 text-[11px]"
+                  aria-label={t("facts.addTagLabel")}
+                >
+                  <Plus className="size-3" /> {t("facts.addTag")}
+                </SelectTrigger>
+                <SelectContent position="popper">
+                  {missing.map((s) => (
+                    <SelectItem key={s.key} value={s.key}>
+                      {s.number ? `${s.number}. ` : ""}
+                      {s.heading}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+        )}
       </div>
       <Button
         variant="ghost"

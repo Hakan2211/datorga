@@ -33,6 +33,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V8__report_draft.sql"),
     include_str!("migrations/V9__job_engine.sql"),
     include_str!("migrations/V10__session_prep.sql"),
+    include_str!("migrations/V11__draft_quality.sql"),
 ];
 
 pub struct Store {
@@ -1076,7 +1077,7 @@ impl Store {
 
     pub fn note_facts(&self, report_id: &str) -> Result<Vec<NoteFact>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, extraction_id, section_key, text, status, edited, applied_at FROM note_fact
+            "SELECT id, extraction_id, section_key, text, status, edited, applied_at, bericht_tagged FROM note_fact
              WHERE report_id = ?1 ORDER BY seq",
         )?;
         let mut facts: Vec<NoteFact> = stmt
@@ -1090,9 +1091,21 @@ impl Store {
                     edited: r.get(5)?,
                     applied_at: r.get(6)?,
                     citations: vec![],
+                    bericht: r.get::<_, bool>(7)?.then(Vec::new),
                 })
             })?
             .collect::<std::result::Result<_, _>>()?;
+        let mut stmt = self.conn.prepare(
+            "SELECT t.fact_id, t.section_key FROM note_fact_section t JOIN note_fact f ON f.id = t.fact_id
+             WHERE f.report_id = ?1 ORDER BY t.rowid",
+        )?;
+        let rows = stmt.query_map([report_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (fact_id, key) = row?;
+            if let Some(tags) = facts.iter_mut().find(|f| f.id == fact_id).and_then(|f| f.bericht.as_mut()) {
+                tags.push(key);
+            }
+        }
         let mut stmt = self.conn.prepare(
             "SELECT c.fact_id, seg.id, t.source_id, seg.start_ms, seg.text
              FROM fact_citation c
@@ -1139,9 +1152,16 @@ impl Store {
             seq += 1;
             let fact_id = new_id();
             tx.execute(
-                "INSERT INTO note_fact (id, extraction_id, report_id, seq, section_key, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![fact_id, id, report_id, seq, f.section, f.text],
+                "INSERT INTO note_fact (id, extraction_id, report_id, seq, section_key, text, bericht_tagged)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![fact_id, id, report_id, seq, f.section, f.text, meta.tagged],
             )?;
+            for key in &f.bericht {
+                tx.execute(
+                    "INSERT OR IGNORE INTO note_fact_section (fact_id, section_key, source) VALUES (?1, ?2, 'ai')",
+                    params![fact_id, key],
+                )?;
+            }
             for &i in &f.segments {
                 let seg = segments.get(i).ok_or_else(|| Error::Invalid(format!("Zitat auf unbekannten Abschnitt {i}")))?;
                 tx.execute(
@@ -1155,7 +1175,8 @@ impl Store {
             meta: json!({
                 "extraction_id": id, "provider": meta.provider, "model": meta.model,
                 "prompt_version": crate::extract::PROMPT_VERSION, "prompt_hash": meta.prompt_hash,
-                "chunks": meta.chunks, "facts": facts.len(), "dropped": meta.dropped,
+                "chunks": meta.chunks, "facts": facts.len(), "dropped": meta.dropped, "merged": meta.merged,
+                "tagged": facts.iter().filter(|f| !f.bericht.is_empty()).count(),
             }),
         })?;
         tx.commit()?;
@@ -1199,23 +1220,50 @@ impl Store {
             if !report.sections.iter().any(|s| s.key == e.section_key) {
                 return Err(Error::NotFound(format!("section {}", e.section_key)));
             }
+            let tags = match &e.bericht {
+                Some(t) => {
+                    let mut t: Vec<String> = t.iter().map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect();
+                    t.sort();
+                    t.dedup();
+                    if t.len() > 10 || t.iter().any(|k| !k.chars().all(|c| c.is_ascii_lowercase() || c == '_')) {
+                        return Err(Error::Invalid("Ungültige Bericht-Abschnitte".into()));
+                    }
+                    Some(t)
+                }
+                None => f.bericht.clone(),
+            };
             let changed = text != f.text || e.section_key != f.section_key;
             edited += changed as usize;
             match by_section.iter_mut().find(|(k, _)| *k == e.section_key) {
                 Some((_, items)) => items.push(text.clone()),
                 None => by_section.push((e.section_key.clone(), vec![text.clone()])),
             }
-            cleaned.push((e, text, changed));
+            cleaned.push((e, text, changed, tags, f.bericht.clone()));
         }
 
         let ts = now();
         let tx = self.conn.unchecked_transaction()?;
-        for (e, text, changed) in &cleaned {
+        let mut retagged = 0;
+        for (e, text, changed, tags, proposed) in &cleaned {
             tx.execute(
-                "UPDATE note_fact SET status = 'applied', applied_at = ?3, section_key = ?4, text = ?5, edited = ?6
-                 WHERE id = ?1 AND report_id = ?2",
-                params![e.id, report_id, ts, e.section_key, text, changed],
+                "UPDATE note_fact SET status = 'applied', applied_at = ?3, section_key = ?4, text = ?5, edited = ?6,
+                 bericht_tagged = ?7 WHERE id = ?1 AND report_id = ?2",
+                params![e.id, report_id, ts, e.section_key, text, changed, tags.is_some()],
             )?;
+            let sorted = |t: &Option<Vec<String>>| t.clone().map(|mut t| { t.sort(); t });
+            if sorted(tags) == sorted(proposed) {
+                continue;
+            }
+            retagged += 1;
+            let proposed = proposed.clone().unwrap_or_default();
+            tx.execute("DELETE FROM note_fact_section WHERE fact_id = ?1", [&e.id])?;
+            for key in tags.iter().flatten() {
+                let source = if proposed.contains(key) { "ai" } else { "therapist" };
+                tx.execute(
+                    "INSERT INTO note_fact_section (fact_id, section_key, source) VALUES (?1, ?2, ?3)",
+                    params![e.id, key, source],
+                )?;
+            }
         }
         for (key, items) in &by_section {
             let section = report.sections.iter().find(|s| &s.key == key).expect("checked above");
@@ -1234,7 +1282,7 @@ impl Store {
         tx.execute("UPDATE report SET updated_at = ?2 WHERE id = ?1", params![report_id, ts])?;
         audit::append(&tx, Entry {
             actor: ACTOR, action: "note.facts_apply", entity_type: "report", entity_id: Some(report_id),
-            meta: json!({ "facts": edits.len(), "edited": edited, "sections": by_section.len() }),
+            meta: json!({ "facts": edits.len(), "edited": edited, "retagged": retagged, "sections": by_section.len() }),
         })?;
         tx.commit()?;
         self.report(report_id)
@@ -1351,7 +1399,7 @@ impl Store {
 
     pub fn episode_facts(&self, episode_id: &str) -> Result<Vec<EpisodeFact>> {
         let mut stmt = self.conn.prepare(
-            "SELECT f.id, s.id, r.id, COALESCE(s.scheduled_at, s.started_at), f.section_key, f.text
+            "SELECT f.id, s.id, r.id, COALESCE(s.scheduled_at, s.started_at), f.section_key, f.text, f.bericht_tagged
              FROM note_fact f
              JOIN report r ON r.id = f.report_id AND r.kind = 'sitzungsnotiz'
              JOIN session s ON s.id = r.session_id
@@ -1368,9 +1416,24 @@ impl Store {
                     session_no: 0,
                     section_key: r.get(4)?,
                     text: r.get(5)?,
+                    bericht: r.get::<_, bool>(6)?.then(Vec::new),
                 })
             })?
             .collect::<std::result::Result<_, _>>()?;
+        let mut stmt = self.conn.prepare(
+            "SELECT t.fact_id, t.section_key FROM note_fact_section t
+             JOIN note_fact f ON f.id = t.fact_id
+             JOIN report r ON r.id = f.report_id
+             JOIN session s ON s.id = r.session_id
+             WHERE s.episode_id = ?1 AND f.status = 'applied' ORDER BY t.rowid",
+        )?;
+        let rows = stmt.query_map([episode_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (fact_id, key) = row?;
+            if let Some(tags) = facts.iter_mut().find(|f| f.fact_id == fact_id).and_then(|f| f.bericht.as_mut()) {
+                tags.push(key);
+            }
+        }
         let mut last: Option<String> = None;
         let mut n = 0;
         for f in &mut facts {
@@ -1403,7 +1466,8 @@ impl Store {
             None => vec![],
         };
         let mut stmt = self.conn.prepare(
-            "SELECT id, section_key, status, mode, provider, model, instructed, dropped, created_at, applied_at
+            "SELECT id, section_key, status, mode, provider, model, instructed, dropped, created_at, applied_at,
+                    session_ids, with_existing
              FROM section_draft WHERE report_id = ?1 AND status IN ('proposed', 'applied') ORDER BY created_at, rowid",
         )?;
         let mut drafts: Vec<SectionDraft> = stmt
@@ -1419,6 +1483,8 @@ impl Store {
                     dropped: r.get(7)?,
                     created_at: r.get(8)?,
                     applied_at: r.get(9)?,
+                    session_ids: r.get::<_, Option<String>>(10)?.and_then(|j| serde_json::from_str(&j).ok()),
+                    with_existing: r.get(11)?,
                     sentences: vec![],
                 })
             })?
@@ -1443,14 +1509,15 @@ impl Store {
         &self,
         report_id: &str,
         meta: &DraftMeta,
-        drafts: &[(String, crate::draft::Parsed)],
+        drafts: &[crate::draft::SectionResult],
         facts: &[EpisodeFact],
     ) -> Result<Vec<SectionDraft>> {
         let report = self.editable_bericht(report_id)?;
         let ts = now();
         let tx = self.conn.unchecked_transaction()?;
         let (mut sentences, mut dropped) = (0, 0);
-        for (key, parsed) in drafts {
+        let session_ids = meta.session_ids.as_ref().map(serde_json::to_string).transpose()?;
+        for crate::draft::SectionResult { key, parsed, with_existing } in drafts {
             if !report.sections.iter().any(|s| &s.key == key) {
                 return Err(Error::NotFound(format!("section {key}")));
             }
@@ -1460,10 +1527,11 @@ impl Store {
             )?;
             let id = new_id();
             tx.execute(
-                "INSERT INTO section_draft (id, report_id, section_key, provider, model, prompt_version, prompt_hash, instructed, dropped, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                "INSERT INTO section_draft (id, report_id, section_key, provider, model, prompt_version, prompt_hash, instructed, dropped,
+                                            created_at, session_ids, with_existing)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![id, report_id, key, meta.provider, meta.model, crate::draft::PROMPT_VERSION, meta.prompt_hash,
-                        meta.instructed, parsed.dropped as i64, ts],
+                        meta.instructed, parsed.dropped as i64, ts, session_ids, with_existing],
             )?;
             for (seq, sentence) in parsed.sentences.iter().enumerate() {
                 let sid = new_id();
@@ -1484,8 +1552,10 @@ impl Store {
             meta: json!({
                 "provider": meta.provider, "model": meta.model,
                 "prompt_version": crate::draft::PROMPT_VERSION, "prompt_hash": meta.prompt_hash,
-                "sections": drafts.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+                "sections": drafts.iter().map(|d| d.key.as_str()).collect::<Vec<_>>(),
                 "facts": facts.len(), "sentences": sentences, "dropped": dropped, "instructed": meta.instructed,
+                "sessions": meta.session_ids.as_ref().map(Vec::len),
+                "with_existing": drafts.iter().filter(|d| d.with_existing).count(),
             }),
         })?;
         tx.commit()?;
@@ -2311,17 +2381,19 @@ mod tests {
         store.confirm_transcript(&t.id).unwrap();
         let note = store.create_session_note(&s.id).unwrap();
         let segs = store.source_segments(&s.id).unwrap();
-        let meta = ExtractionMeta { provider: "local".into(), model: "qwen3-8b".into(), prompt_hash: "abc".into(), chunks: 1, dropped: 2 };
-        let draft = |section: &str, text: &str, segments: Vec<usize>| DraftFact { section: section.into(), text: text.into(), segments };
+        let meta = ExtractionMeta { provider: "local".into(), model: "qwen3-8b".into(), prompt_hash: "abc".into(), chunks: 1, dropped: 2, merged: 1, tagged: true };
+        let draft = |section: &str, text: &str, segments: Vec<usize>| DraftFact { section: section.into(), text: text.into(), segments, bericht: vec![] };
 
         let facts = store
             .save_extraction(&note.id, &meta, &[
-                draft("verlauf", "Schlafstörungen", vec![0]),
-                draft("vereinbarungen", "Schlaftagebuch führen", vec![0, 1]),
+                DraftFact { bericht: vec!["symptomatik_befund".into(), "somatik".into()], ..draft("verlauf", "Schlafstörungen", vec![0]) },
+                DraftFact { bericht: vec!["behandlungsplan_prognose".into()], ..draft("vereinbarungen", "Schlaftagebuch führen", vec![0, 1]) },
                 draft("befund", "müde", vec![0]),
             ], &segs)
             .unwrap();
         assert_eq!(facts.len(), 3);
+        assert_eq!(facts[0].bericht, Some(vec!["symptomatik_befund".to_string(), "somatik".to_string()]));
+        assert_eq!(facts[2].bericht, Some(vec![]), "tagged with nothing is not untagged");
         assert!(facts.iter().all(|f| f.status == FactStatus::Proposed));
         assert_eq!(facts[1].citations.iter().map(|c| c.start_ms).collect::<Vec<_>>(), vec![0, 61_000]);
         assert_eq!(facts[1].citations[1].text, "Hausaufgabe Schlaftagebuch.");
@@ -2333,11 +2405,14 @@ mod tests {
 
         // The therapist already wrote something in "verlauf"; "vereinbarungen" is empty.
         store.save_section(&note.id, "verlauf", "<p>Eigene Notiz</p>").unwrap();
-        let edit = |f: &NoteFact, text: &str| FactEdit { id: f.id.clone(), section_key: f.section_key.clone(), text: text.into() };
+        let edit = |f: &NoteFact, text: &str| FactEdit { id: f.id.clone(), section_key: f.section_key.clone(), text: text.into(), bericht: None };
         assert!(store.apply_facts(&note.id, &[edit(&facts[2], "müde")]).is_err(), "rejected facts can't be applied");
         assert!(store.apply_facts(&note.id, &[FactEdit { section_key: "nope".into(), ..edit(&facts[0], "a") }]).is_err());
+        assert!(store.apply_facts(&note.id, &[FactEdit { bericht: Some(vec!["Somatik!".into()]), ..edit(&facts[0], "a") }]).is_err());
+        // The therapist drops "somatik" and adds "lebensgeschichte_modell"; the second fact keeps its tag.
+        let retag = Some(vec!["lebensgeschichte_modell".into(), "symptomatik_befund".into(), "symptomatik_befund".into()]);
         let report = store
-            .apply_facts(&note.id, &[edit(&facts[0], "Schlafstörungen <seit Mai>"), edit(&facts[1], "Schlaftagebuch führen")])
+            .apply_facts(&note.id, &[FactEdit { bericht: retag, ..edit(&facts[0], "Schlafstörungen <seit Mai>") }, edit(&facts[1], "Schlaftagebuch führen")])
             .unwrap();
         let section = |k: &str| report.sections.iter().find(|s| s.key == k).unwrap().clone();
         assert_eq!(section("verlauf").body, "<p>Eigene Notiz</p><ul><li><p>Schlafstörungen &lt;seit Mai&gt;</p></li></ul>");
@@ -2347,15 +2422,34 @@ mod tests {
         let facts = store.note_facts(&note.id).unwrap();
         assert!(facts[0].edited && facts[0].status == FactStatus::Applied && facts[0].applied_at.is_some());
         assert!(!facts[1].edited);
+        let mut tags = facts[0].bericht.clone().unwrap();
+        tags.sort();
+        assert_eq!(tags, ["lebensgeschichte_modell", "symptomatik_befund"]);
+        assert_eq!(facts[1].bericht, Some(vec!["behandlungsplan_prognose".to_string()]));
+        let sources: Vec<(String, String)> = store
+            .conn()
+            .prepare("SELECT section_key, source FROM note_fact_section WHERE fact_id = ?1 ORDER BY section_key")
+            .unwrap()
+            .query_map([&facts[0].id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(sources, [("lebensgeschichte_modell".into(), "therapist".into()), ("symptomatik_befund".into(), "ai".into())]);
         assert!(store.apply_facts(&note.id, &[edit(&facts[0], "noch mal")]).is_err(), "applied only once");
 
         // A new run replaces open and rejected proposals but keeps what was applied.
         let facts = store.save_extraction(&note.id, &meta, &[draft("risiko", "keine Suizidalität berichtet", vec![0])], &segs).unwrap();
         assert_eq!(facts.iter().map(|f| f.status).collect::<Vec<_>>(), vec![FactStatus::Applied, FactStatus::Applied, FactStatus::Proposed]);
+        // Without a treatment case no tags are asked: the proposal stays untagged, not "no section".
+        let untagged = ExtractionMeta { tagged: false, ..meta.clone() };
+        let facts = store.save_extraction(&note.id, &untagged, &[draft("risiko", "keine Suizidalität berichtet", vec![0])], &segs).unwrap();
+        assert_eq!(facts[2].bericht, None);
 
         let events = audit::list(store.conn(), 50).unwrap();
         let extract = events.iter().filter(|e| e.action == "note.extract").last().unwrap(); // list is newest first
         assert!(extract.meta_json.contains("\"model\":\"qwen3-8b\"") && extract.meta_json.contains("\"facts\":3"));
+        assert!(extract.meta_json.contains("\"merged\":1") && extract.meta_json.contains("\"tagged\":2"));
+        assert!(events.iter().any(|e| e.action == "note.facts_apply" && e.meta_json.contains("\"retagged\":1")));
         assert!(events.iter().any(|e| e.action == "note.facts_apply"));
         assert!(events.iter().all(|e| !e.meta_json.contains("Schlaf") && !e.meta_json.contains("Suizid")), "no fact text in the audit log");
         assert_eq!(audit::verify(store.conn()).unwrap(), None);
@@ -2365,7 +2459,7 @@ mod tests {
         assert!(store.apply_facts(&note.id, &[edit(&facts[2], "x")]).is_err());
 
         store.erase_patient(&p.id).unwrap();
-        for table in ["note_fact", "fact_citation", "extraction"] {
+        for table in ["note_fact", "fact_citation", "extraction", "note_fact_section"] {
             let n: i64 = store.conn().query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap();
             assert_eq!(n, 0, "{table} cascades on erasure");
         }
@@ -2373,33 +2467,49 @@ mod tests {
 
     /// A Sitzungsnotiz in `ep` with the given facts applied (no transcript needed for the store).
     fn note_with_facts(store: &Store, p: &Patient, ep: &Episode, at: &str, facts: &[(&str, &str)]) -> Report {
+        let facts: Vec<(&str, &str, &[&str])> = facts.iter().map(|&(k, t)| (k, t, &[][..])).collect();
+        note_with_tagged_facts(store, p, ep, at, &facts)
+    }
+
+    fn note_with_tagged_facts(store: &Store, p: &Patient, ep: &Episode, at: &str, facts: &[(&str, &str, &[&str])]) -> Report {
         let s = store
             .create_session(SessionInput { patient_id: p.id.clone(), episode_id: Some(ep.id.clone()), scheduled_at: Some(at.into()), modality: None })
             .unwrap();
         let note = store.create_session_note(&s.id).unwrap();
-        let meta = ExtractionMeta { provider: "local".into(), model: "m".into(), prompt_hash: "h".into(), chunks: 1, dropped: 0 };
-        let drafts: Vec<_> =
-            facts.iter().map(|(k, t)| crate::extract::DraftFact { section: k.to_string(), text: t.to_string(), segments: vec![] }).collect();
+        let meta = ExtractionMeta { provider: "local".into(), model: "m".into(), prompt_hash: "h".into(), chunks: 1, dropped: 0, merged: 0, tagged: true };
+        let drafts: Vec<_> = facts
+            .iter()
+            .map(|(k, t, b)| crate::extract::DraftFact {
+                section: k.to_string(),
+                text: t.to_string(),
+                segments: vec![],
+                bericht: b.iter().map(|s| s.to_string()).collect(),
+            })
+            .collect();
         let saved = store.save_extraction(&note.id, &meta, &drafts, &[]).unwrap();
-        let edits: Vec<_> = saved.iter().map(|f| FactEdit { id: f.id.clone(), section_key: f.section_key.clone(), text: f.text.clone() }).collect();
+        let edits: Vec<_> =
+            saved.iter().map(|f| FactEdit { id: f.id.clone(), section_key: f.section_key.clone(), text: f.text.clone(), bericht: None }).collect();
         store.apply_facts(&note.id, &edits).unwrap()
     }
 
     #[test]
     fn bericht_drafts_cite_episode_facts_and_apply_per_section() {
-        use crate::draft::{DraftSentence, Parsed};
+        use crate::draft::{DraftSentence, Parsed, SectionResult};
         let store = Store::open_in_memory().unwrap();
         let p = patient(&store);
         let ep = store
             .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Vt, age_group: AgeGroup::Adult, setting: Setting::Einzel })
             .unwrap();
         // Created out of order: the later session first.
-        note_with_facts(&store, &p, &ep, "2026-02-10T09:00:00Z", &[("verlauf", "Panik im Bus"), ("risiko", "Suizidgedanken verneint")]);
+        note_with_tagged_facts(&store, &p, &ep, "2026-02-10T09:00:00Z", &[
+            ("verlauf", "Panik im Bus", &["symptomatik_befund"]),
+            ("risiko", "Suizidgedanken verneint", &[]),
+        ]);
         let first = note_with_facts(&store, &p, &ep, "2026-02-03T09:00:00Z", &[("befund", "Stimmung gedrückt")]);
         // A proposed fact that was never applied is no source.
         let open = store
-            .save_extraction(&first.id, &ExtractionMeta { provider: "x".into(), model: "x".into(), prompt_hash: "x".into(), chunks: 1, dropped: 0 },
-                &[crate::extract::DraftFact { section: "verlauf".into(), text: "offen".into(), segments: vec![] }], &[])
+            .save_extraction(&first.id, &ExtractionMeta { provider: "x".into(), model: "x".into(), prompt_hash: "x".into(), chunks: 1, dropped: 0, merged: 0, tagged: true },
+                &[crate::extract::DraftFact { section: "verlauf".into(), text: "offen".into(), segments: vec![], bericht: vec![] }], &[])
             .unwrap();
         assert_eq!(open.len(), 2);
         let other = store
@@ -2412,16 +2522,24 @@ mod tests {
             facts.iter().map(|f| (f.session_no, f.text.as_str())).collect::<Vec<_>>(),
             [(1, "Stimmung gedrückt"), (2, "Panik im Bus"), (2, "Suizidgedanken verneint")]
         );
+        assert_eq!(facts.iter().map(|f| f.bericht.clone()).collect::<Vec<_>>(), [Some(vec![]), Some(vec!["symptomatik_befund".into()]), Some(vec![])]);
+        // A fact from before tagging is offered to every section.
+        store.conn().execute("UPDATE note_fact SET bericht_tagged = 0 WHERE text = 'Stimmung gedrückt'", []).unwrap();
+        let facts = store.episode_facts(&ep.id).unwrap();
+        assert_eq!(facts[0].bericht, None);
 
         let app = store.create_application(&ep.id, ApplicationKind::Erstantrag).unwrap();
         let report_id = app.report_id.clone().unwrap();
         assert!(store.save_drafts(&first.id, &meta(), &[], &facts).is_err(), "only for Berichte");
         let sentence = |t: &str, f: Vec<usize>| DraftSentence { text: t.into(), facts: f };
-        let run = |sections: Vec<(&str, Vec<DraftSentence>)>| -> Vec<(String, Parsed)> {
-            sections.into_iter().map(|(k, s)| (k.to_string(), Parsed { sentences: s, dropped: 1 })).collect()
+        let run = |sections: Vec<(&str, Vec<DraftSentence>)>| -> Vec<SectionResult> {
+            sections
+                .into_iter()
+                .map(|(k, s)| SectionResult { key: k.to_string(), parsed: Parsed { sentences: s, dropped: 1 }, with_existing: k == "somatik" })
+                .collect()
         };
         fn meta() -> DraftMeta {
-            DraftMeta { provider: "local".into(), model: "qwen3-8b".into(), prompt_hash: "ph".into(), instructed: false }
+            DraftMeta { provider: "local".into(), model: "qwen3-8b".into(), prompt_hash: "ph".into(), instructed: false, session_ids: None }
         }
 
         let drafts = store
@@ -2431,6 +2549,8 @@ mod tests {
             ]), &facts)
             .unwrap();
         assert_eq!(drafts.len(), 2);
+        assert_eq!((drafts[0].with_existing, drafts[1].with_existing), (false, true));
+        assert_eq!(drafts[0].session_ids, None);
         assert_eq!(drafts[0].sentences[1].sources.iter().map(|f| f.session_no).collect::<Vec<_>>(), [2, 2]);
         assert_eq!(drafts[0].sentences[0].sources[0].note_id, first.id);
         assert!(store.save_drafts(&report_id, &meta(), &run(vec![("diagnose_nope", vec![])]), &facts).is_err());
@@ -2454,8 +2574,10 @@ mod tests {
 
         // The therapist edits, then appends a second draft: mixed. A third one replaces everything.
         store.save_section(&report_id, "symptomatik_befund", "<p>Eigener Satz.</p>").unwrap();
-        let d2 = store.save_drafts(&report_id, &meta(), &run(vec![("symptomatik_befund", vec![sentence("Zweiter <Entwurf>.", vec![0])])]), &facts).unwrap();
+        let chosen = DraftMeta { session_ids: Some(vec![facts[0].session_id.clone()]), ..meta() };
+        let d2 = store.save_drafts(&report_id, &chosen, &run(vec![("symptomatik_befund", vec![sentence("Zweiter <Entwurf>.", vec![0])])]), &facts).unwrap();
         let d2 = d2.iter().find(|d| d.status == DraftStatus::Proposed && d.section_key == "symptomatik_befund").unwrap();
+        assert_eq!(d2.session_ids, Some(vec![facts[0].session_id.clone()]), "the chosen sessions are kept with the draft");
         let r = store.apply_draft(&report_id, &d2.id, ApplyMode::Append).unwrap();
         assert_eq!(section(&r, "symptomatik_befund").body, "<p>Eigener Satz.</p><p>Zweiter &lt;Entwurf&gt;.</p>");
         assert_eq!(section(&r, "symptomatik_befund").origin, SectionOrigin::Mixed);

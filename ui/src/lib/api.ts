@@ -43,6 +43,7 @@ import type { Preview } from '@/bindings/Preview'
 import type { PseudoTerm } from '@/bindings/PseudoTerm'
 import type { ApplyMode } from '@/bindings/ApplyMode'
 import type { EpisodeFact } from '@/bindings/EpisodeFact'
+import type { SectionDef } from '@/bindings/SectionDef'
 import type { SectionDraft } from '@/bindings/SectionDraft'
 import type { SttConfig } from '@/bindings/SttConfig'
 import type { CloudSttModel } from '@/bindings/CloudSttModel'
@@ -132,6 +133,20 @@ export type PrepPreview = Preview & { stats: BriefStats; terms: PseudoTerm[] }
 export const OPENAI_EU_BASE_URL = 'https://eu.api.openai.com/v1'
 /** Redaction preview: the outgoing text, the local token table and where it would go. */
 export type ExtractPreview = Preview & { terms: PseudoTerm[]; provider: ProviderInfo | null; model: string | null }
+/** What the therapist chose in the draft dialog (`sessionIds: null` = all sessions). */
+export type DraftChoice = {
+  sections: string[]
+  instruction: string | null
+  sessionIds: string[] | null
+  /** Send the sections' current text along so the draft only adds to it. */
+  withExisting: boolean
+  /** Ignore the Bericht tags: every fact to every section. */
+  allFacts: boolean
+}
+/** `skipped`: sections no fact is tagged for (nothing sent); `untagged`: facts from before tagging. */
+export type DraftPreview = ExtractPreview & { skipped: string[]; untagged: number }
+/** `since`: when the previous application was created (sessions after it are the default choice). */
+export type DraftSources = { facts: EpisodeFact[]; since: string | null }
 /** `chunks` < `total` when cancelled: facts from the finished chunks were kept. */
 export type ExtractResult = { facts: NoteFact[]; dropped: number; chunks: number; total: number; cancelled: boolean }
 /** `done` < `total` when cancelled: the sections drafted before were kept. */
@@ -271,11 +286,11 @@ export const api = {
   noteFacts: (reportId: string) => invoke<NoteFact[]>('note_facts', { reportId }),
   rejectFacts: (reportId: string, ids: string[]) => invoke<NoteFact[]>('note_facts_reject', { reportId, ids }),
   applyFacts: (reportId: string, facts: FactEdit[]) => invoke<Report>('note_facts_apply', { reportId, facts }),
-  draftSources: (reportId: string) => invoke<EpisodeFact[]>('draft_sources', { reportId }),
-  draftPreview: (reportId: string, sections: string[], instruction: string | null) =>
-    invoke<ExtractPreview>('draft_preview', { reportId, sections, instruction }),
-  draftRun: (reportId: string, sections: string[], instruction: string | null, digest: string, requestId: string) =>
-    invoke<DraftResult>('draft_run', { reportId, sections, instruction, digest, requestId }),
+  factTagSections: (reportId: string) => invoke<SectionDef[]>('fact_tag_sections', { reportId }),
+  draftSources: (reportId: string) => invoke<DraftSources>('draft_sources', { reportId }),
+  draftPreview: (reportId: string, choice: DraftChoice) => invoke<DraftPreview>('draft_preview', { reportId, choice }),
+  draftRun: (reportId: string, choice: DraftChoice, digest: string, requestId: string) =>
+    invoke<DraftResult>('draft_run', { reportId, choice, digest, requestId }),
   /** Stops a running extraction or draft; what finished before is kept. */
   llmCancel: (requestId: string) => invoke<void>('llm_cancel', { requestId }),
   /** Streamed answer text of one request (`llm:delta` events from the backend). */
@@ -348,6 +363,8 @@ export const q = {
   live: () => queryOptions({ queryKey: ['llm', 'live'], queryFn: api.live }),
   prep: (sessionId: string) => queryOptions({ queryKey: ['prep', sessionId], queryFn: () => api.prep(sessionId) }),
   noteFacts: (reportId: string) => queryOptions({ queryKey: ['noteFacts', reportId], queryFn: () => api.noteFacts(reportId) }),
+  factTagSections: (reportId: string) =>
+    queryOptions({ queryKey: ['factTagSections', reportId], queryFn: () => api.factTagSections(reportId), staleTime: Infinity }),
   draftSources: (reportId: string) =>
     queryOptions({ queryKey: ['draftSources', reportId], queryFn: () => api.draftSources(reportId) }),
   reportDrafts: (reportId: string) =>

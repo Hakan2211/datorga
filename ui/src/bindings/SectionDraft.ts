@@ -6,4 +6,12 @@ import type { DraftStatus } from "./DraftStatus";
 /**
  * A model draft for one Bericht section, sentence by sentence.
  */
-export type SectionDraft = { id: string, section_key: string, status: DraftStatus, mode: ApplyMode | null, provider: string, model: string, instructed: boolean, dropped: number, created_at: string, applied_at: string | null, sentences: Array<DraftSentenceView>, };
+export type SectionDraft = { id: string, section_key: string, status: DraftStatus, mode: ApplyMode | null, provider: string, model: string, instructed: boolean, dropped: number, created_at: string, applied_at: string | null, 
+/**
+ * Sessions the draft drew on; `None` = all sessions of the episode.
+ */
+session_ids: Array<string> | null, 
+/**
+ * The section's existing text went along ("ergänzen").
+ */
+with_existing: boolean, sentences: Array<DraftSentenceView>, };

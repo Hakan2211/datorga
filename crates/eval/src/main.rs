@@ -9,6 +9,7 @@
 mod score;
 mod suite;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -35,6 +36,9 @@ usage: cargo run -p eval -- [options]
   --only <stage>          extract | draft
   --case <id>             only this case / episode (repeatable)
   --sources <yaml>        draft with a per-section source mapping (Bericht section -> note sections)
+  --tags <mode>           Bericht tags the drafts filter by: extract (this run's extraction, default),
+                          gold (the suite's expected sections) or none (every fact to every section;
+                          default with --only draft)
   --runs <n>              repeat everything n times (default 1)
   --max-cost <usd>        stop before the next request once the billed cost (OpenRouter) reaches this
 
@@ -52,6 +56,7 @@ struct Args {
     only: Option<String>,
     cases: Vec<String>,
     sources: Option<PathBuf>,
+    tags: Option<String>,
     runs: usize,
     max_cost: Option<f64>,
 }
@@ -86,6 +91,13 @@ fn parse_args() -> Res<Args> {
             }
             "--case" => a.cases.push(value()?),
             "--sources" => a.sources = Some(value()?.into()),
+            "--tags" => {
+                let v = value()?;
+                if !["extract", "gold", "none"].contains(&v.as_str()) {
+                    return Err("--tags extract|gold|none".into());
+                }
+                a.tags = Some(v);
+            }
             "--runs" => a.runs = value()?.parse().map_err(|_| "--runs needs a number")?,
             "--max-cost" => a.max_cost = Some(value()?.parse().map_err(|_| "--max-cost needs a number (USD)")?),
             "-h" | "--help" => return Err(USAGE.into()),
@@ -94,6 +106,9 @@ fn parse_args() -> Res<Args> {
     }
     if !a.check && (a.provider.is_none() || a.model.is_none()) {
         return Err(format!("--provider and --model are required (or --check)\n\n{USAGE}"));
+    }
+    if a.tags.as_deref() == Some("extract") && a.only.as_deref() == Some("draft") {
+        return Err("--tags extract needs the extraction stage (drop --only draft)".into());
     }
     Ok(a)
 }
@@ -182,7 +197,11 @@ struct CaseReport {
     /// The answer had no JSON at all.
     error: Option<String>,
     score: ExtractScore,
-    facts: Vec<(String, String, Vec<usize>)>,
+    /// (note section, text, cited segments 1-based, Bericht tags)
+    facts: Vec<(String, String, Vec<usize>, Vec<String>)>,
+    /// Per expected fact: the Bericht tags of its best match (`None`: not found).
+    #[serde(skip)]
+    gold_tags: Vec<Option<Vec<String>>>,
 }
 
 #[derive(Serialize)]
@@ -201,6 +220,8 @@ struct Report {
     answered_by: Option<String>,
     extract_prompt: &'static str,
     draft_prompt: &'static str,
+    /// Which Bericht tags the drafts filtered by: extract | gold | none.
+    tags: String,
     sources: Option<Sources>,
     filter: Vec<FilterScore>,
     extract: Vec<CaseReport>,
@@ -233,6 +254,7 @@ fn run() -> Res<()> {
     }
 
     let t = target(&a)?;
+    let tags = a.tags.clone().unwrap_or_else(|| if a.only.as_deref() == Some("draft") { "none".into() } else { "extract".into() });
     let mut report = Report {
         suite: suite.name.clone(),
         provider: a.provider,
@@ -240,6 +262,7 @@ fn run() -> Res<()> {
         answered_by: None,
         extract_prompt: extract::PROMPT_VERSION,
         draft_prompt: draft::PROMPT_VERSION,
+        tags: tags.clone(),
         sources: sources.clone(),
         filter,
         extract: Vec::new(),
@@ -247,16 +270,27 @@ fn run() -> Res<()> {
         usage: Usage { max_cost: a.max_cost, ..Default::default() },
     };
     for run in 1..=a.runs {
+        // This run's tags per case and expected fact, for drafting with `--tags extract`.
+        let mut extracted: HashMap<String, Vec<Option<Vec<String>>>> = HashMap::new();
         if a.only.as_deref() != Some("draft") {
             for case in suite.cases.iter().filter(|c| wanted(&c.id)) {
                 eprintln!("[{run}] extract {}", case.id);
-                report.extract.push(extract_case(&t, case, run, &mut report.usage, &mut report.answered_by));
+                let r = extract_case(&t, case, run, &mut report.usage, &mut report.answered_by);
+                extracted.insert(case.id.clone(), r.gold_tags.clone());
+                report.extract.push(r);
             }
         }
         if a.only.as_deref() != Some("extract") {
+            let tag_of = |case: &suite::Case, fact: usize| -> Option<Vec<String>> {
+                match tags.as_str() {
+                    "gold" => Some(case.facts[fact].def.bericht.clone()),
+                    "extract" => extracted.get(&case.id).and_then(|t| t[fact].clone()),
+                    _ => None,
+                }
+            };
             for ep in suite.episodes.iter().filter(|e| wanted(&e.id)) {
                 eprintln!("[{run}] draft {}", ep.id);
-                report.draft.push(draft_episode(&t, &suite, ep, sources.as_ref(), run, &mut report.usage, &mut report.answered_by));
+                report.draft.push(draft_episode(&t, &suite, ep, sources.as_ref(), &tag_of, run, &mut report.usage, &mut report.answered_by));
             }
         }
     }
@@ -302,34 +336,43 @@ fn first_line(s: &str) -> &str {
 }
 
 fn extract_case(t: &Target, case: &suite::Case, run: usize, usage: &mut Usage, answered_by: &mut Option<String>) -> CaseReport {
-    let mut r = CaseReport { run, case: case.id.clone(), chunks: 0, error: None, score: ExtractScore::default(), facts: Vec::new() };
-    let result = (|| -> Res<(Vec<extract::DraftFact>, usize)> {
-        let prepared = extract::prepare(&case.note, &case.segments, case.dictionary(), case.chunk_chars.unwrap_or(extract::CHUNK_CHARS)).map_err(|e| e.to_string())?;
+    let mut r = CaseReport { run, case: case.id.clone(), chunks: 0, error: None, score: ExtractScore::default(), facts: Vec::new(), gold_tags: Vec::new() };
+    let result = (|| -> Res<(Vec<extract::DraftFact>, usize, usize)> {
+        let tag_defs = extract::tag_sections(&case.tag_template);
+        let budget = case.chunk_chars.unwrap_or(extract::CHUNK_CHARS);
+        let prepared = extract::prepare(&case.note, &tag_defs, &case.segments, case.dictionary(), budget).map_err(|e| e.to_string())?;
         r.chunks = prepared.chunks.len();
         let keys: Vec<&str> = extract::target_sections(&case.note).iter().map(|s| s.key.as_str()).collect();
+        let tags: Vec<&str> = tag_defs.iter().map(|s| s.key.as_str()).collect();
         let (mut facts, mut dropped) = (Vec::new(), 0);
         for chunk in &prepared.chunks {
             let answer = chat(t, &prepared.system, &chunk.user, &extract::chat_options(), usage, answered_by)?;
-            let parsed = extract::parse(&answer, &chunk.range, &keys, &prepared.map).map_err(|e| with_answer(e, &answer))?;
+            let parsed = extract::parse(&answer, &chunk.range, &keys, &tags, &prepared.map).map_err(|e| with_answer(e, &answer))?;
             facts.extend(parsed.facts);
             dropped += parsed.dropped;
         }
-        Ok((facts, dropped))
+        let (facts, merged) = extract::merge(facts);
+        Ok((facts, dropped, merged))
     })();
     match result {
-        Ok((facts, dropped)) => {
-            r.score = score::extraction(case, &facts, dropped);
-            r.facts = facts.into_iter().map(|f| (f.section, f.text, f.segments.iter().map(|i| i + 1).collect())).collect();
+        Ok((facts, dropped, merged)) => {
+            r.score = score::extraction(case, &facts, dropped, merged);
+            r.gold_tags = r.score.matched.iter().map(|m| m.map(|i| facts[i].bericht.clone())).collect();
+            r.facts = facts.into_iter().map(|f| (f.section, f.text, f.segments.iter().map(|i| i + 1).collect(), f.bericht)).collect();
         }
         Err(e) => {
-            r.score = score::extraction(case, &[], 0);
+            r.score = score::extraction(case, &[], 0, 0);
+            r.gold_tags = vec![None; case.facts.len()];
             r.error = Some(e);
         }
     }
     r
 }
 
-fn input_facts(suite: &Suite, all: &[EpisodeFact], subset: &[usize]) -> Vec<InputFact> {
+/// The Bericht tags of a case's expected fact for drafting (`None`: offered to every section).
+type TagOf<'a> = dyn Fn(&suite::Case, usize) -> Option<Vec<String>> + 'a;
+
+fn input_facts(suite: &Suite, all: &[EpisodeFact], subset: &[usize], tag_of: &TagOf) -> Vec<InputFact> {
     subset
         .iter()
         .map(|&i| {
@@ -337,7 +380,7 @@ fn input_facts(suite: &Suite, all: &[EpisodeFact], subset: &[usize]) -> Vec<Inpu
             let f = &c.facts[all[i].fact];
             let key = &f.sections[0];
             let label = c.note.sections.iter().find(|d| &d.key == key).map_or(key.clone(), |d| d.heading.clone());
-            InputFact { session_no: all[i].session_no, label, text: f.def.text.clone() }
+            InputFact { session_no: all[i].session_no, label, text: f.def.text.clone(), bericht: tag_of(c, all[i].fact) }
         })
         .collect()
 }
@@ -348,7 +391,17 @@ fn kept(suite: &Suite, all: &[EpisodeFact], key: &str, sources: Option<&Sources>
     (0..all.len()).filter(|&i| allowed.is_none_or(|a| a.contains(&suite.cases[all[i].case].facts[all[i].fact].sections[0]))).collect()
 }
 
-fn draft_episode(t: &Target, suite: &Suite, ep: &suite::Episode, sources: Option<&Sources>, run: usize, usage: &mut Usage, answered_by: &mut Option<String>) -> EpisodeReport {
+#[allow(clippy::too_many_arguments)]
+fn draft_episode(
+    t: &Target,
+    suite: &Suite,
+    ep: &suite::Episode,
+    sources: Option<&Sources>,
+    tag_of: &TagOf,
+    run: usize,
+    usage: &mut Usage,
+    answered_by: &mut Option<String>,
+) -> EpisodeReport {
     let first = &suite.cases[ep.sessions[0]];
     let frame = Frame { method: first.method, age_group: first.age_group, kind: ep.kind };
     let mut dict = thera_core::pseudo::Dictionary::from_patient(&first.patient);
@@ -366,10 +419,15 @@ fn draft_episode(t: &Target, suite: &Suite, ep: &suite::Episode, sources: Option
             if subset.is_empty() {
                 return Ok(score::section(suite, ep, key, &all, &subset, &[], 0));
             }
-            let input = input_facts(suite, &all, &subset);
-            let prepared = draft::prepare(&ep.bericht, &frame, std::slice::from_ref(key), &input, &first.patient, dict.clone(), None).map_err(|e| e.to_string())?;
-            let answer = chat(t, &prepared.system, &prepared.sections[0].user, &draft::chat_options(), usage, answered_by)?;
-            let parsed = draft::parse(&answer, input.len(), &prepared.map).map_err(|e| with_answer(e, &answer))?;
+            let input = input_facts(suite, &all, &subset, tag_of);
+            let req = draft::Request { keys: std::slice::from_ref(key), facts: &input, tag_keys: &keys, existing: &[], instruction: None };
+            let prepared = draft::prepare(&ep.bericht, &frame, &req, &first.patient, dict.clone()).map_err(|e| e.to_string())?;
+            let Some(section) = prepared.sections.first() else {
+                // No fact tagged for the section: nothing sent, an empty draft.
+                return Ok(score::section(suite, ep, key, &all, &subset, &[], 0));
+            };
+            let answer = chat(t, &prepared.system, &section.user, &draft::chat_options(), usage, answered_by)?;
+            let parsed = draft::parse(&answer, section, &input, &prepared.map).map_err(|e| with_answer(e, &answer))?;
             let sentences: Vec<(String, Vec<usize>)> = parsed.sentences.into_iter().map(|s| (s.text, s.facts)).collect();
             Ok(score::section(suite, ep, key, &all, &subset, &sentences, parsed.dropped))
         })();
@@ -415,14 +473,17 @@ fn pct(a: usize, b: usize) -> String {
 fn print_summary(r: &Report) {
     if !r.extract.is_empty() {
         println!("\nextraction ({})", r.extract_prompt);
-        println!("  {:<20} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} {:>5}", "case", "recall", "sect", "cite", "prec", "extra", "forbid", "drop");
+        println!(
+            "  {:<20} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} {:>5} {:>6} {:>6} {:>4} {:>4}",
+            "case", "recall", "sect", "cite", "prec", "extra", "forbid", "drop", "tagP", "tagR", "dup", "mrg"
+        );
         let mut total = ExtractScore::default();
         for c in &r.extract {
             let s = &c.score;
             total.add(s);
             let err = c.error.as_deref().map(|e| format!("  ERROR {}", first_line(e))).unwrap_or_default();
             println!(
-                "  {:<20} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} {:>5}{err}",
+                "  {:<20} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} {:>5} {:>6} {:>6} {:>4} {:>4}{err}",
                 c.case,
                 pct(s.found, s.expected),
                 pct(s.section_ok, s.found),
@@ -430,7 +491,11 @@ fn print_summary(r: &Report) {
                 pct(s.proposed - s.extra.len(), s.proposed),
                 s.extra.len(),
                 s.forbidden.len(),
-                s.dropped
+                s.dropped,
+                pct(s.tags_ok, s.tags),
+                pct(s.tags_recalled, s.tags_expected),
+                s.duplicates.len(),
+                s.merged
             );
             for m in &s.missed {
                 println!("      missed   {m}");
@@ -441,9 +506,15 @@ fn print_summary(r: &Report) {
             for m in &s.forbidden {
                 println!("      FORBID   {m}");
             }
+            for m in &s.duplicates {
+                println!("      twice    {m}");
+            }
+            for m in &s.wrong_tags {
+                println!("      tag      {m}");
+            }
         }
         println!(
-            "  {:<20} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} {:>5}",
+            "  {:<20} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} {:>5} {:>6} {:>6} {:>4} {:>4}",
             "TOTAL",
             pct(total.found, total.expected),
             pct(total.section_ok, total.found),
@@ -451,11 +522,15 @@ fn print_summary(r: &Report) {
             pct(total.proposed - total.extra.len(), total.proposed),
             total.extra.len(),
             total.forbidden.len(),
-            total.dropped
+            total.dropped,
+            pct(total.tags_ok, total.tags),
+            pct(total.tags_recalled, total.tags_expected),
+            total.duplicates.len(),
+            total.merged
         );
     }
     if !r.draft.is_empty() {
-        println!("\ndrafting ({}{})", r.draft_prompt, if r.sources.is_some() { ", with source mapping" } else { "" });
+        println!("\ndrafting ({}, tags: {}{})", r.draft_prompt, r.tags, if r.sources.is_some() { ", with source mapping" } else { "" });
         println!("  {:<26} {:>6} {:>6} {:>6} {:>5} {:>6} {:>5}", "section", "prec", "recall", "sent", "pad", "forbid", "drop");
         let mut by_section: Vec<SectionScore> = Vec::new();
         for e in &r.draft {

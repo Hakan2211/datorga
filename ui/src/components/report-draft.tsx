@@ -1,7 +1,7 @@
 // Bericht drafting per section (Phase 2): the applied facts of the episode's Sitzungsnotizen become
 // a section draft. Each sentence shows the facts it cites; nothing reaches the Bericht until the
 // therapist applies a draft (replace or append).
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -15,10 +15,11 @@ import { formatDate } from '@/components/bits'
 import { RedactionDialog } from '@/components/fact-draft'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { api, errorMessage, q } from '@/lib/api'
+import { api, errorMessage, q, type DraftChoice } from '@/lib/api'
 
 /** Overview above the sections: what drafts would draw on, and "draft all empty sections". */
 export function ReportDraftCard({
@@ -35,7 +36,7 @@ export function ReportDraftCard({
   const { t } = useTranslation()
   const llm = useQuery(q.llm())
   const sources = useQuery(q.draftSources(reportId))
-  const facts = sources.data ?? []
+  const facts = sources.data?.facts ?? []
   const sessions = new Set(facts.map((f) => f.session_id)).size
   const empty = sections.filter((s) => isEmpty(s.key)).map((s) => s.key)
   const active = llm.data?.config.active
@@ -72,22 +73,52 @@ export function ReportDraftCard({
   )
 }
 
-/** Redaction preview + optional instruction for drafting `keys`, then the run. */
+type SessionRow = { id: string; no: number; at: string | null; facts: number }
+
+/** The sessions with applied facts, in order, from the episode's facts. */
+function sessionRows(facts: EpisodeFact[]): SessionRow[] {
+  const rows: SessionRow[] = []
+  for (const f of facts) {
+    const last = rows[rows.length - 1]
+    if (last?.id === f.session_id) last.facts++
+    else rows.push({ id: f.session_id, no: f.session_no, at: f.session_at, facts: 1 })
+  }
+  return rows
+}
+
+/**
+ * Redaction preview + the choices for drafting `keys` (sessions, existing text, instruction),
+ * then the run. `filled`: the keys whose section already holds text.
+ */
 export function DraftDialog({
   reportId,
   patientId,
   keys,
   sections,
+  filled,
   onClose,
 }: {
   reportId: string
   patientId: string
   keys: string[]
   sections: SectionDef[]
+  filled: string[]
   onClose: () => void
 }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
+  const sources = useQuery(q.draftSources(reportId))
+  const rows = useMemo(() => sessionRows(sources.data?.facts ?? []), [sources.data])
+  // Default: the sessions since the previous application (all for the first one).
+  const [chosen, setChosen] = useState<string[] | null>(null)
+  useEffect(() => {
+    if (chosen !== null || !sources.data) return
+    const since = sources.data.since
+    const recent = rows.filter((r) => !since || !r.at || r.at > since).map((r) => r.id)
+    setChosen(recent.length ? recent : rows.map((r) => r.id))
+  }, [chosen, rows, sources.data])
+  const [withExisting, setWithExisting] = useState(filled.length > 0)
+  const [allFacts, setAllFacts] = useState(false)
   const [instruction, setInstruction] = useState('')
   // The preview follows the instruction once typing pauses.
   const [sent, setSent] = useState('')
@@ -96,15 +127,32 @@ export function DraftDialog({
     return () => clearTimeout(id)
   }, [instruction])
   const settled = sent === instruction.trim()
+  const all = chosen !== null && chosen.length === rows.length
+  const choice: DraftChoice = {
+    sections: keys,
+    instruction: sent || null,
+    sessionIds: all ? null : chosen,
+    withExisting: withExisting && filled.length > 0,
+    allFacts,
+  }
+  const previewKey = ['draftPreview', reportId, choice]
+  // Shares the dialog's preview query (same key): sections skipped for lack of facts.
+  const preview = useQuery({
+    queryKey: previewKey,
+    queryFn: () => api.draftPreview(reportId, choice),
+    enabled: chosen !== null && chosen.length > 0,
+    gcTime: 0,
+  })
+  const heading = (k: string) => sections.find((s) => s.key === k)?.heading ?? k
 
   return (
     <RedactionDialog
       reportId={reportId}
       patientId={patientId}
-      previewKey={['draftPreview', reportId, keys, sent]}
-      loadPreview={() => api.draftPreview(reportId, keys, sent || null)}
+      previewKey={previewKey}
+      loadPreview={() => api.draftPreview(reportId, choice)}
       progressEvent="draft-progress"
-      canRun={settled}
+      canRun={settled && chosen !== null && chosen.length > 0}
       labels={{
         send: t('draft.send'),
         runLocal: t('draft.runLocal'),
@@ -113,7 +161,7 @@ export function DraftDialog({
         parts: (count) => t('draft.parts', { count }),
       }}
       onRun={async (digest, requestId) => {
-        const r = await api.draftRun(reportId, keys, sent || null, digest, requestId)
+        const r = await api.draftRun(reportId, choice, digest, requestId)
         qc.setQueryData(q.reportDrafts(reportId).queryKey, r.drafts)
         if (r.cancelled) {
           if (r.done === 0) toast.info(t('facts.cancelledNothing'))
@@ -128,9 +176,61 @@ export function DraftDialog({
     >
       <section className="space-y-2">
         <p>
-          <span className="text-muted-foreground">{t('draft.sectionsLabel')}:</span>{' '}
-          {keys.map((k) => sections.find((s) => s.key === k)?.heading ?? k).join(' · ')}
+          <span className="text-muted-foreground">{t('draft.sectionsLabel')}:</span> {keys.map(heading).join(' · ')}
         </p>
+        {preview.data && preview.data.skipped.length > 0 && (
+          <p className="text-[13px] text-muted-foreground" data-testid="draft-skipped">
+            {t('draft.skipped', { sections: preview.data.skipped.map(heading).join(' · ') })}
+          </p>
+        )}
+        {preview.data && (preview.data.skipped.length > 0 || allFacts) && (
+          <label className="flex items-center gap-2 text-[13px]">
+            <Checkbox checked={allFacts} onCheckedChange={(v) => setAllFacts(v === true)} />
+            {t('draft.allFacts')}
+          </label>
+        )}
+        {preview.data && preview.data.untagged > 0 && (
+          <p className="text-[13px] text-muted-foreground">{t('draft.untagged', { count: preview.data.untagged })}</p>
+        )}
+        {rows.length > 1 && chosen !== null && (
+          <div className="space-y-1.5" data-testid="draft-sessions">
+            <p className="text-xs font-medium">{t('draft.sessions')}</p>
+            <ul className="flex flex-wrap gap-x-4 gap-y-1">
+              {rows.map((r) => (
+                <li key={r.id}>
+                  <label className="flex items-center gap-1.5 text-[13px]">
+                    <Checkbox
+                      checked={chosen.includes(r.id)}
+                      onCheckedChange={(v) =>
+                        setChosen((c) => (v === true ? [...(c ?? []), r.id] : (c ?? []).filter((id) => id !== r.id)))
+                      }
+                    />
+                    {t('draft.session', { n: r.no })}
+                    <span className="text-muted-foreground">
+                      {formatDate(r.at)} · {t('draft.factCount', { count: r.facts })}
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+            <p className="text-[13px] text-muted-foreground">
+              {chosen.length === 0
+                ? t('draft.noSession')
+                : sources.data?.since
+                  ? t('draft.sessionsSince', { date: formatDate(sources.data.since) })
+                  : t('draft.sessionsHint')}
+            </p>
+          </div>
+        )}
+        {filled.length > 0 && (
+          <div className="space-y-1">
+            <label className="flex items-center gap-2 text-[13px]">
+              <Checkbox checked={withExisting} onCheckedChange={(v) => setWithExisting(v === true)} />
+              {t('draft.withExisting')}
+            </label>
+            <p className="pl-6 text-[13px] text-muted-foreground">{t('draft.withExistingHint')}</p>
+          </div>
+        )}
         <Label htmlFor="draft-instruction" className="text-xs">
           {t('draft.instruction')}
         </Label>
@@ -178,7 +278,7 @@ export function DraftProposal({
     <div className="space-y-2 rounded-md border border-primary/40 bg-primary/5 p-3 text-sm" data-testid="draft-proposal">
       <div className="flex items-center gap-2">
         <Sparkles className="size-4 text-primary" />
-        <span className="font-medium">{t('draft.proposal')}</span>
+        <span className="font-medium">{draft.with_existing ? t('draft.proposalAddition') : t('draft.proposal')}</span>
         <span className="font-mono text-xs text-muted-foreground">{draft.model}</span>
       </div>
       {draft.sentences.length === 0 ? (
@@ -195,6 +295,16 @@ export function DraftProposal({
             <Button size="sm" disabled={busy} onClick={act(() => onApply('replace'))}>
               {t('draft.use')}
             </Button>
+          ) : draft.with_existing ? (
+            // Written as an addition to the current text: appending is the natural choice.
+            <>
+              <Button size="sm" disabled={busy} onClick={act(() => onApply('append'))}>
+                {t('draft.append')}
+              </Button>
+              <Button size="sm" variant="outline" disabled={busy} onClick={act(() => onApply('replace'))}>
+                {t('draft.replace')}
+              </Button>
+            </>
           ) : (
             <>
               <Button size="sm" disabled={busy} onClick={act(() => onApply('replace'))}>

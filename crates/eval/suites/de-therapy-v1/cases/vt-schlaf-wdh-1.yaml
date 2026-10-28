@@ -1,0 +1,89 @@
+# Synthetic. VT, adult: a rambling dictation that says two points twice, far apart (slice 19).
+# Tests: facts repeated across chunks (`chunk_chars` puts the repeats into other chunks) should
+# come out once, citing both places (`extract::merge`); Bericht tags per fact (Somatik only for the
+# GP check-up, Soziodemographie only for the job). Not part of an episode.
+id: vt-schlaf-wdh-1
+title: VT Schlafstörung, Diktat mit Wiederholungen (mehrere Chunks)
+method: VT
+age_group: adult
+patient: { first_name: Jonas, last_name: Weber, birth_date: "1979-08-02" }
+chunk_chars: 500
+segments:
+  - { role: therapist, text: "Zweite Sitzung mit Herrn Weber." }
+  - { role: therapist, text: "Er berichtet, dass er seit etwa drei Monaten kaum durchschläft und nachts zwei- bis dreimal aufwacht." }
+  - { role: therapist, text: "Tagsüber sei er erschöpft und könne sich bei der Arbeit schlecht konzentrieren." }
+  - { role: therapist, text: "Er arbeitet als Busfahrer im Schichtdienst." }
+  - { role: therapist, text: "Stimmung gedrückt, Antrieb vermindert, im Kontakt freundlich und offen." }
+  - { role: therapist, text: "Wir haben das Schlaftagebuch der letzten Woche besprochen: Er liegt im Schnitt neun Stunden im Bett, schläft aber nur etwa fünf." }
+  - { role: therapist, text: "Psychoedukation zu Schlafhygiene und zum Teufelskreis aus Grübeln und Wachliegen." }
+  - { role: therapist, text: "Noch einmal zum Schlaf: Er wacht nachts zwei- bis dreimal auf und liegt dann oft lange wach, das geht seit ungefähr drei Monaten so." }
+  - { role: therapist, text: "Die hausärztliche Untersuchung im Sommer war ohne auffälligen Befund, die Schilddrüse unauffällig." }
+  - { role: therapist, text: "Suizidgedanken verneint er klar, keine Hinweise auf Eigen- oder Fremdgefährdung." }
+  - { role: therapist, text: "Ich wiederhole, weil es wichtig ist: Die Konzentration bei der Arbeit leidet, er fühlt sich tagsüber erschöpft." }
+  - { role: therapist, text: "Vereinbart: Bettzeit auf sechseinhalb Stunden begrenzen, Schlaftagebuch weiterführen." }
+  - { role: therapist, text: "Nächster Termin in einer Woche." }
+facts:
+  - id: durchschlafen
+    section: verlauf
+    text: Seit etwa drei Monaten Durchschlafstörung, wacht nachts zwei- bis dreimal auf und liegt lange wach.
+    match: ["wach", "nacht|drei monat"]
+    segments: [2, 8]
+    bericht: [symptomatik_befund]
+  - id: erschoepft
+    section: [verlauf, befund]
+    text: Tagsüber erschöpft, Konzentration bei der Arbeit beeinträchtigt.
+    match: ["erschöpf|konzentr"]
+    segments: [3, 11]
+    bericht: [symptomatik_befund]
+  - id: beruf
+    section: verlauf
+    text: Arbeitet als Busfahrer im Schichtdienst.
+    match: ["busfahrer|schicht"]
+    segments: [4]
+    bericht: [soziodemographie]
+    bericht_ok: [lebensgeschichte_modell]
+  - id: befund
+    section: befund
+    text: Stimmung gedrückt, Antrieb vermindert, im Kontakt freundlich und offen.
+    match: ["gedrückt|antrieb"]
+    segments: [5]
+    bericht: [symptomatik_befund]
+  - id: schlaftagebuch
+    section: verlauf
+    text: Laut Schlaftagebuch im Schnitt neun Stunden im Bett, davon etwa fünf Stunden Schlaf.
+    match: ["neun|\\b9\\b"]
+    segments: [6]
+    bericht: [symptomatik_befund]
+    bericht_ok: [lebensgeschichte_modell]
+  - id: psychoedukation
+    section: interventionen
+    text: Psychoedukation zu Schlafhygiene und zum Teufelskreis aus Grübeln und Wachliegen.
+    match: ["psychoedukation|schlafhygiene|teufelskreis"]
+    segments: [7]
+    bericht_ok: [behandlungsplan_prognose, lebensgeschichte_modell]
+  - id: hausarzt
+    section: [verlauf, befund]
+    text: Hausärztliche Untersuchung ohne auffälligen Befund, Schilddrüse unauffällig.
+    match: ["hausärzt|schilddrüse"]
+    segments: [9]
+    bericht: [somatik]
+  - id: risiko
+    section: risiko
+    text: Suizidgedanken verneint, keine Hinweise auf Eigen- oder Fremdgefährdung.
+    match: ["suizid|gefährdung"]
+    segments: [10]
+    bericht: [symptomatik_befund]
+  - id: bettzeit
+    section: vereinbarungen
+    text: Bettzeit auf sechseinhalb Stunden begrenzen, Schlaftagebuch weiterführen.
+    match: ["bettzeit|sechseinhalb|begrenz"]
+    segments: [12]
+    bericht: [behandlungsplan_prognose]
+  - id: termin
+    section: vereinbarungen
+    text: Nächster Termin in einer Woche.
+    match: ["termin"]
+    segments: [13]
+    required: false
+forbid:
+  - "\\bF\\s?5\\d"

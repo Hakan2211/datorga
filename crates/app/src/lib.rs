@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager, State};
 use thera_capture::power::{self, KeepAwake};
@@ -1504,16 +1504,35 @@ fn active_llm(state: &AppState) -> CmdResult<(ProviderId, String)> {
     Ok((id, model))
 }
 
+/// The Bericht template facts are tagged with, resolved for the episode (none without one).
+fn tag_template(s: &Store, episode: Option<&Episode>) -> thera_core::Result<Option<Template>> {
+    let Some(ep) = episode else { return Ok(None) };
+    let t = s.template(extract::TAG_TEMPLATE_KEY)?;
+    let ctx = Context { method: ep.method, age_group: ep.age_group, kind: Some(ApplicationKind::Erstantrag) };
+    Ok(Some(t.resolve(&ctx)))
+}
+
+/// What an extraction needs besides the request: the segments it cites into and the allowed
+/// note sections and Bericht tags.
+struct ExtractionScope {
+    segments: Vec<SourceSegment>,
+    sections: Vec<String>,
+    tags: Vec<String>,
+}
+
 /// Exactly what an extraction for this note would send, built from the current transcript and terms.
-fn prepare_extraction(s: &Store, report_id: &str) -> thera_core::Result<(extract::Prepared, Vec<SourceSegment>, Vec<String>)> {
+fn prepare_extraction(s: &Store, report_id: &str) -> thera_core::Result<(extract::Prepared, ExtractionScope)> {
     let view = report_view(s, report_id)?;
     if view.report.kind != "sitzungsnotiz" {
         return Err(thera_core::Error::Invalid("Fakten gibt es nur für Sitzungsnotizen".into()));
     }
     let dict = s.pseudo_dictionary(&view.patient.id)?;
-    let prepared = extract::prepare(&view.template, &view.segments, dict, extract::CHUNK_CHARS)?;
+    let bericht = tag_template(s, view.episode.as_ref())?;
+    let tag_defs = bericht.as_ref().map(extract::tag_sections).unwrap_or_default();
+    let prepared = extract::prepare(&view.template, &tag_defs, &view.segments, dict, extract::CHUNK_CHARS)?;
     let sections = extract::target_sections(&view.template).iter().map(|d| d.key.clone()).collect();
-    Ok((prepared, view.segments, sections))
+    let tags = tag_defs.iter().map(|d| d.key.clone()).collect();
+    Ok((prepared, ExtractionScope { segments: view.segments, sections, tags }))
 }
 
 #[derive(Serialize)]
@@ -1528,7 +1547,7 @@ struct ExtractPreview {
 /// The redaction preview: the pseudonymized text per request and the token table (local only).
 #[tauri::command]
 fn extract_preview(state: State<'_, AppState>, report_id: String) -> CmdResult<ExtractPreview> {
-    let (prepared, _, _) = state.with(|s| prepare_extraction(s, &report_id))?;
+    let (prepared, _) = state.with(|s| prepare_extraction(s, &report_id))?;
     let report = state.with(|s| s.report(&report_id))?;
     let terms = state.with(|s| s.pseudo_terms(&report.patient_id))?;
     let config = state.with(|s| s.llm_config())?;
@@ -1550,6 +1569,16 @@ fn pseudo_term_remove(state: State<'_, AppState>, id: String) -> CmdResult<()> {
 #[tauri::command]
 fn note_facts(state: State<'_, AppState>, report_id: String) -> CmdResult<Vec<NoteFact>> {
     state.with(|s| s.note_facts(&report_id))
+}
+
+/// The Bericht sections this note's facts can be tagged with (empty without an episode).
+#[tauri::command]
+fn fact_tag_sections(state: State<'_, AppState>, report_id: String) -> CmdResult<Vec<thera_core::templates::SectionDef>> {
+    state.with(|s| {
+        let report = s.report(&report_id)?;
+        let episode = report.episode_id.as_deref().map(|e| s.episode(e)).transpose()?;
+        Ok(tag_template(s, episode.as_ref())?.map(|t| extract::tag_sections(&t).into_iter().cloned().collect()).unwrap_or_default())
+    })
 }
 
 /// A running extraction or draft that `llm_cancel` can stop. Unregisters itself when dropped.
@@ -1647,7 +1676,7 @@ async fn extract_run(app: AppHandle, report_id: String, digest: String, request_
     blocking(app, move |state| {
         let run = LlmRun::start(state, &request_id)?;
         let (provider, model) = active_llm(state)?;
-        let (prepared, segments, sections) = state.with(|s| prepare_extraction(s, &report_id))?;
+        let (prepared, scope) = state.with(|s| prepare_extraction(s, &report_id))?;
         if prepared.digest != digest {
             return Err(CmdError::Other("Der Text hat sich seit der Vorschau geändert. Bitte die Vorschau erneut prüfen.".into()));
         }
@@ -1664,7 +1693,8 @@ async fn extract_run(app: AppHandle, report_id: String, digest: String, request_
             r => r?.0,
         };
         let opts = extract::chat_options();
-        let keys: Vec<&str> = sections.iter().map(String::as_str).collect();
+        let keys: Vec<&str> = scope.sections.iter().map(String::as_str).collect();
+        let tags: Vec<&str> = scope.tags.iter().map(String::as_str).collect();
         let (mut facts, mut dropped, mut done, mut answered_by) = (Vec::new(), 0, 0, model.clone());
         for (i, chunk) in prepared.chunks.iter().enumerate() {
             if run.cancelled() {
@@ -1675,7 +1705,7 @@ async fn extract_run(app: AppHandle, report_id: String, digest: String, request_
             let Some(completion) = stream_call(state, &events, &run, "llm.extract", (provider, &model), &ep, &messages, &opts)? else {
                 break;
             };
-            let parsed = extract::parse(&completion.text, &chunk.range, &keys, &prepared.map)?;
+            let parsed = extract::parse(&completion.text, &chunk.range, &keys, &tags, &prepared.map)?;
             facts.extend(parsed.facts);
             dropped += parsed.dropped;
             answered_by = completion.model;
@@ -1685,14 +1715,17 @@ async fn extract_run(app: AppHandle, report_id: String, digest: String, request_
             return nothing();
         }
         progress("running", done);
+        let (facts, merged) = extract::merge(facts);
         let meta = ExtractionMeta {
             provider: provider_str(provider),
             model: answered_by,
             prompt_hash: prepared.prompt_hash.clone(),
             chunks: done,
             dropped,
+            merged,
+            tagged: !scope.tags.is_empty(),
         };
-        let facts = state.with(|s| s.save_extraction(&report_id, &meta, &facts, &segments))?;
+        let facts = state.with(|s| s.save_extraction(&report_id, &meta, &facts, &scope.segments))?;
         Ok(ExtractResult { facts, dropped, chunks: done, total, cancelled: done < total })
     })
     .await
@@ -1710,18 +1743,36 @@ fn note_facts_apply(state: State<'_, AppState>, report_id: String, facts: Vec<Fa
 
 // ---------- Bericht drafting (Phase 2) ----------
 
-/// Exactly what drafting `sections` of this Bericht would send, from the episode's applied facts.
-fn prepare_draft(
-    s: &Store,
-    report_id: &str,
-    sections: &[String],
-    instruction: Option<&str>,
-) -> thera_core::Result<(draft::Prepared, Vec<EpisodeFact>)> {
+/// What the therapist chose in the draft dialog.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DraftChoice {
+    sections: Vec<String>,
+    instruction: Option<String>,
+    /// Sessions whose facts to use; `None` = all of the episode.
+    session_ids: Option<Vec<String>>,
+    /// Send each section's current text along ("ergänzen").
+    #[serde(default)]
+    with_existing: bool,
+    /// Offer every fact to every section, ignoring the Bericht tags.
+    #[serde(default)]
+    all_facts: bool,
+}
+
+/// Exactly what drafting the chosen sections of this Bericht would send, from the episode's
+/// applied facts of the chosen sessions.
+fn prepare_draft(s: &Store, report_id: &str, choice: &DraftChoice) -> thera_core::Result<(draft::Prepared, Vec<EpisodeFact>, Vec<draft::InputFact>)> {
     let view = report_view(s, report_id)?;
     let (Some(episode), Some(application)) = (&view.episode, &view.application) else {
         return Err(thera_core::Error::Invalid("Entwürfe gibt es nur für Berichte zu einem Antrag".into()));
     };
-    let facts = s.episode_facts(&episode.id)?;
+    let mut facts = s.episode_facts(&episode.id)?;
+    if let Some(ids) = &choice.session_ids {
+        if ids.is_empty() {
+            return Err(thera_core::Error::Invalid("Keine Sitzung gewählt".into()));
+        }
+        facts.retain(|f| ids.contains(&f.session_id));
+    }
     let note = s.template(thera_core::templates::SESSION_NOTE_KEY)?;
     let input: Vec<draft::InputFact> = facts
         .iter()
@@ -1729,37 +1780,76 @@ fn prepare_draft(
             session_no: f.session_no,
             label: note.sections.iter().find(|d| d.key == f.section_key).map_or(f.section_key.clone(), |d| d.heading.clone()),
             text: f.text.clone(),
+            bericht: f.bericht.clone(),
         })
         .collect();
+    // Tags name the sections of the Erst-/Umwandlungsbericht; other templates take all facts.
+    let tag_keys: Vec<String> = match (view.template.key == extract::TAG_TEMPLATE_KEY && !choice.all_facts, tag_template(s, Some(episode))?) {
+        (true, Some(t)) => extract::tag_sections(&t).iter().map(|d| d.key.clone()).collect(),
+        _ => vec![],
+    };
+    let existing: Vec<(String, String)> = if choice.with_existing {
+        view.report.sections.iter().map(|sec| (sec.key.clone(), draft::plain_text(&sec.body))).collect()
+    } else {
+        vec![]
+    };
     let frame = draft::Frame { method: episode.method, age_group: episode.age_group, kind: application.kind };
     let dict = s.pseudo_dictionary(&view.patient.id)?;
-    let prepared = draft::prepare(&view.template, &frame, sections, &input, &view.patient, dict, instruction)?;
-    Ok((prepared, facts))
+    let req = draft::Request {
+        keys: &choice.sections,
+        facts: &input,
+        tag_keys: &tag_keys,
+        existing: &existing,
+        instruction: choice.instruction.as_deref(),
+    };
+    let prepared = draft::prepare(&view.template, &frame, &req, &view.patient, dict)?;
+    Ok((prepared, facts, input))
+}
+
+#[derive(Serialize)]
+struct DraftPreview {
+    #[serde(flatten)]
+    preview: ExtractPreview,
+    /// Sections no fact is tagged for: nothing is sent, the draft comes back empty.
+    skipped: Vec<String>,
+    /// Facts from before tagging, offered to every section.
+    untagged: usize,
 }
 
 /// The redaction preview for a draft: one outgoing message per section.
 #[tauri::command]
-fn draft_preview(
-    state: State<'_, AppState>,
-    report_id: String,
-    sections: Vec<String>,
-    instruction: Option<String>,
-) -> CmdResult<ExtractPreview> {
-    let (prepared, _) = state.with(|s| prepare_draft(s, &report_id, &sections, instruction.as_deref()))?;
+fn draft_preview(state: State<'_, AppState>, report_id: String, choice: DraftChoice) -> CmdResult<DraftPreview> {
+    let (prepared, _, _) = state.with(|s| prepare_draft(s, &report_id, &choice))?;
     let report = state.with(|s| s.report(&report_id))?;
     let terms = state.with(|s| s.pseudo_terms(&report.patient_id))?;
     let config = state.with(|s| s.llm_config())?;
     let provider = config.active.map(llm::provider);
     let model = config.active.and_then(|id| config.settings(id).model).filter(|m| !m.is_empty());
-    Ok(ExtractPreview { preview: prepared.preview(), terms, provider, model })
+    let preview = ExtractPreview { preview: prepared.preview(), terms, provider, model };
+    Ok(DraftPreview { preview, skipped: prepared.skipped, untagged: prepared.untagged })
 }
 
-/// The applied Sitzungsnotiz facts a draft of this Bericht would draw on.
+#[derive(Serialize)]
+struct DraftSources {
+    facts: Vec<EpisodeFact>,
+    /// When the episode's previous application was created: sessions after it are the default
+    /// choice for this Bericht (`None`: the first application, all sessions).
+    since: Option<String>,
+}
+
+/// The applied Sitzungsnotiz facts a draft of this Bericht could draw on.
 #[tauri::command]
-fn draft_sources(state: State<'_, AppState>, report_id: String) -> CmdResult<Vec<EpisodeFact>> {
-    state.with(|s| match s.report(&report_id)?.episode_id {
-        Some(ep) => s.episode_facts(&ep),
-        None => Ok(vec![]),
+fn draft_sources(state: State<'_, AppState>, report_id: String) -> CmdResult<DraftSources> {
+    state.with(|s| {
+        let report = s.report(&report_id)?;
+        let Some(ep) = report.episode_id else { return Ok(DraftSources { facts: vec![], since: None }) };
+        let apps = s.list_applications(&ep)?;
+        let this = apps.iter().find(|a| Some(&a.id) == report.application_id.as_ref());
+        // `seq` counts per kind (Fortführung Nr. n), so order by creation.
+        let since = this
+            .and_then(|t| apps.iter().filter(|a| a.created_at < t.created_at).max_by_key(|a| a.created_at.clone()))
+            .map(|a| a.created_at.clone());
+        Ok(DraftSources { facts: s.episode_facts(&ep)?, since })
     })
 }
 
@@ -1783,19 +1873,12 @@ struct DraftResult {
 /// drafts. `digest` must match the preview the therapist saw; nothing is stored if any request
 /// fails. `llm_cancel(request_id)` stops it: sections drafted before are kept.
 #[tauri::command]
-async fn draft_run(
-    app: AppHandle,
-    report_id: String,
-    sections: Vec<String>,
-    instruction: Option<String>,
-    digest: String,
-    request_id: String,
-) -> CmdResult<DraftResult> {
+async fn draft_run(app: AppHandle, report_id: String, choice: DraftChoice, digest: String, request_id: String) -> CmdResult<DraftResult> {
     let events = app.clone();
     blocking(app, move |state| {
         let run = LlmRun::start(state, &request_id)?;
         let (provider, model) = active_llm(state)?;
-        let (prepared, facts) = state.with(|s| prepare_draft(s, &report_id, &sections, instruction.as_deref()))?;
+        let (prepared, facts, input) = state.with(|s| prepare_draft(s, &report_id, &choice))?;
         if prepared.digest != digest {
             return Err(CmdError::Other("Der Text hat sich seit der Vorschau geändert. Bitte die Vorschau erneut prüfen.".into()));
         }
@@ -1803,6 +1886,8 @@ async fn draft_run(
         let progress = |stage, done| {
             let _ = events.emit("draft-progress", ExtractProgress { report_id: report_id.clone(), stage, done, total });
         };
+        // Sections without a fact for them get an empty draft without a request.
+        let skipped = || prepared.skipped.iter().map(|k| draft::SectionResult { key: k.clone(), parsed: draft::Parsed::default(), with_existing: false });
         if provider == ProviderId::Local {
             progress("loading", 0);
         }
@@ -1810,29 +1895,35 @@ async fn draft_run(
             let drafts = state.with(|s| s.section_drafts(&report_id))?;
             Ok(DraftResult { drafts, sentences: 0, dropped: 0, done: 0, total, cancelled: true })
         };
-        let ep = match llm_endpoint(state, provider, &run.cancel) {
-            Err(_) if run.cancelled() => return nothing(),
-            r => r?.0,
+        let (mut drafts, mut sentences, mut dropped, mut answered_by) = (Vec::new(), 0, 0, model.clone());
+        drafts.extend(skipped());
+        let ep = if total == 0 {
+            None
+        } else {
+            match llm_endpoint(state, provider, &run.cancel) {
+                Err(_) if run.cancelled() => return nothing(),
+                r => Some(r?.0),
+            }
         };
         let opts = draft::chat_options();
-        let (mut drafts, mut sentences, mut dropped, mut answered_by) = (Vec::new(), 0, 0, model.clone());
         for (i, section) in prepared.sections.iter().enumerate() {
             if run.cancelled() {
                 break;
             }
             progress("running", i);
             let messages = [(llm::Role::System, &prepared.system), (llm::Role::User, &section.user)];
-            let Some(completion) = stream_call(state, &events, &run, "llm.draft", (provider, &model), &ep, &messages, &opts)? else {
+            let ep = ep.as_ref().expect("an endpoint whenever there are requests");
+            let Some(completion) = stream_call(state, &events, &run, "llm.draft", (provider, &model), ep, &messages, &opts)? else {
                 break;
             };
-            let parsed = draft::parse(&completion.text, facts.len(), &prepared.map)?;
+            let parsed = draft::parse(&completion.text, section, &input, &prepared.map)?;
             sentences += parsed.sentences.len();
             dropped += parsed.dropped;
-            drafts.push((section.key.clone(), parsed));
+            drafts.push(draft::SectionResult { key: section.key.clone(), parsed, with_existing: section.with_existing });
             answered_by = completion.model;
         }
-        let done = drafts.len();
-        if done == 0 {
+        let done = drafts.len() - prepared.skipped.len();
+        if drafts.is_empty() || (done == 0 && total > 0) {
             return nothing();
         }
         progress("running", done);
@@ -1840,7 +1931,8 @@ async fn draft_run(
             provider: provider_str(provider),
             model: answered_by,
             prompt_hash: prepared.prompt_hash.clone(),
-            instructed: draft::clean_instruction(instruction.as_deref())?.is_some(),
+            instructed: draft::clean_instruction(choice.instruction.as_deref())?.is_some(),
+            session_ids: choice.session_ids.clone(),
         };
         let drafts = state.with(|s| s.save_drafts(&report_id, &meta, &drafts, &facts))?;
         Ok(DraftResult { drafts, sentences, dropped, done, total, cancelled: done < total })
@@ -2263,6 +2355,7 @@ pub fn run() {
             note_facts,
             note_facts_reject,
             note_facts_apply,
+            fact_tag_sections,
             draft_preview,
             draft_sources,
             draft_run,

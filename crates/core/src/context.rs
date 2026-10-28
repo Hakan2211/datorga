@@ -178,7 +178,7 @@ mod tests {
     fn fact(text: &str) -> EpisodeFact {
         EpisodeFact {
             fact_id: "f".into(), session_id: "s0".into(), note_id: "r1".into(), session_at: None, session_no: 1,
-            section_key: "verlauf".into(), text: text.into(),
+            section_key: "verlauf".into(), text: text.into(), bericht: None,
         }
     }
 

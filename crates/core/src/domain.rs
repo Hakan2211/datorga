@@ -360,6 +360,8 @@ pub struct NoteFact {
     pub edited: bool,
     pub applied_at: Option<String>,
     pub citations: Vec<FactCitation>,
+    /// Bericht sections it belongs to; `None` for a fact from before tagging.
+    pub bericht: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -379,6 +381,10 @@ pub struct FactEdit {
     pub id: String,
     pub section_key: String,
     pub text: String,
+    /// Bericht sections as the therapist left them; `None` keeps the proposed ones.
+    #[serde(default)]
+    #[ts(optional)]
+    pub bericht: Option<Vec<String>>,
 }
 
 /// Provenance of one extraction run (PLAN Â§5: model, provider, prompt version and hash).
@@ -389,6 +395,11 @@ pub struct ExtractionMeta {
     pub prompt_hash: String,
     pub chunks: usize,
     pub dropped: usize,
+    /// Repeated facts folded into others (`extract::merge`).
+    pub merged: usize,
+    /// Bericht tags were asked for (the note belongs to a treatment case). Without, the facts
+    /// stay untagged and are offered to every section.
+    pub tagged: bool,
 }
 
 /// An applied Sitzungsnotiz fact of the episode, as a source for Bericht drafts.
@@ -405,6 +416,8 @@ pub struct EpisodeFact {
     /// Sitzungsnotiz section the fact was filed under.
     pub section_key: String,
     pub text: String,
+    /// Bericht sections it belongs to; `None` for a fact from before tagging (every section).
+    pub bericht: Option<Vec<String>>,
 }
 
 /// A model draft for one Bericht section, sentence by sentence.
@@ -422,6 +435,10 @@ pub struct SectionDraft {
     pub dropped: i64,
     pub created_at: String,
     pub applied_at: Option<String>,
+    /// Sessions the draft drew on; `None` = all sessions of the episode.
+    pub session_ids: Option<Vec<String>>,
+    /// The section's existing text went along ("ergänzen").
+    pub with_existing: bool,
     pub sentences: Vec<DraftSentenceView>,
 }
 
@@ -440,6 +457,8 @@ pub struct DraftMeta {
     pub model: String,
     pub prompt_hash: String,
     pub instructed: bool,
+    /// `None` = all sessions of the episode.
+    pub session_ids: Option<Vec<String>>,
 }
 
 pub fn new_id() -> String {

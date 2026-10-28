@@ -9,4 +9,8 @@ export type NoteFact = { id: string, extraction_id: string, section_key: string,
 /**
  * Text or section changed by the therapist before applying.
  */
-edited: boolean, applied_at: string | null, citations: Array<FactCitation>, };
+edited: boolean, applied_at: string | null, citations: Array<FactCitation>, 
+/**
+ * Bericht sections it belongs to; `None` for a fact from before tagging.
+ */
+bericht: Array<string> | null, };

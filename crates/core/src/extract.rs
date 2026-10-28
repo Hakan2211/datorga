@@ -5,6 +5,11 @@
 //! is checked, never trusted: unknown sections, citations outside the chunk, invented tokens and
 //! ICD codes (diagnoses stay with the therapist) are dropped. Long sessions are split into chunks
 //! so a 16k-context local model can take them.
+//!
+//! Each fact also names the Bericht sections it belongs to (slice 19), so a section draft later
+//! sees only its own facts. The tags use the sections of the Bericht for an Erst- or
+//! Umwandlungsantrag; the two broad sections of a Fortführungsbericht take all facts of the
+//! chosen sessions. Facts the model repeats across chunks are merged locally ([`merge`]).
 
 use std::ops::Range;
 use std::sync::LazyLock;
@@ -23,7 +28,24 @@ use crate::templates::{FieldKind, Template};
 use crate::{Error, Result};
 
 /// Bump on any change to the prompt or the answer format.
-pub const PROMPT_VERSION: &str = "extract-2026.1";
+pub const PROMPT_VERSION: &str = "extract-2026.2";
+
+/// The Bericht template whose sections facts are tagged with (resolved for an Erstantrag).
+pub const TAG_TEMPLATE_KEY: &str = "ptv3-erst-umwandlung";
+
+/// Most Bericht sections one fact is tagged with.
+pub const MAX_TAGS: usize = 3;
+
+/// Facts small models leave untagged or misfile (eval, slice 19), as rules for the tag prompt.
+/// Only rules whose section is offered are used.
+const TAG_RULES: &[(&str, &str)] = &[
+    ("symptomatik_befund", "Auch verneinte Befunde (z. B. Suizidgedanken verneint, keine Halluzinationen)"),
+    (
+        "lebensgeschichte_modell",
+        "Auslöser, aufrechterhaltende Bedingungen, Gedanken und Gefühle in der Situation, Verstärkung durch Vermeiden, Konflikte",
+    ),
+    ("behandlungsplan_prognose", "Vereinbarungen, Hausaufgaben, geplante oder begonnene Interventionen, Einbezug von Bezugspersonen"),
+];
 
 /// Transcript characters per request. German runs at roughly 3–4 characters per token, so this
 /// leaves room for the prompt and the answer within a 16k context.
@@ -60,6 +82,8 @@ pub struct DraftFact {
     pub section: String,
     pub text: String,
     pub segments: Vec<usize>,
+    /// Bericht sections the fact belongs to (keys of the tag template), possibly none.
+    pub bericht: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -107,8 +131,15 @@ pub fn target_sections(template: &Template) -> Vec<&crate::templates::SectionDef
     template.sections.iter().filter(|s| s.field == FieldKind::Prose && s.ai_allowed).collect()
 }
 
-/// The system prompt for a (resolved) note template. Holds no patient data.
-pub fn system_prompt(template: &Template) -> String {
+/// Bericht sections a fact can be tagged with: the draftable sections of the tag template,
+/// resolved for the episode's method and age group and an Erstantrag.
+pub fn tag_sections(bericht: &Template) -> Vec<&crate::templates::SectionDef> {
+    crate::draft::target_sections(bericht)
+}
+
+/// The system prompt for a (resolved) note template and the Bericht sections to tag facts
+/// with (none: no tags asked). Holds no patient data.
+pub fn system_prompt(template: &Template, tags: &[&crate::templates::SectionDef]) -> String {
     let mut sections = String::new();
     for s in target_sections(template) {
         sections.push_str(&format!("- \"{}\": {}\n", s.key, s.heading));
@@ -116,6 +147,32 @@ pub fn system_prompt(template: &Template) -> String {
             sections.push_str(&format!("    · {}\n", h.text.trim()));
         }
     }
+    let (tag_task, tag_example) = if tags.is_empty() {
+        (String::new(), "")
+    } else {
+        let mut list = String::new();
+        for s in tags {
+            let hints: Vec<&str> = s.hints.iter().map(|h| h.text.trim()).collect();
+            list.push_str(&format!("- \"{}\": {}", s.key, s.heading.trim()));
+            if !hints.is_empty() {
+                list.push_str(&format!(" ({})", hints.join("; ")));
+            }
+            list.push('\n');
+        }
+        let rules: Vec<String> =
+            TAG_RULES.iter().filter(|(key, _)| tags.iter().any(|s| s.key == *key)).map(|(key, rule)| format!("- {rule} → \"{key}\"\n")).collect();
+        if !rules.is_empty() {
+            list.push_str(&format!("Zuordnungshilfen:\n{}", rules.concat()));
+        }
+        (
+            format!(
+                "Ordne jeden Fakt außerdem im Feld \"bericht\" den Abschnitten des späteren Berichts an die \
+                 Gutachterin zu, in die er inhaltlich gehört: meist einer, höchstens {MAX_TAGS}, eine leere Liste, \
+                 wenn er in keinen gehört. Nur zuordnen, was der Abschnitt wirklich braucht:\n{list}\n"
+            ),
+            ", \"bericht\": [\"symptomatik_befund\"]",
+        )
+    };
     format!(
         "Du unterstützt eine Psychotherapeutin bei der Verlaufsdokumentation einer Sitzung.\n\
          Du erhältst die Abschrift der Sitzung als nummerierte Abschnitte ([S1], [S2] …). \
@@ -123,6 +180,7 @@ pub fn system_prompt(template: &Template) -> String {
          (Sprecher dort nicht getrennt).\n\n\
          Aufgabe: Ziehe die dokumentationswürdigen Fakten heraus und ordne jeden einem dieser \
          Abschnitte der Sitzungsnotiz zu:\n{sections}\n\
+         {tag_task}\
          Regeln:\n\
          - Nur was in der Abschrift steht. Nichts ergänzen, nicht deuten, nicht bewerten.\n\
          - Jeder Fakt nennt die Nummern der Abschnitte, aus denen er stammt (mindestens eine).\n\
@@ -137,7 +195,7 @@ pub fn system_prompt(template: &Template) -> String {
          - Smalltalk, Organisatorisches ohne Bezug zur Behandlung und Wiederholungen weglassen.\n\
          - Gibt die Abschrift nichts Relevantes her, antworte mit leerer Liste.\n\n\
          Antworte ausschließlich mit JSON in dieser Form, ohne weiteren Text:\n\
-         {{\"facts\": [{{\"section\": \"verlauf\", \"text\": \"…\", \"segments\": [3, 4]}}]}}\n"
+         {{\"facts\": [{{\"section\": \"verlauf\", \"text\": \"…\", \"segments\": [3, 4]{tag_example}}}]}}\n"
     )
 }
 
@@ -174,7 +232,13 @@ pub fn clock(ms: i64) -> String {
 
 /// Pseudonymizes the whole session with one token map. A name that the rules find anywhere
 /// ("Frau X") is tokenized in every chunk, not just the one it appeared in.
-pub fn prepare(template: &Template, segments: &[SourceSegment], mut dict: Dictionary, budget: usize) -> Result<Prepared> {
+pub fn prepare(
+    template: &Template,
+    tags: &[&crate::templates::SectionDef],
+    segments: &[SourceSegment],
+    mut dict: Dictionary,
+    budget: usize,
+) -> Result<Prepared> {
     if segments.is_empty() {
         return Err(Error::Invalid("Keine bestätigte Abschrift für diese Sitzung".into()));
     }
@@ -188,7 +252,7 @@ pub fn prepare(template: &Template, segments: &[SourceSegment], mut dict: Dictio
         }
     }
     let mut p = Pseudonymizer::new(dict);
-    let system_raw = system_prompt(template);
+    let system_raw = system_prompt(template, tags);
     let prompt_hash = sha256(&format!("{PROMPT_VERSION}\n{system_raw}"));
     let system = p.pseudonymize(&system_raw)?;
     let mut prepared = Vec::new();
@@ -298,10 +362,13 @@ struct RawFact {
     text: String,
     #[serde(default)]
     segments: Vec<Value>,
+    #[serde(default)]
+    bericht: Vec<Value>,
 }
 
-/// Checks a model answer for the chunk `range`. Fails only if the answer has no JSON at all.
-pub fn parse(answer: &str, range: &Range<usize>, sections: &[&str], map: &TokenMap) -> Result<Parsed> {
+/// Checks a model answer for the chunk `range`. `tags`: the Bericht section keys a fact may be
+/// tagged with (unknown tags are left out, the fact stays). Fails only if the answer has no JSON.
+pub fn parse(answer: &str, range: &Range<usize>, sections: &[&str], tags: &[&str], map: &TokenMap) -> Result<Parsed> {
     let list = json_list(answer, "facts")?;
 
     let mut out = Parsed::default();
@@ -310,7 +377,7 @@ pub fn parse(answer: &str, range: &Range<usize>, sections: &[&str], map: &TokenM
             out.dropped += 1;
             continue;
         };
-        match check(raw, range, sections, map) {
+        match check(raw, range, sections, tags, map) {
             Some(f) if !out.facts.iter().any(|g| g.section == f.section && g.text == f.text) => out.facts.push(f),
             Some(_) => {}
             None => out.dropped += 1,
@@ -319,7 +386,7 @@ pub fn parse(answer: &str, range: &Range<usize>, sections: &[&str], map: &TokenM
     Ok(out)
 }
 
-fn check(raw: RawFact, range: &Range<usize>, sections: &[&str], map: &TokenMap) -> Option<DraftFact> {
+fn check(raw: RawFact, range: &Range<usize>, sections: &[&str], tags: &[&str], map: &TokenMap) -> Option<DraftFact> {
     let section = raw.section.trim().to_string();
     if !sections.contains(&section.as_str()) {
         return None;
@@ -347,7 +414,84 @@ fn check(raw: RawFact, range: &Range<usize>, sections: &[&str], map: &TokenMap) 
     if !restored.unknown.is_empty() {
         return None;
     }
-    Some(DraftFact { section, text: restored.text, segments })
+    let mut bericht: Vec<String> = Vec::new();
+    for t in &raw.bericht {
+        let Some(key) = t.as_str().map(str::trim).filter(|k| tags.contains(k)) else { continue };
+        if !bericht.iter().any(|b| b == key) && bericht.len() < MAX_TAGS {
+            bericht.push(key.to_string());
+        }
+    }
+    Some(DraftFact { section, text: restored.text, segments, bericht })
+}
+
+/// Words that say nothing about which fact it is.
+const STOPWORDS: &[&str] = &[
+    "aber", "auch", "auf", "aus", "bei", "das", "dass", "dem", "den", "der", "des", "die", "ein", "eine", "einem", "einen",
+    "einer", "es", "für", "hat", "ihr", "ihre", "im", "in", "ist", "mit", "nach", "nicht", "noch", "seit", "sich", "sie",
+    "sind", "und", "von", "vor", "war", "wie", "wird", "zu", "zum", "zur",
+];
+
+/// Lowercased word stems (first five letters, so "Schlafstörung" and "Schlafstörungen" agree),
+/// without stopwords.
+fn stems(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = text
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() > 1 && !STOPWORDS.contains(w))
+        .map(|w| w.chars().take(5).collect())
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Share of the shorter fact's stems that the other one has too.
+fn overlap(a: &[String], b: &[String]) -> f64 {
+    let small = a.len().min(b.len());
+    if small == 0 {
+        return 0.0;
+    }
+    a.iter().filter(|w| b.binary_search(w).is_ok()).count() as f64 / small as f64
+}
+
+/// Folds facts the model proposed twice (often once per chunk of a long session) into one, kept
+/// under the longer wording with all citations and tags. Deterministic, no model call: same
+/// note section and nearly the same words, or a looser match that cites the same segments.
+/// Returns the facts in their first order and how many were folded away.
+pub fn merge(facts: Vec<DraftFact>) -> (Vec<DraftFact>, usize) {
+    let mut out: Vec<(DraftFact, Vec<String>)> = Vec::new();
+    let mut merged = 0;
+    for f in facts {
+        let s = stems(&f.text);
+        let twin = out.iter().position(|(g, gs)| {
+            let o = overlap(&s, gs);
+            g.section == f.section
+                && s.len().min(gs.len()) >= 2
+                && (o >= 0.8 || (o >= 0.7 && g.segments.iter().any(|x| f.segments.contains(x))))
+        });
+        let Some(i) = twin else {
+            out.push((f, s));
+            continue;
+        };
+        merged += 1;
+        let (g, gs) = &mut out[i];
+        if f.text.chars().count() > g.text.chars().count() {
+            g.text = f.text;
+            *gs = s;
+        }
+        for x in f.segments {
+            if !g.segments.contains(&x) {
+                g.segments.push(x);
+            }
+        }
+        g.segments.sort_unstable();
+        for t in f.bericht {
+            if !g.bericht.contains(&t) && g.bericht.len() < MAX_TAGS {
+                g.bericht.push(t);
+            }
+        }
+    }
+    (out.into_iter().map(|(f, _)| f).collect(), merged)
 }
 
 #[cfg(test)]
@@ -371,6 +515,11 @@ mod tests {
         t.resolve(&Context { method: Method::Vt, age_group: AgeGroup::Adult, kind: None })
     }
 
+    fn bericht() -> Template {
+        let t = templates::builtin().unwrap().into_iter().find(|t| t.key == TAG_TEMPLATE_KEY).unwrap();
+        t.resolve(&Context { method: Method::Vt, age_group: AgeGroup::Adult, kind: Some(crate::domain::ApplicationKind::Erstantrag) })
+    }
+
     fn seg(role: Speaker, start_ms: i64, text: &str) -> SourceSegment {
         SourceSegment { segment_id: String::new(), source_id: "src".into(), role, start_ms, end_ms: start_ms + 4000, text: text.into() }
     }
@@ -383,14 +532,21 @@ mod tests {
 
     #[test]
     fn prompt_names_sections_and_has_no_tokens() {
-        let p = system_prompt(&note());
+        let b = bericht();
+        let p = system_prompt(&note(), &tag_sections(&b));
         for key in ["verlauf", "befund", "interventionen", "risiko", "vereinbarungen"] {
             assert!(p.contains(&format!("\"{key}\"")), "{key}");
         }
         assert!(p.contains("Verhaltensanalyse"), "VT hint resolved");
         assert!(!p.contains("Übertragung"), "TP hint dropped");
+        for key in ["soziodemographie", "symptomatik_befund", "somatik", "lebensgeschichte_modell", "behandlungsplan_prognose"] {
+            assert!(p.contains(&format!("- \"{key}\": ")), "tag {key}");
+        }
+        assert!(!p.contains("\"diagnose\"") && !p.contains("\"umwandlung\""), "no tags for diagnoses or the Umwandlung");
+        assert!(p.contains("\"bericht\": [\"symptomatik_befund\"]"));
         let mut ps = Pseudonymizer::new(Dictionary::new());
         assert!(ps.pseudonymize(&p).is_ok(), "the prompt itself must pass the pseudonymizer");
+        assert!(!system_prompt(&note(), &[]).contains("bericht"), "no tags asked without sections");
     }
 
     #[test]
@@ -410,32 +566,32 @@ mod tests {
             seg(Speaker::Unknown, 65_000, &"Füllwort ".repeat(30)),
             seg(Speaker::Unknown, 3_725_000, "Muster will am 4.3.2025 wieder arbeiten."),
         ];
-        let p = prepare(&note(), &segs, dict(), 400).unwrap();
+        let p = prepare(&note(), &[], &segs, dict(), 400).unwrap();
         assert_eq!(p.chunks.len(), 2);
         let all: String = p.chunks.iter().map(|c| c.user.get().as_str()).collect();
         assert!(!all.contains("Muster") && !all.contains("Beispiel") && !all.contains("4.3.2025"), "{all}");
         assert!(all.contains("[S1] (Diktat, 00:00)"));
         assert!(all.contains("[S3] (Sitzung, 1:02:05) [PERSON_"), "name found by rule in chunk 1 is tokenized in chunk 2: {all}");
         assert_eq!(p.chunks[1].range, 2..3);
-        let again = prepare(&note(), &segs, dict(), 400).unwrap();
+        let again = prepare(&note(), &[], &segs, dict(), 400).unwrap();
         assert_eq!(again.digest, p.digest, "same input, same outgoing text");
         let mut d = dict();
         d.add(EntityKind::Ort, "Streit");
-        assert_ne!(prepare(&note(), &segs, d, 400).unwrap().digest, p.digest);
-        assert!(prepare(&note(), &[], dict(), 400).is_err());
+        assert_ne!(prepare(&note(), &[], &segs, d, 400).unwrap().digest, p.digest);
+        assert!(prepare(&note(), &[], &[], dict(), 400).is_err());
     }
 
     #[test]
     fn parse_keeps_valid_facts_and_restores_tokens() {
         let segs = vec![seg(Speaker::Unknown, 0, "Herr Beispiel schläft schlecht."), seg(Speaker::Unknown, 1, "Hausaufgabe: Schlaftagebuch.")];
-        let p = prepare(&note(), &segs, dict(), CHUNK_CHARS).unwrap();
+        let p = prepare(&note(), &[], &segs, dict(), CHUNK_CHARS).unwrap();
         let template = note();
         let sections: Vec<&str> = target_sections(&template).iter().map(|s| s.key.as_str()).collect();
         let answer = r#"<think>hmm</think>```json
         {"facts": [
           {"section": "verlauf", "text": "[PERSON_1]  berichtet\nSchlafstörungen", "segments": [1]},
           {"section": "verlauf", "text": "[PERSON_1] berichtet Schlafstörungen", "segments": ["S1"]},
-          {"section": "vereinbarungen", "text": "Schlaftagebuch", "segments": ["[S2]", 2, 1]},
+          {"section": "vereinbarungen", "text": "Schlaftagebuch", "segments": ["[S2]", 2, 1], "bericht": ["behandlungsplan_prognose", "diagnose", 7, "behandlungsplan_prognose", "somatik", "symptomatik_befund", "soziodemographie"]},
           {"section": "diagnosen", "text": "x", "segments": [1]},
           {"section": "befund", "text": "Verdacht auf F32.1", "segments": [1]},
           {"section": "befund", "text": "gedrückt", "segments": [7]},
@@ -445,25 +601,67 @@ mod tests {
           "kaputt"
         ]}
         ```"#;
-        let out = parse(answer, &p.chunks[0].range, &sections, &p.map).unwrap();
+        let tags = ["behandlungsplan_prognose", "somatik", "symptomatik_befund", "soziodemographie"];
+        let out = parse(answer, &p.chunks[0].range, &sections, &tags, &p.map).unwrap();
         assert_eq!(
             out.facts,
             vec![
-                DraftFact { section: "verlauf".into(), text: "Beispiel berichtet Schlafstörungen".into(), segments: vec![0] },
-                DraftFact { section: "vereinbarungen".into(), text: "Schlaftagebuch".into(), segments: vec![0, 1] },
+                DraftFact { section: "verlauf".into(), text: "Beispiel berichtet Schlafstörungen".into(), segments: vec![0], bericht: vec![] },
+                DraftFact {
+                    section: "vereinbarungen".into(),
+                    text: "Schlaftagebuch".into(),
+                    segments: vec![0, 1],
+                    bericht: vec!["behandlungsplan_prognose".into(), "somatik".into(), "symptomatik_befund".into()],
+                },
             ]
         );
         assert_eq!(out.dropped, 7);
-        assert!(parse("[]", &(0..2), &sections, &p.map).unwrap().facts.is_empty());
-        assert!(parse("Ich kann das nicht.", &(0..2), &sections, &p.map).is_err());
-        assert!(parse(r#"{"answer": 1}"#, &(0..2), &sections, &p.map).is_err());
+        assert!(parse("[]", &(0..2), &sections, &tags, &p.map).unwrap().facts.is_empty());
+        assert!(parse("Ich kann das nicht.", &(0..2), &sections, &tags, &p.map).is_err());
+        assert!(parse(r#"{"answer": 1}"#, &(0..2), &sections, &tags, &p.map).is_err());
     }
 
     #[test]
     fn citations_outside_the_chunk_are_dropped() {
-        let out = parse(r#"[{"section":"verlauf","text":"a","segments":[2]},{"section":"verlauf","text":"b","segments":[4]}]"#, &(3..5), &["verlauf"], &TokenMap::default()).unwrap();
+        let out = parse(r#"[{"section":"verlauf","text":"a","segments":[2]},{"section":"verlauf","text":"b","segments":[4]}]"#, &(3..5), &["verlauf"], &[], &TokenMap::default()).unwrap();
         assert_eq!(out.facts.len(), 1);
         assert_eq!(out.facts[0].segments, vec![3]);
+    }
+
+    fn fact(section: &str, text: &str, segments: &[usize], bericht: &[&str]) -> DraftFact {
+        DraftFact { section: section.into(), text: text.into(), segments: segments.to_vec(), bericht: bericht.iter().map(|b| b.to_string()).collect() }
+    }
+
+    #[test]
+    fn repeated_facts_are_merged_with_all_citations() {
+        let facts = vec![
+            fact("verlauf", "Panikattacke im Bus mit Herzrasen", &[2], &["symptomatik_befund"]),
+            fact("befund", "Stimmung gedrückt", &[3], &[]),
+            fact("verlauf", "Schlafstörungen seit Mai", &[4], &[]),
+            // Chunk 2 says it again: other words around it, other segments.
+            fact("verlauf", "Im Bus eine Panikattacke mit starkem Herzrasen", &[40], &["lebensgeschichte_modell"]),
+            fact("befund", "Stimmung gedrückt.", &[41], &["symptomatik_befund"]),
+            // Same segment, mostly the same words: the model split one statement twice.
+            fact("verlauf", "Schlafstörung seit Mai, wacht nachts auf", &[4], &[]),
+            // Not the same: another place, another symptom, another section.
+            fact("verlauf", "Panikattacke im Supermarkt", &[42], &[]),
+            fact("verlauf", "Panikattacke im Bus mit Schwindel", &[43], &[]),
+            fact("risiko", "Stimmung gedrückt", &[44], &[]),
+        ];
+        let (out, merged) = merge(facts);
+        assert_eq!(merged, 3);
+        assert_eq!(
+            out,
+            vec![
+                fact("verlauf", "Im Bus eine Panikattacke mit starkem Herzrasen", &[2, 40], &["symptomatik_befund", "lebensgeschichte_modell"]),
+                fact("befund", "Stimmung gedrückt.", &[3, 41], &["symptomatik_befund"]),
+                fact("verlauf", "Schlafstörung seit Mai, wacht nachts auf", &[4], &[]),
+                fact("verlauf", "Panikattacke im Supermarkt", &[42], &[]),
+                fact("verlauf", "Panikattacke im Bus mit Schwindel", &[43], &[]),
+                fact("risiko", "Stimmung gedrückt", &[44], &[]),
+            ]
+        );
+        assert_eq!(merge(vec![]).1, 0);
     }
 
     #[test]

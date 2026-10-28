@@ -3,4 +3,8 @@
 /**
  * The therapist's version of a fact when applying it.
  */
-export type FactEdit = { id: string, section_key: string, text: string, };
+export type FactEdit = { id: string, section_key: string, text: string, 
+/**
+ * Bericht sections as the therapist left them; `None` keeps the proposed ones.
+ */
+bericht?: Array<string>, };

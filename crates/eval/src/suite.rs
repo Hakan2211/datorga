@@ -120,6 +120,8 @@ pub struct Case {
     pub forbid: Vec<Regex>,
     /// The Sitzungsnotiz template resolved for this case.
     pub note: Template,
+    /// The Bericht template facts are tagged with, resolved for this case (Erstantrag).
+    pub tag_template: Template,
 }
 
 impl Case {
@@ -216,6 +218,9 @@ pub fn load(dir: &Path) -> Res<Suite> {
 fn case(f: CaseFile, all: &[Template]) -> Res<Case> {
     let note = template(all, SESSION_NOTE_KEY, &Context { method: f.method, age_group: f.age_group, kind: None })?;
     let targets: Vec<&str> = thera_core::extract::target_sections(&note).iter().map(|s| s.key.as_str()).collect();
+    let tag_ctx = Context { method: f.method, age_group: f.age_group, kind: Some(ApplicationKind::Erstantrag) };
+    let tag_template = template(all, thera_core::extract::TAG_TEMPLATE_KEY, &tag_ctx)?;
+    let tags: Vec<&str> = thera_core::extract::tag_sections(&tag_template).iter().map(|s| s.key.as_str()).collect();
     if f.segments.is_empty() || f.facts.is_empty() {
         return Err("needs segments and facts".into());
     }
@@ -230,6 +235,9 @@ fn case(f: CaseFile, all: &[Template]) -> Res<Case> {
         }
         if def.segments.is_empty() || def.segments.iter().any(|&n| n == 0 || n > f.segments.len()) {
             return Err(format!("fact {}: segments must be 1..={}", def.id, f.segments.len()));
+        }
+        if let Some(k) = def.bericht.iter().chain(&def.bericht_ok).find(|k| !tags.contains(&k.as_str())) {
+            return Err(format!("fact {}: {k} is not a Bericht section facts are tagged with", def.id));
         }
         if facts.iter().any(|x: &Fact| x.def.id == def.id) {
             return Err(format!("duplicate fact id {}", def.id));
@@ -276,6 +284,7 @@ fn case(f: CaseFile, all: &[Template]) -> Res<Case> {
         facts,
         forbid: regexes(&f.forbid)?,
         note,
+        tag_template,
     })
 }
 
@@ -345,7 +354,8 @@ mod tests {
                 }
             }
             // The canonical facts are what a careful extraction looks like: they pass the parser.
-            thera_core::extract::prepare(&c.note, &c.segments, c.dictionary(), thera_core::extract::CHUNK_CHARS).unwrap();
+            let tags = thera_core::extract::tag_sections(&c.tag_template);
+            thera_core::extract::prepare(&c.note, &tags, &c.segments, c.dictionary(), thera_core::extract::CHUNK_CHARS).unwrap();
         }
     }
 }

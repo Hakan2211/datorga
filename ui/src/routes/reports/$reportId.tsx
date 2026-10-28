@@ -121,22 +121,27 @@ function ReportEditor({ view }: { view: ReportView }) {
     [report.id],
   )
 
+  // Saves edits still waiting for their debounce (before the server reads or writes sections).
+  const flush = useCallback(async () => {
+    const waiting = Object.entries(queued.current)
+    for (const [key] of waiting) {
+      clearTimeout(timers.current[key])
+      delete queued.current[key]
+    }
+    await Promise.all(waiting.map(([key, body]) => api.saveSection(report.id, key, body)))
+    for (const [key] of waiting) markDirty(key, false)
+  }, [report.id, markDirty])
+
   // The server writes AI text into sections, so edits still waiting for their debounce go first.
   const flushThen = useCallback(
     async (write: () => Promise<{ sections: { key: string; body: string }[] }>) => {
-      const waiting = Object.entries(queued.current)
-      for (const [key] of waiting) {
-        clearTimeout(timers.current[key])
-        delete queued.current[key]
-      }
-      await Promise.all(waiting.map(([key, body]) => api.saveSection(report.id, key, body)))
-      for (const [key] of waiting) markDirty(key, false)
+      await flush()
       const updated = await write()
       setBodies(Object.fromEntries(updated.sections.map((s) => [s.key, s.body])))
       void qc.invalidateQueries({ queryKey: ['checklist', report.id] })
       void qc.invalidateQueries({ queryKey: ['reports'] })
     },
-    [qc, report.id, markDirty],
+    [qc, report.id, flush],
   )
   const applyFacts = useCallback((edits: FactEdit[]) => flushThen(() => api.applyFacts(report.id, edits)), [flushThen, report.id])
 
@@ -147,6 +152,12 @@ function ReportEditor({ view }: { view: ReportView }) {
   const templates = useQuery({ ...q.templates(), enabled: !isNote })
   const noteSections = templates.data?.find((tp) => tp.key === 'sitzungsnotiz')?.sections ?? []
   const [draftKeys, setDraftKeys] = useState<string[] | null>(null)
+  // The draft may send the sections' current text along: save pending edits first.
+  const openDraft = (keys: string[]) => {
+    flush()
+      .then(() => setDraftKeys(keys))
+      .catch((e) => toast.error(errorMessage(e)))
+  }
   const applyDraft = async (d: SectionDraft, mode: ApplyMode) => {
     await flushThen(() => api.applyDraft(report.id, d.id, mode))
     void qc.invalidateQueries({ queryKey: ['reportDrafts', report.id] })
@@ -219,7 +230,7 @@ function ReportEditor({ view }: { view: ReportView }) {
                 reportId={report.id}
                 sections={draftable}
                 isEmpty={(key) => isBlank(bodies[key] ?? '')}
-                onDraft={setDraftKeys}
+                onDraft={openDraft}
               />
             )}
             {template.sections.map((s) => {
@@ -237,7 +248,7 @@ function ReportEditor({ view }: { view: ReportView }) {
                   onChange={(b) => update(s.key, b)}
                   action={
                     canDraft && (
-                      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setDraftKeys([s.key])}>
+                      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => openDraft([s.key])}>
                         <Sparkles className="size-3.5" /> {t('draft.section')}
                       </Button>
                     )
@@ -266,6 +277,7 @@ function ReportEditor({ view }: { view: ReportView }) {
                 patientId={patient.id}
                 keys={draftKeys}
                 sections={draftable}
+                filled={draftKeys.filter((k) => !isBlank(bodies[k] ?? ''))}
                 onClose={() => setDraftKeys(null)}
               />
             )}
