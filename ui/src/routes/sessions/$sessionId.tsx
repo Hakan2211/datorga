@@ -14,6 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { TranscriptView } from '@/components/transcript-view'
+import { PrepCard } from '@/components/voice-prep'
 import { api, errorMessage, jobActive, q, type RecordingStatus, type SessionView, type SourceView } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -37,6 +38,7 @@ function SessionPage() {
         }
       />
       <Page>
+        <PrepCard sessionId={session.id} />
         <NoteCard view={view.data} />
         <CapturePanel view={view.data} />
         <Card>

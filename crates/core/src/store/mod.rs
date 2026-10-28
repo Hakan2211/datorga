@@ -32,6 +32,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V7__extraction.sql"),
     include_str!("migrations/V8__report_draft.sql"),
     include_str!("migrations/V9__job_engine.sql"),
+    include_str!("migrations/V10__session_prep.sql"),
 ];
 
 pub struct Store {
@@ -245,7 +246,7 @@ impl Store {
     /// count as requests only.
     pub fn llm_spend(&self, since: &str) -> Result<LlmSpend> {
         let mut stmt = self.conn.prepare(
-            "SELECT meta_json FROM audit_event WHERE (action LIKE 'llm.%' OR action = 'transcription.cloud') AND at >= ?1",
+            "SELECT meta_json FROM audit_event WHERE (action LIKE 'llm.%' OR action IN ('transcription.cloud', 'prep.live')) AND at >= ?1",
         )?;
         let mut spend = LlmSpend::default();
         for meta in stmt.query_map([since], |r| r.get::<_, String>(0))? {
@@ -1242,6 +1243,110 @@ impl Store {
     // ---------- Bericht drafts ----------
 
     /// The applied facts of all Sitzungsnotizen in the episode, in session order.
+    /// The patient's signed (or exported) Sitzungsnotizen of sessions before `session_id`,
+    /// newest first, at most `limit`: (session time, note).
+    pub fn prior_session_notes(&self, session_id: &str, limit: usize) -> Result<Vec<(Option<String>, Report)>> {
+        let current = self.session(session_id)?;
+        let at = current.scheduled_at.clone().or(current.started_at.clone()).unwrap_or_else(now);
+        let ids: Vec<(String, Option<String>)> = self
+            .conn
+            .prepare(
+                "SELECT r.id, COALESCE(s.scheduled_at, s.started_at) AS at FROM report r JOIN session s ON s.id = r.session_id
+                 WHERE r.kind = 'sitzungsnotiz' AND r.status IN ('signed', 'exported') AND s.patient_id = ?1 AND s.id <> ?2
+                   AND COALESCE(s.scheduled_at, s.started_at) < ?3
+                 ORDER BY at DESC LIMIT ?4",
+            )?
+            .query_map(params![current.patient_id, session_id, at, limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        ids.into_iter().map(|(id, at)| Ok((at, self.report(&id)?))).collect()
+    }
+
+    // ---------- voice prep (slice 26) ----------
+
+    pub fn session_prep(&self, session_id: &str) -> Result<Option<SessionPrep>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT session_id, transcript, seconds, sheet, sheet_model, created_at, updated_at FROM session_prep WHERE session_id = ?1",
+                [session_id],
+                |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
+                },
+            )
+            .optional()?
+            .map(|(session_id, transcript, seconds, sheet, sheet_model, created_at, updated_at)| {
+                Ok::<_, Error>(SessionPrep {
+                    session_id,
+                    transcript: serde_json::from_str(&transcript)?,
+                    seconds,
+                    sheet,
+                    sheet_model,
+                    created_at,
+                    updated_at,
+                })
+            })
+            .transpose()?)
+    }
+
+    pub fn live_config(&self) -> Result<crate::live::LiveConfig> {
+        Ok(self.setting(crate::live::CONFIG_SETTING)?.map(serde_json::from_value).transpose()?.unwrap_or_default())
+    }
+
+    /// Audited: opting in sends her voice and pseudonymized notes to OpenAI.
+    pub fn set_live_config(&self, c: &crate::live::LiveConfig) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.set_setting(crate::live::CONFIG_SETTING, &serde_json::to_value(c)?)?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "settings.live", entity_type: "setting", entity_id: Some(crate::live::CONFIG_SETTING),
+            meta: json!({ "enabled": c.enabled, "voice": c.voice() }),
+        })?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// A voice prep session was opened (or refused): what was sent, never the text.
+    pub fn log_prep_start(&self, session_id: &str, outcome: std::result::Result<(usize, usize), &str>) -> Result<()> {
+        let meta = match outcome {
+            Ok((notes, facts)) => json!({ "provider": "openai", "model": crate::live::MODEL, "ok": true, "notes": notes, "facts": facts }),
+            Err(reason) => json!({ "provider": "openai", "model": crate::live::MODEL, "ok": false, "error": reason }),
+        };
+        audit::append(&self.conn, Entry { actor: ACTOR, action: "prep.live_start", entity_type: "session", entity_id: Some(session_id), meta })
+    }
+
+    /// Stores a finished voice prep (replacing an earlier one with its sheet) and audits it
+    /// without text.
+    pub fn save_prep_conversation(&self, session_id: &str, turns: &[PrepTurn], seconds: Option<f64>, model: &str, reason: &str) -> Result<()> {
+        self.session(session_id)?;
+        let tx = self.conn.unchecked_transaction()?;
+        let t = now();
+        tx.execute(
+            "INSERT INTO session_prep (session_id, transcript, seconds, sheet, sheet_model, created_at, updated_at)
+             VALUES (?1, ?2, ?3, NULL, NULL, ?4, ?4)
+             ON CONFLICT(session_id) DO UPDATE SET transcript = ?2, seconds = ?3, sheet = NULL, sheet_model = NULL, updated_at = ?4",
+            params![session_id, serde_json::to_string(turns)?, seconds, t],
+        )?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "prep.live", entity_type: "session", entity_id: Some(session_id),
+            meta: json!({ "provider": "openai", "model": model, "ok": true, "seconds": seconds, "turns": turns.len(), "reason": reason, "cost_usd": seconds.map(|s| (s / 60.0 * crate::live::USD_PER_MINUTE * 10000.0).round() / 10000.0) }),
+        })?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn set_prep_sheet(&self, session_id: &str, sheet: &str, model: Option<&str>) -> Result<()> {
+        let n = match model {
+            Some(m) => self.conn.execute(
+                "UPDATE session_prep SET sheet = ?2, sheet_model = ?3, updated_at = ?4 WHERE session_id = ?1",
+                params![session_id, sheet, m, now()],
+            )?,
+            None => self.conn.execute("UPDATE session_prep SET sheet = ?2, updated_at = ?3 WHERE session_id = ?1", params![session_id, sheet, now()])?,
+        };
+        if n == 0 {
+            return Err(Error::NotFound(format!("Vorbereitung {session_id}")));
+        }
+        Ok(())
+    }
+
     pub fn episode_facts(&self, episode_id: &str) -> Result<Vec<EpisodeFact>> {
         let mut stmt = self.conn.prepare(
             "SELECT f.id, s.id, r.id, COALESCE(s.scheduled_at, s.started_at), f.section_key, f.text

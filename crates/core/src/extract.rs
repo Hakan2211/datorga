@@ -206,7 +206,7 @@ pub fn prepare(template: &Template, segments: &[SourceSegment], mut dict: Dictio
     Ok(Prepared { system, chunks: prepared, map: p.into_map(), prompt_hash, digest: hex::encode(h.finalize()) })
 }
 
-pub(crate) fn sha256(s: &str) -> String {
+pub fn sha256(s: &str) -> String {
     hex::encode(Sha256::digest(s.as_bytes()))
 }
 

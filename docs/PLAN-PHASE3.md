@@ -162,7 +162,7 @@ Each slice below follows the house pattern: core logic plus tests in `crates/cor
 
 ## Phase F: voice session prep via OpenAI Realtime (slice 26)
 
-**26. Vorbereitung per Sprache**
+**26. Vorbereitung per Sprache** (done 2026-10-28, ahead of 19–25, on **OpenAI GPT-Live** `gpt-live-1` instead of `gpt-realtime`: Rust posts the SDP offer to `/v1/live/sessions`, no ephemeral secret; see HANDOFF)
 - Context builder `core::context::prep_brief(patient_id, session_id)`, shared with the agent:
   - the last N signed Sitzungsnotizen (sections Verlauf/Vereinbarungen)
   - applied facts of the episode

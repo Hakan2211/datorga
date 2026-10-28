@@ -446,6 +446,37 @@ pub fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum PrepSpeaker {
+    Therapist,
+    Assistant,
+}
+
+/// One turn of a voice prep conversation, tokens already restored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PrepTurn {
+    pub speaker: PrepSpeaker,
+    pub text: String,
+}
+
+/// A voice prep before a session (slice 26).
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct SessionPrep {
+    pub session_id: String,
+    pub transcript: Vec<PrepTurn>,
+    /// Billed voice duration.
+    pub seconds: Option<f64>,
+    /// Prep sheet HTML (editable); `None` until generated.
+    pub sheet: Option<String>,
+    pub sheet_model: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 pub fn now() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)

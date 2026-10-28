@@ -29,6 +29,8 @@ use thera_core::store::Store;
 use thera_core::stt::{self, CloudStt, CloudSttModel, SttConfig, SttEngine, WhisperCli};
 use thera_core::templates::{Context, Template};
 use thera_core::tts::{self, TtsConfig};
+use thera_core::context;
+use thera_core::live::{self, LiveConfig};
 
 const KEYRING_SERVICE: &str = "de.datorga.thera";
 const KEYRING_USER: &str = "master-key";
@@ -1856,6 +1858,149 @@ fn report_draft_apply(state: State<'_, AppState>, report_id: String, draft_id: S
     state.with(|s| s.apply_draft(&report_id, &draft_id, mode))
 }
 
+// ---------- voice prep (slice 26) ----------
+
+#[derive(Serialize)]
+struct LiveOverview {
+    config: LiveConfig,
+    voices: &'static [live::LiveVoice],
+    usd_per_minute: f64,
+    /// Why a prep can't start (no OpenAI key), or `None`.
+    problem: Option<String>,
+    eu: bool,
+    /// Said when the voice model asks for backend work (client delegation).
+    no_backend: &'static str,
+}
+
+fn live_endpoint(state: &AppState) -> CmdResult<Endpoint> {
+    llm_endpoint(state, ProviderId::Openai, &AtomicBool::new(false))
+        .map(|(ep, _)| ep)
+        .map_err(|e| CmdError::Other(format!("OpenAI: {e} (Einstellungen → Stimme)")))
+}
+
+#[tauri::command]
+fn live_overview(state: State<'_, AppState>) -> CmdResult<LiveOverview> {
+    let config = state.with(|s| s.live_config())?;
+    let eu = state.with(|s| s.llm_config())?.base_url(ProviderId::Openai) == llm::OPENAI_EU_BASE_URL;
+    Ok(LiveOverview {
+        config,
+        voices: live::VOICES,
+        usd_per_minute: live::USD_PER_MINUTE,
+        problem: live_endpoint(&state).err().map(|e| e.to_string()),
+        eu,
+        no_backend: live::NO_BACKEND,
+    })
+}
+
+#[tauri::command]
+fn live_config_set(state: State<'_, AppState>, config: LiveConfig) -> CmdResult<()> {
+    state.with(|s| s.set_live_config(&config))
+}
+
+/// The brief for a session's prep, from the patient's earlier signed notes and applied facts.
+fn prep_brief(s: &Store, session_id: &str) -> thera_core::Result<context::Brief> {
+    let session = s.session(session_id)?;
+    let patient = s.patient(&session.patient_id)?;
+    let notes = s.prior_session_notes(session_id, context::MAX_NOTES)?;
+    let facts: Vec<EpisodeFact> = match &session.episode_id {
+        Some(e) => s.episode_facts(e)?.into_iter().filter(|f| f.session_id != session_id).collect(),
+        None => Vec::new(),
+    };
+    context::prep_brief(&patient, s.pseudo_dictionary(&patient.id)?, &notes, &facts)
+}
+
+#[derive(Serialize)]
+struct PrepPreview {
+    #[serde(flatten)]
+    preview: extract::Preview,
+    stats: context::BriefStats,
+    terms: Vec<PseudoTerm>,
+}
+
+/// Exactly what a voice prep would send as context (besides her voice).
+#[tauri::command]
+fn prep_preview(state: State<'_, AppState>, session_id: String) -> CmdResult<PrepPreview> {
+    state.with(|s| {
+        let brief = prep_brief(s, &session_id)?;
+        let patient_id = s.session(&session_id)?.patient_id;
+        Ok(PrepPreview { preview: brief.preview(), stats: brief.stats.clone(), terms: s.pseudo_terms(&patient_id)? })
+    })
+}
+
+/// Opens the GPT-Live session: posts the WebView's SDP offer with the brief and returns the
+/// answer. Refused while a recording runs, when not opted in, or if the brief changed.
+#[tauri::command]
+async fn prep_start(app: AppHandle, session_id: String, digest: String, sdp: String) -> CmdResult<live::LiveSession> {
+    blocking(app, move |state| {
+        if lock(&state.recording)?.is_some() {
+            return Err(CmdError::Other("Während einer Aufnahme ist keine Sprachvorbereitung möglich".into()));
+        }
+        let config = state.with(|s| s.live_config())?;
+        if !config.enabled {
+            return Err(CmdError::Other("Die Sprachvorbereitung ist ausgeschaltet (Einstellungen → Stimme)".into()));
+        }
+        let brief = state.with(|s| prep_brief(s, &session_id))?;
+        if brief.digest != digest {
+            return Err(CmdError::Other("Der Text hat sich seit der Vorschau geändert. Bitte die Vorschau erneut prüfen.".into()));
+        }
+        let ep = live_endpoint(state)?;
+        let result = live::create_session(&ep, config.voice(), &brief.text, &sdp);
+        let stats = (brief.stats.notes, brief.stats.facts);
+        state.with(|s| s.log_prep_start(&session_id, result.as_ref().map(|_| stats).map_err(|_| "error")))?;
+        Ok(result?)
+    })
+    .await
+}
+
+/// Stores the finished conversation (captions, restored in the WebView) and the billed seconds.
+#[tauri::command]
+fn prep_finish(state: State<'_, AppState>, session_id: String, turns: Vec<PrepTurn>, seconds: Option<f64>, reason: String) -> CmdResult<SessionPrep> {
+    state.with(|s| {
+        s.save_prep_conversation(&session_id, &turns, seconds, live::MODEL, &reason)?;
+        s.session_prep(&session_id)?.ok_or_else(|| thera_core::Error::NotFound(session_id.clone()))
+    })
+}
+
+#[tauri::command]
+fn prep_get(state: State<'_, AppState>, session_id: String) -> CmdResult<Option<SessionPrep>> {
+    state.with(|s| s.session_prep(&session_id))
+}
+
+#[tauri::command]
+fn prep_sheet_set(state: State<'_, AppState>, session_id: String, sheet: String) -> CmdResult<()> {
+    state.with(|s| s.set_prep_sheet(&session_id, &sheet, None))
+}
+
+/// Turns the stored conversation into a prep sheet with the drafting model (streamed).
+/// `Ok(None)`: cancelled.
+#[tauri::command]
+async fn prep_sheet_run(app: AppHandle, session_id: String, request_id: String) -> CmdResult<Option<SessionPrep>> {
+    let events = app.clone();
+    blocking(app, move |state| {
+        let run = LlmRun::start(state, &request_id)?;
+        let (provider, model) = active_llm(state)?;
+        let prepared = state.with(|s| {
+            let prep = s.session_prep(&session_id)?.ok_or_else(|| thera_core::Error::NotFound("Kein Vorbereitungsgespräch".into()))?;
+            let patient = s.patient(&s.session(&session_id)?.patient_id)?;
+            live::prepare_sheet(&prep.transcript, &patient, s.pseudo_dictionary(&patient.id)?)
+        })?;
+        let ep = match llm_endpoint(state, provider, &run.cancel) {
+            Err(_) if run.cancelled() => return Ok(None),
+            r => r?.0,
+        };
+        let messages = [(llm::Role::System, &prepared.system), (llm::Role::User, &prepared.user)];
+        let Some(completion) = stream_call(state, &events, &run, "llm.prep_sheet", (provider, &model), &ep, &messages, &live::sheet_options())? else {
+            return Ok(None);
+        };
+        let html = live::sheet_html(&prepared.map.restore(&completion.text).text);
+        state.with(|s| {
+            s.set_prep_sheet(&session_id, &html, Some(&completion.model))?;
+            s.session_prep(&session_id)
+        })
+    })
+    .await
+}
+
 // ---------- local models (Phase 2) ----------
 
 /// Loading 15 GB from a slow disk can take minutes.
@@ -2066,6 +2211,14 @@ pub fn run() {
             tts_overview,
             tts_config_set,
             tts_sample,
+            live_overview,
+            live_config_set,
+            prep_preview,
+            prep_start,
+            prep_finish,
+            prep_get,
+            prep_sheet_set,
+            prep_sheet_run,
             stt_model_delete,
             stt_model_download,
             stt_model_import,

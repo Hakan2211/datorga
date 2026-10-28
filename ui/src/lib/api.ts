@@ -49,6 +49,12 @@ import type { CloudSttModel } from '@/bindings/CloudSttModel'
 import type { SttTarget } from '@/bindings/SttTarget'
 import type { TtsConfig } from '@/bindings/TtsConfig'
 import type { TtsVoice } from '@/bindings/TtsVoice'
+import type { LiveConfig } from '@/bindings/LiveConfig'
+import type { LiveVoice } from '@/bindings/LiveVoice'
+import type { LiveSession } from '@/bindings/LiveSession'
+import type { BriefStats } from '@/bindings/BriefStats'
+import type { PrepTurn } from '@/bindings/PrepTurn'
+import type { SessionPrep } from '@/bindings/SessionPrep'
 
 export type InitResult = {
   status: 'ready' | 'recovery_required' | 'new'
@@ -113,6 +119,15 @@ export type TtsOverview = {
   default_models: Partial<Record<ProviderId, string>>
   problem: string | null
 }
+export type LiveOverview = {
+  config: LiveConfig
+  voices: LiveVoice[]
+  usd_per_minute: number
+  problem: string | null
+  eu: boolean
+  no_backend: string
+}
+export type PrepPreview = Preview & { stats: BriefStats; terms: PseudoTerm[] }
 /** OpenAI's EU data-residency host (`llm::OPENAI_EU_BASE_URL`). */
 export const OPENAI_EU_BASE_URL = 'https://eu.api.openai.com/v1'
 /** Redaction preview: the outgoing text, the local token table and where it would go. */
@@ -235,6 +250,15 @@ export const api = {
   setTtsConfig: (config: TtsConfig) => invoke<void>('tts_config_set', { config }),
   /** MP3 of a fixed sample sentence with the saved read-aloud settings. */
   ttsSample: () => invoke<ArrayBuffer>('tts_sample'),
+  live: () => invoke<LiveOverview>('live_overview'),
+  setLiveConfig: (config: LiveConfig) => invoke<void>('live_config_set', { config }),
+  prepPreview: (sessionId: string) => invoke<PrepPreview>('prep_preview', { sessionId }),
+  prepStart: (sessionId: string, digest: string, sdp: string) => invoke<LiveSession>('prep_start', { sessionId, digest, sdp }),
+  prepFinish: (sessionId: string, turns: PrepTurn[], seconds: number | null, reason: string) =>
+    invoke<SessionPrep>('prep_finish', { sessionId, turns, seconds, reason }),
+  prep: (sessionId: string) => invoke<SessionPrep | null>('prep_get', { sessionId }),
+  setPrepSheet: (sessionId: string, sheet: string) => invoke<void>('prep_sheet_set', { sessionId, sheet }),
+  prepSheetRun: (sessionId: string, requestId: string) => invoke<SessionPrep | null>('prep_sheet_run', { sessionId, requestId }),
 
   extractPreview: (reportId: string) => invoke<ExtractPreview>('extract_preview', { reportId }),
   extractRun: (reportId: string, digest: string, requestId: string) =>
@@ -319,6 +343,8 @@ export const q = {
   llmCatalog: () => queryOptions({ queryKey: ['llmCatalog'], queryFn: api.llmCatalog, staleTime: Infinity }),
   llmSpend: () => queryOptions({ queryKey: ['llm', 'spend'], queryFn: api.llmSpend }),
   tts: () => queryOptions({ queryKey: ['llm', 'tts'], queryFn: api.tts }),
+  live: () => queryOptions({ queryKey: ['llm', 'live'], queryFn: api.live }),
+  prep: (sessionId: string) => queryOptions({ queryKey: ['prep', sessionId], queryFn: () => api.prep(sessionId) }),
   noteFacts: (reportId: string) => queryOptions({ queryKey: ['noteFacts', reportId], queryFn: () => api.noteFacts(reportId) }),
   draftSources: (reportId: string) =>
     queryOptions({ queryKey: ['draftSources', reportId], queryFn: () => api.draftSources(reportId) }),

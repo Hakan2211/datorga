@@ -1,5 +1,6 @@
 // Settings → "Stimme": the OpenAI key (voice features only, with region) and read-aloud
-// (provider, model, voice, sample). Read-aloud is off by default.
+// (provider, model, voice, sample), and the opt-in for voice prep over GPT-Live. Both are off
+// by default.
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -14,6 +15,7 @@ import {
   PlugZap,
   Volume2,
 } from "lucide-react";
+import type { LiveConfig } from "@/bindings/LiveConfig";
 import type { TtsConfig } from "@/bindings/TtsConfig";
 import {
   Select,
@@ -33,6 +35,7 @@ import {
   errorMessage,
   OPENAI_EU_BASE_URL,
   q,
+  type LiveOverview,
   type LlmOverview,
   type TtsOverview,
 } from "@/lib/api";
@@ -43,6 +46,7 @@ export function VoiceCard() {
   const { t } = useTranslation();
   const llm = useQuery(q.llm());
   const tts = useQuery(q.tts());
+  const live = useQuery(q.live());
 
   return (
     <Card className="max-w-2xl" data-testid="voice-card">
@@ -52,6 +56,7 @@ export function VoiceCard() {
       <CardContent className="space-y-4 text-sm">
         {llm.data && <OpenaiKey data={llm.data} />}
         {tts.data && <ReadAloud data={tts.data} />}
+        {live.data && <LivePrep data={live.data} />}
       </CardContent>
     </Card>
   );
@@ -332,6 +337,73 @@ function ReadAloud({ data }: { data: TtsOverview }) {
             : t("settings.voice.sample")}
         </Button>
       </div>
+      {data.problem && (
+        <p className="flex items-center gap-2 text-destructive">
+          <AlertTriangle className="size-4" /> {data.problem}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function LivePrep({ data }: { data: LiveOverview }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const config = data.config;
+  const save = useMutation({
+    mutationFn: (c: LiveConfig) => api.setLiveConfig(c),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["llm", "live"] }),
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const set = (patch: Partial<LiveConfig>) =>
+    save.mutate({ ...config, ...patch });
+
+  return (
+    <section className="space-y-3 rounded-md border p-3" data-testid="live-prep">
+      <p className="font-medium">{t("settings.voice.live")}</p>
+      <p className="text-[13px] text-muted-foreground">
+        {t("settings.voice.liveIntro")}
+      </p>
+      <p className="flex gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-[13px]">
+        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+        <span>{t("settings.voice.liveWarning")}</span>
+      </p>
+      <label className="flex items-center gap-2">
+        <Checkbox
+          checked={config.enabled}
+          onCheckedChange={(v) => set({ enabled: v === true })}
+        />
+        {t("settings.voice.liveEnabled")}
+      </label>
+      <div className="space-y-1.5">
+        <Label>{t("settings.voice.liveVoice")}</Label>
+        <Select
+          value={config.voice ?? data.voices[0].id}
+          onValueChange={(v) => set({ voice: v })}
+        >
+          <SelectTrigger className="w-72">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {data.voices.map((v) => (
+              <SelectItem key={v.id} value={v.id}>
+                {v.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {t("settings.voice.livePrice", {
+          price: data.usd_per_minute.toFixed(2),
+          ten: (data.usd_per_minute * 10).toFixed(2),
+        })}
+      </p>
+      {!data.eu && !data.problem && (
+        <p className="text-xs text-muted-foreground">
+          {t("settings.voice.liveNotEu")}
+        </p>
+      )}
       {data.problem && (
         <p className="flex items-center gap-2 text-destructive">
           <AlertTriangle className="size-4" /> {data.problem}
