@@ -33,12 +33,12 @@ pub(super) fn check_minutes(m: Option<i64>) -> Result<()> {
     }
 }
 
-fn check_date(d: &str) -> Result<()> {
+pub(super) fn check_date(d: &str) -> Result<()> {
     let fmt = time::macros::format_description!("[year]-[month]-[day]");
     time::Date::parse(d, &fmt).map(|_| ()).map_err(|_| Error::Invalid(format!("Datum muss JJJJ-MM-TT sein: {d}")))
 }
 
-fn check_task(input: &TaskInput) -> Result<()> {
+pub(super) fn check_task(input: &TaskInput) -> Result<()> {
     check_date(&input.date)?;
     if let Some(t) = &input.time {
         let fmt = time::macros::format_description!("[hour]:[minute]");
@@ -109,7 +109,7 @@ impl Store {
 
     /// Recordings or a note tie a session to its time (the note's date comes from it): it can't be
     /// moved, cancelled or deleted then.
-    fn session_untouched(&self, id: &str) -> Result<bool> {
+    pub(super) fn session_untouched(&self, id: &str) -> Result<bool> {
         Ok(self.conn.query_row(
             "SELECT NOT EXISTS (SELECT 1 FROM session_source WHERE session_id = ?1)
                 AND NOT EXISTS (SELECT 1 FROM report WHERE session_id = ?1)",

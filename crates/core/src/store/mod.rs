@@ -16,7 +16,9 @@ use crate::pseudo::{Dictionary, EntityKind};
 use crate::templates::{self, Template};
 use crate::{Error, Result};
 
+mod agent;
 mod calendar;
+pub use agent::{TextMode, TextProposal};
 pub use calendar::normalize_ts;
 
 const ACTOR: &str = "therapist";
@@ -39,6 +41,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V11__draft_quality.sql"),
     include_str!("migrations/V12__calendar.sql"),
     include_str!("migrations/V13__workshop.sql"),
+    include_str!("migrations/V14__assistant.sql"),
 ];
 
 /// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).
@@ -252,13 +255,15 @@ impl Store {
 
     /// One live dictation (voice mode or Werkstatt) ended. No text: engine, length and pieces.
     /// A cloud dictation (`dictation.cloud`) counts towards the spend.
-    pub fn log_dictation(&self, report_id: &str, log: &DictationLog) -> Result<()> {
+    /// `report_id`: `None` for a question to the assistant.
+    pub fn log_dictation(&self, report_id: Option<&str>, log: &DictationLog) -> Result<()> {
         let action = if log.provider.is_some() { "dictation.cloud" } else { "dictation.local" };
         let meta = json!({
             "provider": log.provider, "model": log.model, "ok": log.error.is_none(), "error": log.error,
             "seconds": (log.seconds * 10.0).round() / 10.0, "pieces": log.pieces, "requests": log.requests, "cost_usd": log.cost,
         });
-        audit::append(&self.conn, Entry { actor: ACTOR, action, entity_type: "report", entity_id: Some(report_id), meta })
+        let entity_type = if report_id.is_some() { "report" } else { "chat" };
+        audit::append(&self.conn, Entry { actor: ACTOR, action, entity_type, entity_id: report_id, meta })
     }
 
     // ---------- Diktat-Werkstatt ----------
@@ -428,6 +433,7 @@ impl Store {
         )?;
         let audio_dirs: Vec<String> = stmt.query_map([id], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
         let tx = self.conn.unchecked_transaction()?;
+        Self::erase_chat_threads(&tx, id)?;
         let n = tx.execute("DELETE FROM patient WHERE id = ?1", [id])?;
         if n == 0 {
             return Err(Error::NotFound(format!("patient {id}")));
@@ -2148,6 +2154,7 @@ mod tests {
             reasoning_tokens: None,
             cost,
             latency_ms: 1,
+            tool_calls: vec![],
         };
         store.log_llm_call("llm.extract", crate::llm::ProviderId::Openrouter, "m", Ok(&call(Some(0.012)))).unwrap();
         store.log_llm_call("llm.draft", crate::llm::ProviderId::Openrouter, "m", Ok(&call(Some(0.003)))).unwrap();
@@ -2751,8 +2758,8 @@ mod tests {
         let version: Option<String> = store.conn().query_row("SELECT prompt_version FROM report WHERE id = ?1", [&note.id], |r| r.get(0)).unwrap();
         assert_eq!(version.as_deref(), Some(crate::workshop::PROMPT_VERSION));
 
-        store.log_dictation(&note.id, &DictationLog { provider: Some("openrouter".into()), model: "w".into(), seconds: 12.34, pieces: 3, requests: 3, cost: Some(0.001), error: None }).unwrap();
-        store.log_dictation(&note.id, &DictationLog { provider: None, model: "large-v3-turbo-q5_0".into(), seconds: 5.0, pieces: 1, requests: 1, cost: None, error: None }).unwrap();
+        store.log_dictation(Some(&note.id), &DictationLog { provider: Some("openrouter".into()), model: "w".into(), seconds: 12.34, pieces: 3, requests: 3, cost: Some(0.001), error: None }).unwrap();
+        store.log_dictation(Some(&note.id), &DictationLog { provider: None, model: "large-v3-turbo-q5_0".into(), seconds: 5.0, pieces: 1, requests: 1, cost: None, error: None }).unwrap();
         let spend = store.llm_spend("2000").unwrap();
         assert_eq!((spend.requests, spend.usd), (1, 0.001), "only the cloud dictation counts");
         let events = audit::list(store.conn(), 100).unwrap();

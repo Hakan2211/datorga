@@ -111,11 +111,12 @@ fn a_budget_spent_on_thinking_is_reported_not_returned_empty() {
 
 #[test]
 fn models_are_listed_sorted() {
-    let (base, h) = serve_once(200, r#"{"data":[{"id":"z/b","name":"B","context_length":32000},{"id":"a/a"},{"bad":1}]}"#);
+    let (base, h) = serve_once(200, r#"{"data":[{"id":"z/b","name":"B","context_length":32000,"supported_parameters":["tools","temperature"]},{"id":"a/a"},{"bad":1}]}"#);
     let models = llm::list_models(&ep(base)).unwrap();
     assert!(h.join().unwrap().head.starts_with("GET /v1/models"));
     assert_eq!(models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["a/a", "z/b"]);
     assert_eq!(models[1].context_length, Some(32000));
+    assert_eq!((models[0].tools, models[1].tools), (None, Some(true)));
 }
 
 #[test]
@@ -299,4 +300,64 @@ fn an_endpoint_that_ignores_stream_still_works() {
         .to_string();
     h.join().unwrap();
     assert!(err.contains("Zu viele Anfragen") && err.contains("slow down"), "{err}");
+}
+
+#[test]
+fn streamed_tool_calls_are_assembled_from_their_fragments() {
+    let (base, h) = serve_stream(
+        &[
+            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"search_patients\",\"arguments\":\"\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"query\\\":\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"[PERSON_1]\\\"}\"}},{\"index\":1,\"id\":\"call_b\",\"function\":{\"name\":\"due_items\",\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ],
+        Duration::from_millis(2),
+    );
+    let mut p = Pseudonymizer::new(Dictionary::from_patient(&patient()));
+    let question = p.pseudonymize("Termin mit Frau Brenner?").unwrap();
+    let earlier = llm::SentCall { id: "c0".into(), name: "due_items".into(), arguments: p.pseudonymize("{}").unwrap() };
+    let messages = [
+        llm::Message::Text(Role::User, question),
+        llm::Message::Calls { content: None, calls: vec![earlier] },
+        llm::Message::ToolResult { call_id: "c0".into(), content: p.pseudonymize("Fällig: nichts").unwrap() },
+    ];
+    let tools = serde_json::json!([{ "type": "function", "function": { "name": "due_items", "parameters": { "type": "object" } } }]);
+    let c = llm::chat_stream_tools(&ep(base), "m", &messages, &tools, &ChatOptions::default(), &AtomicBool::new(false), |_| {}).unwrap();
+    let body: serde_json::Value = serde_json::from_str(&h.join().unwrap()).unwrap();
+    assert_eq!(body["tools"], tools);
+    assert_eq!(body["messages"][0]["content"], "Termin mit Frau [PERSON_1]?");
+    assert_eq!(body["messages"][1]["tool_calls"][0]["function"]["name"], "due_items");
+    assert!(body["messages"][1]["content"].is_null());
+    assert_eq!(body["messages"][2]["role"], "tool");
+    assert_eq!(body["messages"][2]["tool_call_id"], "c0");
+    assert_eq!(c.text, "");
+    assert_eq!(
+        c.tool_calls,
+        vec![
+            llm::ToolCall { id: "call_a".into(), name: "search_patients".into(), arguments: r#"{"query":"[PERSON_1]"}"#.into() },
+            llm::ToolCall { id: "call_b".into(), name: "due_items".into(), arguments: "{}".into() },
+        ]
+    );
+}
+
+#[test]
+fn tool_calls_in_a_plain_json_answer_are_read() {
+    let (base, h) = serve_once(
+        200,
+        r#"{"model":"m","choices":[{"message":{"content":null,"tool_calls":[{"id":"x","type":"function","function":{"name":"calendar_day","arguments":"{\"date\":\"2026-10-30\"}"}}]},"finish_reason":"tool_calls"}]}"#,
+    );
+    let msg = llm::Message::Text(Role::User, hello());
+    let c = llm::chat_stream_tools(&ep(base), "m", &[msg], &serde_json::json!([]), &ChatOptions::default(), &AtomicBool::new(false), |_| {}).unwrap();
+    h.join().unwrap();
+    assert_eq!(c.tool_calls.len(), 1);
+    assert_eq!(c.tool_calls[0].arguments, r#"{"date":"2026-10-30"}"#);
+}
+
+#[test]
+fn openrouter_requires_tool_support_when_tools_are_sent() {
+    let ep = Endpoint { provider: ProviderId::Openrouter, base_url: "https://openrouter.ai/api/v1".into(), api_key: None };
+    let b = llm::tools_body(&ep, "x/y", &[llm::Message::Text(Role::User, hello())], &serde_json::json!([]), &ChatOptions::default());
+    assert_eq!(b["provider"]["require_parameters"], true);
+    assert_eq!(b["provider"]["zdr"], true);
 }

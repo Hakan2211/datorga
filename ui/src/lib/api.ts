@@ -58,6 +58,11 @@ import type { PrepTurn } from '@/bindings/PrepTurn'
 import type { SessionPrep } from '@/bindings/SessionPrep'
 import type { CalendarSession } from '@/bindings/CalendarSession'
 import type { DueItem } from '@/bindings/DueItem'
+import type { AgentProposal } from '@/bindings/AgentProposal'
+import type { ChatMessage } from '@/bindings/ChatMessage'
+import type { ChatScope } from '@/bindings/ChatScope'
+import type { ChatThread } from '@/bindings/ChatThread'
+import type { Zone } from '@/bindings/Zone'
 import type { SessionUpdate } from '@/bindings/SessionUpdate'
 import type { Task } from '@/bindings/Task'
 import type { TaskInput } from '@/bindings/TaskInput'
@@ -148,7 +153,8 @@ export type DictationOverview = {
 }
 export type DictationStatus = {
   id: string
-  report_id: string
+  /** `null`: a question to the assistant. */
+  report_id: string | null
   engine: SttTarget
   duration_ms: number
   level: number
@@ -161,8 +167,8 @@ export type DictationStatus = {
   error: string | null
 }
 /** One transcribed piece (`text: null`: nothing was said). */
-export type DictationPiece = { dictation_id: string; report_id: string; seq: number; text: string | null }
-export type DictationDone = { dictation_id: string; report_id: string; error: string | null }
+export type DictationPiece = { dictation_id: string; report_id: string | null; seq: number; text: string | null }
+export type DictationDone = { dictation_id: string; report_id: string | null; error: string | null }
 /** "Entwurf erstellen" in the Werkstatt. */
 export type WorkshopChoice = { instruction: string | null; withExisting: boolean }
 /** What the therapist chose in the draft dialog (`sessionIds: null` = all sessions). */
@@ -192,6 +198,16 @@ export type DraftResult = {
 }
 /** A piece of streamed answer text, still tokenized. Shown as progress only. */
 export type LlmDelta = { request_id: string; text: string }
+/** An assistant thread with everything the chat shows. `steps`: a German line per tool call id. */
+export type ChatView = {
+  thread: ChatThread
+  messages: ChatMessage[]
+  steps: Record<string, string>
+  proposals: AgentProposal[]
+}
+export type ChatEnd = 'answered' | 'cancelled' | 'step_limit'
+/** The assistant's answer so far, restored (`agent:text`). */
+export type AgentText = { request_id: string; thread_id: string; text: string }
 export type ExtractProgress = { report_id: string; stage: 'loading' | 'running'; done: number; total: number }
 
 export type LocalModelView = {
@@ -289,8 +305,9 @@ export const api = {
   recordingStatus: () => invoke<RecordingStatus | null>('recording_status'),
   stopRecording: () => invoke<SessionSource>('recording_stop'),
   dictationOverview: () => invoke<DictationOverview>('dictation_overview'),
-  /** Live dictation into a report's editor or Werkstatt; pieces arrive as `dictation:piece`. */
-  dictationStart: (reportId: string, engine: SttTarget | null, deviceId: string | null) =>
+  /** Live dictation into a report's editor or Werkstatt (`null`: the assistant's question box);
+   *  pieces arrive as `dictation:piece`. */
+  dictationStart: (reportId: string | null, engine: SttTarget | null, deviceId: string | null) =>
     invoke<{ id: string; engine: SttTarget }>('dictation_start', { reportId, engine, deviceId }),
   dictationStatus: () => invoke<DictationStatus | null>('dictation_status'),
   /** The utterance in progress is still transcribed unless `discard`. */
@@ -392,6 +409,28 @@ export const api = {
   /** The pages an export would write now, as PNG data URLs (`scale` pixels per point). */
   previewReport: (id: string, scale: number) => invoke<string[]>('report_preview', { id, scale }),
 
+  chatThreads: (scope?: ChatScope, refId?: string) =>
+    invoke<ChatThread[]>('chat_threads', { scope: scope ?? null, refId: refId ?? null }),
+  createChatThread: (scope: ChatScope, refId: string | null) => invoke<ChatThread>('chat_thread_create', { scope, refId }),
+  chat: (id: string) => invoke<ChatView>('chat_get', { id }),
+  deleteChatThread: (id: string) => invoke<void>('chat_thread_delete', { id }),
+  /** One question; resolves when the assistant answered, was cancelled (`llmCancel`) or gave up. */
+  chatSend: (threadId: string, text: string, zone: Zone, requestId: string) =>
+    invoke<ChatEnd>('chat_send', { threadId, text, zone, requestId }),
+  applyProposal: (id: string) => invoke<AgentProposal>('proposal_apply', { id }),
+  discardProposal: (id: string) => invoke<AgentProposal>('proposal_discard', { id }),
+  agentToolsSupport: () => invoke<boolean | null>('agent_tools_support'),
+  /** MP3 of an answer, read aloud with the saved read-aloud settings. */
+  chatSpeak: (threadId: string, messageId: string) => invoke<ArrayBuffer>('chat_speak', { threadId, messageId }),
+  onAgentText: (requestId: string, cb: (text: string) => void): Promise<UnlistenFn> =>
+    listen<AgentText>('agent:text', (e) => {
+      if (e.payload.request_id === requestId) cb(e.payload.text)
+    }),
+  onAgentChanged: (threadId: string, cb: () => void): Promise<UnlistenFn> =>
+    listen<{ thread_id: string }>('agent:changed', (e) => {
+      if (e.payload.thread_id === threadId) cb()
+    }),
+
   audit: (limit = 200) => invoke<AuditEvent[]>('audit_list', { limit }),
   auditVerify: () => invoke<number | null>('audit_verify'),
 
@@ -468,6 +507,11 @@ export const q = {
   report: (id: string) => queryOptions({ queryKey: ['report', id], queryFn: () => api.report(id) }),
   checklist: (id: string) => queryOptions({ queryKey: ['checklist', id], queryFn: () => api.checklist(id) }),
   audit: () => queryOptions({ queryKey: ['audit'], queryFn: () => api.audit() }),
+  chatThreads: (scope?: ChatScope, refId?: string) =>
+    queryOptions({ queryKey: ['chat', 'threads', scope ?? 'all', refId ?? ''], queryFn: () => api.chatThreads(scope, refId) }),
+  chat: (id: string) => queryOptions({ queryKey: ['chat', id], queryFn: () => api.chat(id) }),
+  // Asks the provider's model list; no patient data.
+  agentTools: () => queryOptions({ queryKey: ['llm', 'agentTools'], queryFn: api.agentToolsSupport, staleTime: 10 * 60_000, retry: false }),
   setting: <T,>(key: string) => queryOptions({ queryKey: ['setting', key], queryFn: () => api.setting<T>(key) }),
 }
 

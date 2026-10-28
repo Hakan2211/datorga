@@ -626,3 +626,85 @@ pub struct ReportSummary {
     pub status: ReportStatus,
     pub updated_at: String,
 }
+
+// ---------- assistant (slice 25) ----------
+
+str_enum!(
+    /// What an assistant thread is about: everything, or one patient / one session (its tools
+    /// then see only that patient).
+    ChatScope { Global => "global", Patient => "patient", Session => "session" }
+);
+
+str_enum!(ChatRole { User => "user", Assistant => "assistant", Tool => "tool" });
+
+str_enum!(
+    /// What an accepted proposal does, each through the normal store command.
+    ProposalKind {
+        Session => "session",
+        Reschedule => "reschedule",
+        Task => "task",
+        SectionText => "section_text",
+        NoteText => "note_text",
+        DayPlan => "day_plan",
+    }
+);
+
+str_enum!(ProposalStatus { Open => "open", Applied => "applied", Discarded => "discarded" });
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ChatThread {
+    pub id: String,
+    pub scope: ChatScope,
+    pub ref_id: Option<String>,
+    /// The first question, shortened; `None` until she asked something.
+    pub title: Option<String>,
+    /// The scoped patient's name (shown locally only).
+    pub patient_name: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A tool call as stored and shown ("Was ich getan habe"). Arguments are restored.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ChatToolCall {
+    pub id: String,
+    pub name: String,
+    #[ts(type = "unknown")]
+    pub arguments: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ChatMessage {
+    pub id: String,
+    #[ts(type = "number")]
+    pub seq: i64,
+    pub role: ChatRole,
+    /// Restored text. For a tool message: what the tool returned.
+    pub content: String,
+    pub tool_calls: Vec<ChatToolCall>,
+    pub tool_call_id: Option<String>,
+    pub tool_name: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AgentProposal {
+    pub id: String,
+    pub thread_id: String,
+    /// The tool message that created it.
+    pub message_id: String,
+    pub kind: ProposalKind,
+    pub patient_id: Option<String>,
+    pub summary: String,
+    #[ts(type = "unknown")]
+    pub payload: serde_json::Value,
+    pub status: ProposalStatus,
+    /// What applying created or changed (session, task, report id; the date of a day plan).
+    pub result_id: Option<String>,
+    pub created_at: String,
+    pub decided_at: Option<String>,
+}

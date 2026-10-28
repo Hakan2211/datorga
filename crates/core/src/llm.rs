@@ -215,6 +215,8 @@ pub struct RemoteModel {
     pub id: String,
     pub name: Option<String>,
     pub context_length: Option<u32>,
+    /// Takes `tools` (from `supported_parameters`); `None` when the endpoint doesn't say.
+    pub tools: Option<bool>,
 }
 
 /// `GET /models`. Sends no patient data.
@@ -237,6 +239,10 @@ pub fn list_models(ep: &Endpoint) -> Result<Vec<RemoteModel>> {
                 id: m.get("id")?.as_str()?.to_string(),
                 name: m.get("name").and_then(Value::as_str).map(str::to_string),
                 context_length: m.get("context_length").and_then(Value::as_u64).map(|n| n.min(u32::MAX as u64) as u32),
+                tools: m
+                    .get("supported_parameters")
+                    .and_then(Value::as_array)
+                    .map(|ps| ps.iter().any(|p| p.as_str() == Some("tools"))),
             })
         })
         .collect();
@@ -252,6 +258,50 @@ pub enum Role {
     System,
     User,
     Assistant,
+    Tool,
+}
+
+/// A tool call the model asked for. `arguments` is the model's JSON text, still tokenized.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+/// An earlier tool call sent back with the conversation. The arguments pass the pseudonymizer
+/// again like every other text (they are stored restored).
+#[derive(Debug, Clone)]
+pub struct SentCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Pseudonymized<String>,
+}
+
+/// One message of a conversation with tools ([`chat_stream_tools`]).
+#[derive(Debug, Clone)]
+pub enum Message {
+    Text(Role, Pseudonymized<String>),
+    /// An assistant turn that called tools.
+    Calls { content: Option<Pseudonymized<String>>, calls: Vec<SentCall> },
+    /// What a tool returned.
+    ToolResult { call_id: String, content: Pseudonymized<String> },
+}
+
+impl Message {
+    fn json(&self) -> Value {
+        match self {
+            Message::Text(role, text) => json!({ "role": role, "content": text.get() }),
+            Message::Calls { content, calls } => json!({
+                "role": "assistant",
+                "content": content.as_ref().map(|c| c.get()),
+                "tool_calls": calls.iter().map(|c| json!({
+                    "id": c.id, "type": "function", "function": { "name": c.name, "arguments": c.arguments.get() },
+                })).collect::<Vec<_>>(),
+            }),
+            Message::ToolResult { call_id, content } => json!({ "role": "tool", "tool_call_id": call_id, "content": content.get() }),
+        }
+    }
 }
 
 /// How much the model may think before answering. Set per task by the app, never by the therapist.
@@ -293,11 +343,28 @@ pub struct Completion {
     /// What the router billed in USD (OpenRouter reports it; others don't).
     pub cost: Option<f64>,
     pub latency_ms: u64,
+    /// Tools the model wants run (only with [`chat_stream_tools`]); `text` may then be empty.
+    pub tool_calls: Vec<ToolCall>,
 }
 
 /// The request body. Message text must have passed the pseudonymizer.
 pub fn chat_body(ep: &Endpoint, model: &str, messages: &[(Role, &Pseudonymized<String>)], opts: &ChatOptions) -> Value {
     let msgs: Vec<Value> = messages.iter().map(|(r, t)| json!({ "role": r, "content": t.get() })).collect();
+    request_body(ep, model, msgs, opts)
+}
+
+/// The request body with tools. `tools` are the app's own definitions (no patient data).
+pub fn tools_body(ep: &Endpoint, model: &str, messages: &[Message], tools: &Value, opts: &ChatOptions) -> Value {
+    let mut body = request_body(ep, model, messages.iter().map(Message::json).collect(), opts);
+    body["tools"] = tools.clone();
+    if ep.provider == ProviderId::Openrouter {
+        // Route only to endpoints that support tool calls instead of dropping the tools silently.
+        body["provider"]["require_parameters"] = json!(true);
+    }
+    body
+}
+
+fn request_body(ep: &Endpoint, model: &str, msgs: Vec<Value>, opts: &ChatOptions) -> Value {
     let mut body = json!({
         "model": model,
         "messages": msgs,
@@ -347,13 +414,26 @@ fn json_completion(status: u16, text: &str, model: &str, started: Instant) -> Re
     }
     let content = v.pointer("/choices/0/message/content").and_then(Value::as_str).unwrap_or("");
     let finish = v.pointer("/choices/0/finish_reason").and_then(Value::as_str);
-    completion(content, finish, &v, model, latency_ms)
+    let calls = v
+        .pointer("/choices/0/message/tool_calls")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .map(|c| ToolCall {
+                    id: c.get("id").and_then(Value::as_str).unwrap_or_default().to_string(),
+                    name: c.pointer("/function/name").and_then(Value::as_str).unwrap_or_default().to_string(),
+                    arguments: c.pointer("/function/arguments").and_then(Value::as_str).unwrap_or_default().to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    completion(content, finish, calls, &v, model, latency_ms)
 }
 
 /// Checks the answer text and reads model and usage from `v` (the response, or the stream chunk
 /// that carried the usage).
-fn completion(content: &str, finish: Option<&str>, v: &Value, model: &str, latency_ms: u64) -> Result<Completion> {
-    if content.trim().is_empty() {
+fn completion(content: &str, finish: Option<&str>, tool_calls: Vec<ToolCall>, v: &Value, model: &str, latency_ms: u64) -> Result<Completion> {
+    if content.trim().is_empty() && tool_calls.is_empty() {
         return Err(Error::Llm(if finish == Some("length") {
             "Antwort abgeschnitten: das Modell hat sein Token-Budget mit Nachdenken aufgebraucht".into()
         } else {
@@ -369,6 +449,7 @@ fn completion(content: &str, finish: Option<&str>, v: &Value, model: &str, laten
         reasoning_tokens: usage("completion_tokens_details/reasoning_tokens"),
         cost: v.pointer("/usage/cost").and_then(Value::as_f64),
         latency_ms,
+        tool_calls,
     })
 }
 
@@ -390,12 +471,31 @@ pub fn chat_stream(
     messages: &[(Role, &Pseudonymized<String>)],
     opts: &ChatOptions,
     cancel: &AtomicBool,
-    mut on_delta: impl FnMut(&str),
+    on_delta: impl FnMut(&str),
 ) -> Result<Completion> {
     if model.trim().is_empty() {
         return Err(Error::Invalid("Kein Modell gewählt".into()));
     }
-    let mut body = chat_body(ep, model, messages, opts);
+    stream_body(ep, model, chat_body(ep, model, messages, opts), opts, cancel, on_delta)
+}
+
+/// [`chat_stream`] with tools: the answer is text, [`Completion::tool_calls`], or both.
+pub fn chat_stream_tools(
+    ep: &Endpoint,
+    model: &str,
+    messages: &[Message],
+    tools: &Value,
+    opts: &ChatOptions,
+    cancel: &AtomicBool,
+    on_delta: impl FnMut(&str),
+) -> Result<Completion> {
+    if model.trim().is_empty() {
+        return Err(Error::Invalid("Kein Modell gewählt".into()));
+    }
+    stream_body(ep, model, tools_body(ep, model, messages, tools, opts), opts, cancel, on_delta)
+}
+
+fn stream_body(ep: &Endpoint, model: &str, mut body: Value, opts: &ChatOptions, cancel: &AtomicBool, mut on_delta: impl FnMut(&str)) -> Result<Completion> {
     body["stream"] = json!(true);
     // Usage (and OpenRouter's cost) come in a last chunk only when asked for.
     body["stream_options"] = json!({ "include_usage": true });
@@ -451,6 +551,8 @@ fn stream_request(
     }
     let mut reader = BufReader::new(resp.body_mut().with_config().limit(16 << 20).reader());
     let (mut text, mut finish, mut meta) = (String::new(), None::<String>, Value::Null);
+    // Tool calls arrive in pieces keyed by `index`: id and name first, the arguments in fragments.
+    let mut calls: Vec<ToolCall> = Vec::new();
     let mut raw = Vec::new();
     loop {
         raw.clear();
@@ -475,6 +577,22 @@ fn stream_request(
             text.push_str(t);
             let _ = tx.send(StreamEvent::Delta(t.to_string()));
         }
+        for d in v.pointer("/choices/0/delta/tool_calls").and_then(Value::as_array).into_iter().flatten() {
+            let i = d.get("index").and_then(Value::as_u64).map_or(calls.len().saturating_sub(1), |i| i as usize);
+            if i >= calls.len() {
+                calls.resize(i + 1, ToolCall { id: String::new(), name: String::new(), arguments: String::new() });
+            }
+            let call = &mut calls[i];
+            if let Some(id) = d.get("id").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                call.id = id.to_string();
+            }
+            if let Some(n) = d.pointer("/function/name").and_then(Value::as_str) {
+                call.name.push_str(n);
+            }
+            if let Some(a) = d.pointer("/function/arguments").and_then(Value::as_str) {
+                call.arguments.push_str(a);
+            }
+        }
         if let Some(f) = v.pointer("/choices/0/finish_reason").and_then(Value::as_str) {
             finish = Some(f.to_string());
         }
@@ -482,7 +600,8 @@ fn stream_request(
             meta = v;
         }
     }
-    completion(&text, finish.as_deref(), &meta, model, started.elapsed().as_millis() as u64)
+    calls.retain(|c| !c.name.is_empty());
+    completion(&text, finish.as_deref(), calls, &meta, model, started.elapsed().as_millis() as u64)
 }
 
 /// Connection test with a fixed German prompt (no patient data).

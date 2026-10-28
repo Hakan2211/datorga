@@ -33,6 +33,7 @@ use thera_core::context;
 use thera_core::live::{self, LiveConfig};
 use thera_core::dictate;
 use thera_core::workshop;
+use thera_core::agent::{self, Host};
 
 const KEYRING_SERVICE: &str = "de.datorga.thera";
 const KEYRING_USER: &str = "master-key";
@@ -1498,7 +1499,7 @@ async fn llm_models(app: AppHandle, provider: ProviderId) -> CmdResult<Vec<Remot
             return Ok(local::MODELS
                 .iter()
                 .filter(|m| model_installed(state, &m.file))
-                .map(|m| RemoteModel { id: m.file.id.into(), name: Some(m.label.into()), context_length: Some(m.ctx) })
+                .map(|m| RemoteModel { id: m.file.id.into(), name: Some(m.label.into()), context_length: Some(m.ctx), tools: Some(true) })
                 .collect());
         }
         let (ep, _) = llm_endpoint(state, provider, &AtomicBool::new(false))?;
@@ -2070,7 +2071,7 @@ const WHISPER_IDLE: std::time::Duration = std::time::Duration::from_secs(300);
 /// The one live dictation that may run at a time (it shares the microphone with recordings).
 struct ActiveDictation {
     id: String,
-    report_id: String,
+    report_id: Option<String>,
     target: SttTarget,
     recorder: Recorder,
     splitter: Arc<Mutex<dictate::Splitter>>,
@@ -2143,13 +2144,14 @@ struct DictationStarted {
     engine: SttTarget,
 }
 
-/// Starts a live dictation into report `report_id` (the editor's voice mode or its Werkstatt).
+/// Starts a live dictation into report `report_id` (the editor's voice mode or its Werkstatt), or
+/// without one into the assistant's question box.
 /// Pieces come back as `dictation:piece` events; `dictation:done` follows the last one.
 #[tauri::command]
 fn dictation_start(
     app: AppHandle,
     state: State<'_, AppState>,
-    report_id: String,
+    report_id: Option<String>,
     engine: Option<SttTarget>,
     device_id: Option<String>,
 ) -> CmdResult<DictationStarted> {
@@ -2160,8 +2162,8 @@ fn dictation_start(
     if slot.is_some() {
         return Err(CmdError::Other("Es läuft bereits ein Diktat".into()));
     }
-    let report = state.with(|s| s.report(&report_id))?;
-    if matches!(report.status, ReportStatus::Signed | ReportStatus::Exported) {
+    let report = report_id.as_deref().map(|id| state.with(|s| s.report(id))).transpose()?;
+    if report.is_some_and(|r| matches!(r.status, ReportStatus::Signed | ReportStatus::Exported)) {
         return Err(CmdError::Other("Unterschrieben: hier kann nichts mehr diktiert werden".into()));
     }
     let overview = dictation_overview_for(&state)?;
@@ -2204,7 +2206,7 @@ fn dictation_start(
     let worker = (app.clone(), id.clone(), report_id.clone(), shared.clone());
     std::thread::spawn(move || {
         let (app, id, report_id, shared) = worker;
-        dictation_worker(&app, &id, &report_id, cloud, rx, &shared);
+        dictation_worker(&app, &id, report_id.as_deref(), cloud, rx, &shared);
     });
     *slot = Some(ActiveDictation { id: id.clone(), report_id, target, recorder, splitter, pieces: tx, shared });
     Ok(DictationStarted { id, engine: target })
@@ -2213,7 +2215,7 @@ fn dictation_start(
 #[derive(Clone, Serialize)]
 struct DictationPiece<'a> {
     dictation_id: &'a str,
-    report_id: &'a str,
+    report_id: Option<&'a str>,
     seq: u32,
     /// `None`: nothing was said (noise, a cough).
     text: Option<&'a str>,
@@ -2222,7 +2224,7 @@ struct DictationPiece<'a> {
 #[derive(Clone, Serialize)]
 struct DictationDone<'a> {
     dictation_id: &'a str,
-    report_id: &'a str,
+    report_id: Option<&'a str>,
     error: Option<String>,
 }
 
@@ -2231,7 +2233,7 @@ struct DictationDone<'a> {
 fn dictation_worker(
     app: &AppHandle,
     id: &str,
-    report_id: &str,
+    report_id: Option<&str>,
     cloud: Option<(ProviderId, CloudStt)>,
     rx: std::sync::mpsc::Receiver<dictate::Piece>,
     shared: &DictationShared,
@@ -2344,7 +2346,7 @@ fn schedule_whisper_idle(app: AppHandle) {
 #[derive(Serialize)]
 struct DictationStatus {
     id: String,
-    report_id: String,
+    report_id: Option<String>,
     engine: SttTarget,
     duration_ms: u64,
     level: f32,
@@ -2645,6 +2647,174 @@ async fn prep_sheet_run(app: AppHandle, session_id: String, request_id: String) 
     .await
 }
 
+// ---------- assistant (slice 25) ----------
+
+#[derive(Serialize)]
+struct ChatView {
+    thread: ChatThread,
+    messages: Vec<ChatMessage>,
+    /// "Was ich getan habe": a German line per tool call id.
+    steps: HashMap<String, String>,
+    proposals: Vec<AgentProposal>,
+}
+
+fn chat_view(s: &Store, id: &str) -> thera_core::Result<ChatView> {
+    let thread = s.chat_thread(id)?;
+    let messages = s.chat_messages(id)?;
+    let steps = messages.iter().flat_map(|m| &m.tool_calls).map(|c| (c.id.clone(), agent::step_label(&c.name, &c.arguments))).collect();
+    Ok(ChatView { thread, messages, steps, proposals: s.proposals(id)? })
+}
+
+/// Newest first; with `scope`, only that kind (and `ref_id`).
+#[tauri::command]
+fn chat_threads(state: State<'_, AppState>, scope: Option<ChatScope>, ref_id: Option<String>) -> CmdResult<Vec<ChatThread>> {
+    state.with(|s| s.chat_threads(scope, ref_id.as_deref(), 100))
+}
+
+#[tauri::command]
+fn chat_thread_create(state: State<'_, AppState>, scope: ChatScope, ref_id: Option<String>) -> CmdResult<ChatThread> {
+    state.with(|s| s.create_chat_thread(scope, ref_id.as_deref()))
+}
+
+#[tauri::command]
+fn chat_get(state: State<'_, AppState>, id: String) -> CmdResult<ChatView> {
+    state.with(|s| chat_view(s, &id))
+}
+
+#[tauri::command]
+fn chat_thread_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.with(|s| s.delete_chat_thread(&id))
+}
+
+#[derive(Clone, Serialize)]
+struct AgentText<'a> {
+    request_id: &'a str,
+    thread_id: &'a str,
+    /// The answer so far, restored (real names).
+    text: &'a str,
+}
+
+#[derive(Clone, Serialize)]
+struct AgentChanged<'a> {
+    thread_id: &'a str,
+}
+
+/// The app side of the loop: store access per step, the streamed request with its audit entry.
+struct AppHost<'a> {
+    state: &'a AppState,
+    events: &'a AppHandle,
+    run: &'a LlmRun<'a>,
+    thread_id: &'a str,
+    provider: ProviderId,
+    model: String,
+    ep: Endpoint,
+}
+
+impl Host for AppHost<'_> {
+    fn store<T>(&mut self, f: impl FnOnce(&Store) -> thera_core::Result<T>) -> thera_core::Result<T> {
+        self.state.with(f).map_err(|e| match e {
+            CmdError::Core(c) => c,
+            CmdError::Other(m) => thera_core::Error::Invalid(m),
+        })
+    }
+
+    fn complete(&mut self, messages: &[llm::Message], tools: &serde_json::Value, map: &thera_core::pseudo::TokenMap) -> thera_core::Result<Option<llm::Completion>> {
+        if self.run.cancelled() {
+            return Ok(None);
+        }
+        let mut text = String::new();
+        let result = llm::chat_stream_tools(&self.ep, &self.model, messages, tools, &agent::chat_options(), &self.run.cancel, |delta| {
+            text.push_str(delta);
+            let shown = agent::restore_partial(map, &text);
+            let _ = self.events.emit("agent:text", AgentText { request_id: &self.run.id, thread_id: self.thread_id, text: &shown });
+        });
+        let reason = if matches!(result, Err(thera_core::Error::Cancelled)) { "cancelled" } else { "error" };
+        let (provider, model) = (self.provider, self.model.clone());
+        self.store(|s| s.log_llm_call("llm.agent", provider, &model, result.as_ref().map_err(|_| reason)))?;
+        match result {
+            Err(thera_core::Error::Cancelled) => Ok(None),
+            r => r.map(Some),
+        }
+    }
+
+    fn changed(&mut self) {
+        let _ = self.events.emit("agent:changed", AgentChanged { thread_id: self.thread_id });
+    }
+}
+
+/// One question to the assistant. Streams the answer (`agent:text`), announces each stored
+/// message (`agent:changed`) and returns when it answered, was cancelled (`llm_cancel`) or gave up.
+#[tauri::command]
+async fn chat_send(app: AppHandle, thread_id: String, text: String, zone: agent::Zone, request_id: String) -> CmdResult<&'static str> {
+    let events = app.clone();
+    blocking(app, move |state| {
+        let run = LlmRun::start(state, &request_id)?;
+        let (provider, model) = active_llm(state)?;
+        let clock = agent::Clock::current(&zone)?;
+        let ep = match llm_endpoint(state, provider, &run.cancel) {
+            Err(_) if run.cancelled() => return Ok("cancelled"),
+            r => r?.0,
+        };
+        let mut host = AppHost { state, events: &events, run: &run, thread_id: &thread_id, provider, model, ep };
+        let end = agent::run_turn(&mut host, &thread_id, &text, &clock)?;
+        Ok(match end {
+            agent::TurnEnd::Answered => "answered",
+            agent::TurnEnd::Cancelled => "cancelled",
+            agent::TurnEnd::StepLimit => "step_limit",
+        })
+    })
+    .await
+}
+
+/// "Übernehmen": checks again and runs the normal store command (audited `agent.apply`).
+#[tauri::command]
+fn proposal_apply(state: State<'_, AppState>, id: String) -> CmdResult<AgentProposal> {
+    state.with(|s| s.apply_proposal(&id))
+}
+
+#[tauri::command]
+fn proposal_discard(state: State<'_, AppState>, id: String) -> CmdResult<AgentProposal> {
+    state.with(|s| s.discard_proposal(&id))
+}
+
+/// Whether the drafting model takes tools, from the provider's model list (`None`: unknown).
+#[tauri::command]
+async fn agent_tools_support(app: AppHandle) -> CmdResult<Option<bool>> {
+    blocking(app, move |state| {
+        let (provider, model) = active_llm(state)?;
+        if provider == ProviderId::Local {
+            // llama-server applies the model's chat template with tool support (--jinja).
+            return Ok(Some(true));
+        }
+        let (ep, _) = llm_endpoint(state, provider, &AtomicBool::new(false))?;
+        Ok(llm::list_models(&ep).ok().and_then(|ms| ms.into_iter().find(|m| m.id == model)).and_then(|m| m.tools))
+    })
+    .await
+}
+
+/// Reads an answer aloud (MP3). Pseudonymized with the thread's map; placeholders become a
+/// neutral word.
+#[tauri::command]
+async fn chat_speak(app: AppHandle, thread_id: String, message_id: String) -> CmdResult<tauri::ipc::Response> {
+    blocking(app, move |state| {
+        let config = state.with(|s| s.tts_config())?;
+        if !config.enabled {
+            return Err(CmdError::Other("Vorlesen ist ausgeschaltet (Einstellungen → Stimme)".into()));
+        }
+        let model = config.model().ok_or_else(|| CmdError::Other("Kein Sprachmodell eingetragen".into()))?;
+        let text = state.with(|s| {
+            let m = s.chat_messages(&thread_id)?.into_iter().find(|m| m.id == message_id).ok_or_else(|| thera_core::Error::NotFound(message_id.clone()))?;
+            let mut p = thera_core::pseudo::Pseudonymizer::with_map(s.assistant_dictionary()?, s.chat_thread_map(&thread_id)?);
+            Ok(p.pseudonymize(&thera_core::pseudo::defuse_tokens(&m.content))?.speakable())
+        })?;
+        let (ep, _) = llm_endpoint(state, config.provider, &AtomicBool::new(false))?;
+        let result = tts::speak(&ep, &model, &config.voice(), &text);
+        state.with(|s| s.log_tts(config.provider, &model, result.as_ref().map_err(|_| "error")))?;
+        Ok(tauri::ipc::Response::new(result?.audio))
+    })
+    .await
+}
+
 // ---------- local models (Phase 2) ----------
 
 /// Loading 15 GB from a slow disk can take minutes.
@@ -2876,6 +3046,15 @@ pub fn run() {
             prep_get,
             prep_sheet_set,
             prep_sheet_run,
+            chat_threads,
+            chat_thread_create,
+            chat_get,
+            chat_thread_delete,
+            chat_send,
+            proposal_apply,
+            proposal_discard,
+            agent_tools_support,
+            chat_speak,
             stt_model_delete,
             stt_model_download,
             stt_model_import,

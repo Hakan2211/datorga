@@ -136,7 +136,7 @@ Each slice below follows the house pattern: core logic plus tests in `crates/cor
 
 ## Phase E: agentic chat (slice 25)
 
-**25. Agent with tools, proposals only**
+**25. Agent with tools, proposals only** (done 2026-10-28; see HANDOFF "Built (slice 25)" and PLAN-AMENDMENTS §13)
 - `llm.rs`:
   - `tools` in the request
   - parse `tool_calls`

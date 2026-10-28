@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { api, q } from '@/lib/api'
 import { formatDuration } from '@/lib/capture'
+import { AssistantPanel } from '@/components/assistant'
 import { BackupReminder } from '@/components/backup-reminder'
 import { CommandPalette } from '@/components/command-palette'
 import { Button } from '@/components/ui/button'
@@ -37,9 +38,12 @@ const modules: { to?: string; label: string; icon: Icon; exact?: boolean }[] = [
   { to: '/patients', label: 'nav.patients', icon: Users },
   { to: '/sessions', label: 'nav.sessions', icon: Mic },
   { to: '/reports', label: 'nav.reports', icon: FileText },
-  { label: 'nav.assistant', icon: Sparkles },
+  { to: '/assistant', label: 'nav.assistant', icon: Sparkles },
   { to: '/templates', label: 'nav.templates', icon: Library },
 ]
+
+/** Marks the side panel as the assistant's (its title is rendered by the shell). */
+const ASSISTANT_PANEL = 'assistant'
 
 // A device preference like the theme: it must work before unlock, so not in the settings table.
 const COLLAPSED_KEY = 'thera.sidebar'
@@ -48,7 +52,7 @@ type Panel = { title: ReactNode; content: ReactNode }
 type PanelApi = { panel: Panel | null; show: (panel: Panel) => void; hide: () => void }
 const PanelContext = createContext<PanelApi>({ panel: null, show: () => {}, hide: () => {} })
 
-/** The right-side panel slot (the agent chat lands here in slice 25). */
+/** The right-side panel slot (the assistant chat, slice 25). */
 export function useSidePanel() {
   return useContext(PanelContext)
 }
@@ -181,6 +185,14 @@ export function AppShell({ children }: { children: ReactNode }) {
             </button>
             <div className="ml-auto flex items-center gap-2">
               <RecordingPill ready={init.data?.status === 'ready'} />
+              <Button
+                variant={panel?.title === ASSISTANT_PANEL ? 'secondary' : 'ghost'}
+                size="sm"
+                onClick={() => (panel?.title === ASSISTANT_PANEL ? hide() : setPanel({ title: ASSISTANT_PANEL, content: <AssistantPanel /> }))}
+                data-testid="assistant-toggle"
+              >
+                <Sparkles /> {t('nav.assistant')}
+              </Button>
             </div>
           </header>
           <div className="flex min-h-0 flex-1">
@@ -189,9 +201,15 @@ export function AppShell({ children }: { children: ReactNode }) {
               {children}
             </main>
             {panel && (
-              <aside className="flex w-96 shrink-0 flex-col border-l bg-card" data-testid="side-panel">
+              <aside className="flex w-[26rem] shrink-0 flex-col border-l bg-card" data-testid="side-panel">
                 <div className="flex h-12 items-center justify-between border-b pr-2 pl-4 text-sm font-medium">
-                  {panel.title}
+                  {panel.title === ASSISTANT_PANEL ? (
+                    <span className="flex items-center gap-2">
+                      <Sparkles className="size-4 text-primary" /> {t('assistant.title')}
+                    </span>
+                  ) : (
+                    panel.title
+                  )}
                   <Button variant="ghost" size="icon" className="size-8" onClick={hide} aria-label={t('shell.closePanel')}>
                     <PanelRightClose />
                   </Button>

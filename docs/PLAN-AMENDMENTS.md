@@ -209,3 +209,16 @@ Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.
 | W3 | **The Werkstatt text is stored** per note/Bericht (encrypted DB, removed with the patient), not the audio. | She can come back to it; a draft can be made later. |
 | W4 | **Werkstatt proposals go through the same review** as fact drafts (replace/append/reject) and never touch diagnoses; in a Bericht a sentence naming another person is dropped, in a Sitzungsnotiz names are restored. | MDR rule and the Gutachter-Chiffre rule from slice 14; the note stays in the practice. |
 | W5 | **One dictation at a time**, and none while a recording runs. | One microphone; a recording must not lose audio to a dictation. |
+
+## 13. Assistant decisions (slice 25, 2026-10-28; made while building, for the user to review)
+
+| # | Decision | Why |
+|---|---|---|
+| A1 | **Appointment times go to the model as weekday + day.month** ("Fr 30.10., 10:00"; another year in brackets), not as tokens. Birth dates, and dates with a year in note text, stay `[DATUM_n]`. | The assistant has to plan ("übermorgen", "nächste Woche"); a token can't be counted with. A practice time without a year and without a name is low risk, and the pseudonymizer already treats yearless dates as non-identifying. |
+| A2 | **One dictionary of all patients** (archived too) and their terms for every thread, also scoped ones. | The question may name anyone; a scoped thread still mustn't leak a name typed by mistake. |
+| A3 | **Proposal kinds:** new session, reschedule (only untouched sessions), task, text for a section of a note or Bericht (append, or replace for a Bericht section), text for a session's note (creates the note on apply), day plan (appended). No cancel/delete, no task edits. | Smallest useful set; cancelling and deleting are easy to do by hand and hard to undo. |
+| A4 | **Reading leaves out diagnoses**, and text proposals refuse ICD codes and diagnoses sections. | MDR boundary; the assistant has no reason to see them. |
+| A5 | **A scoped thread** (opened on a patient or session page) sees only that patient; other sessions in the calendar show as "belegt (andere Person)". | Plan: "tools limited to that patient", but planning needs to know when she is busy. |
+| A6 | **Erasing a patient deletes every thread that touched them** (scope, tool reads, proposals, their name among the thread's tokens), not just the scoped ones. | Stored chat text names them; Art. 17. |
+| A7 | **Reasoning medium, 4096 tokens, at most 8 requests per question**; tool results capped at 12 000 characters, older ones at 2 000, 40 messages of history. | Cost and latency bound; a question that needs more is better asked narrower. |
+| A8 | **Read-aloud** replaces placeholders with a neutral word ("Person", "Ort") instead of names. | Names never leave the machine as audio-to-be either. |

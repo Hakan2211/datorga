@@ -79,7 +79,8 @@ export function registerTarget(id: string, insert: (text: string) => void): () =
   }
 }
 
-export async function startDictation(targetId: string, reportId: string, deviceId: string | null, engine: SttTarget | null = null) {
+/** `reportId`: the report dictated into; `null` for the assistant's question box. */
+export async function startDictation(targetId: string, reportId: string | null, deviceId: string | null, engine: SttTarget | null = null) {
   if (state.targetId) await stopDictation()
   await ensureEvents()
   set({ starting: true, targetId })

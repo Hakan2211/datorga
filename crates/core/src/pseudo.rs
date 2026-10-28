@@ -67,10 +67,11 @@ pub struct Detection {
 }
 
 /// Known identifiers, matched whole-word and case-insensitively (a trailing genitive `s` stays
-/// outside the token, so "Beispiels" becomes "[PERSON_1]s").
+/// outside the token, so "Beispiels" becomes "[PERSON_1]s"). Each entry's regex is built once:
+/// the assistant's dictionary holds every patient and is matched against many texts.
 #[derive(Debug, Clone, Default)]
 pub struct Dictionary {
-    entries: Vec<(EntityKind, String, DetectionSource)>,
+    entries: Vec<(EntityKind, String, DetectionSource, Regex)>,
 }
 
 impl Dictionary {
@@ -100,22 +101,39 @@ impl Dictionary {
         self.push(kind, text, DetectionSource::Dictionary);
     }
 
+    /// Everything another dictionary knows (the assistant's covers all patients).
+    pub fn extend(&mut self, other: &Dictionary) {
+        for (kind, text, source, re) in &other.entries {
+            if !self.contains(text) {
+                self.entries.push((*kind, text.clone(), *source, re.clone()));
+            }
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     fn contains(&self, text: &str) -> bool {
         let text = text.to_lowercase();
-        self.entries.iter().any(|(_, t, _)| t.to_lowercase() == text)
+        self.entries.iter().any(|(_, t, _, _)| t.to_lowercase() == text)
     }
 
     fn push(&mut self, kind: EntityKind, text: &str, source: DetectionSource) {
         let text = text.trim();
         if !text.is_empty() && !self.contains(text) {
-            self.entries.push((kind, text.to_string(), source));
+            let words: Vec<_> = text.split_whitespace().map(regex::escape).collect();
+            let re = Regex::new(&format!(r"(?i)\b({})s?\b", words.join(r"\s+"))).expect("escaped literal");
+            self.entries.push((kind, text.to_string(), source, re));
         }
     }
 
     fn find(&self, text: &str, out: &mut Vec<Span>) {
-        for (kind, entry, source) in &self.entries {
-            let words: Vec<_> = entry.split_whitespace().map(regex::escape).collect();
-            let re = Regex::new(&format!(r"(?i)\b({})s?\b", words.join(r"\s+"))).expect("escaped literal");
+        for (kind, _, source, re) in &self.entries {
             for c in re.captures_iter(text) {
                 let m = c.get(1).expect("group 1");
                 out.push(Span { start: m.start(), end: m.end(), kind: *kind, source: *source });
@@ -162,6 +180,13 @@ static RULES: LazyLock<Vec<(Regex, usize, EntityKind)>> = LazyLock::new(|| {
 static TOKEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[(PERSON|ORT|ARBEITGEBER|DATUM)_(\d+)\]").expect("valid token regex"));
 
+/// Token-shaped text that isn't from a map ("[PERSON_1]" typed by hand, or invented by a model)
+/// put in round brackets, so [`Pseudonymizer::pseudonymize`] takes it and nothing reads it as a
+/// token.
+pub fn defuse_tokens(text: &str) -> std::borrow::Cow<'_, str> {
+    TOKEN.replace_all(text, |c: &regex::Captures| format!("({}_{})", &c[1], &c[2]))
+}
+
 fn valid_date(s: &str) -> bool {
     let nums: Vec<u32> = s.split(|c: char| !c.is_ascii_digit()).filter_map(|n| n.parse().ok()).collect();
     match nums[..] {
@@ -176,6 +201,28 @@ fn valid_date(s: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct Pseudonymized<T>(T);
+
+static TOKEN_RUN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[(PERSON|ORT|ARBEITGEBER|DATUM)_\d+\](?:\s+\[(?:PERSON|ORT|ARBEITGEBER|DATUM)_\d+\])*").expect("valid token run regex")
+});
+
+impl Pseudonymized<String> {
+    /// For reading aloud: a placeholder, or a run of them ("[PERSON_1] [PERSON_2]"), becomes one
+    /// neutral word, so the voice doesn't spell out "PERSON 1". Taking tokens out can't add
+    /// anything identifying.
+    pub fn speakable(&self) -> Pseudonymized<String> {
+        Pseudonymized(
+            TOKEN_RUN
+                .replace_all(&self.0, |c: &regex::Captures| match &c[1] {
+                    "PERSON" => "Person",
+                    "ORT" => "Ort",
+                    "ARBEITGEBER" => "Arbeitgeber",
+                    _ => "Datum",
+                })
+                .into_owned(),
+        )
+    }
+}
 
 impl<T> Pseudonymized<T> {
     pub fn get(&self) -> &T {
@@ -344,6 +391,13 @@ impl Pseudonymizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn speakable_text_has_no_placeholders() {
+        let mut p = Pseudonymizer::new(Dictionary::from_patient(&patient()));
+        let t = p.pseudonymize("Termin mit Anna Beispiel in 12345 Musterstadt.").unwrap();
+        assert_eq!(t.speakable().get(), "Termin mit Person in Ort.");
+    }
 
     fn patient() -> Patient {
         Patient {
