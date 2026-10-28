@@ -461,6 +461,14 @@ export const de = {
     practice: 'Praxis-Briefkopf (rechts oben im Bericht)',
     therapist: 'Ihr Name für Unterschriften',
     security: 'Sicherheit',
+    appearance: {
+      title: 'Darstellung',
+      theme: 'Farbschema',
+      hell: 'Hell',
+      dunkel: 'Dunkel',
+      system: 'Wie Windows',
+      hint: 'Gilt nur für diesen Rechner.',
+    },
     llm: {
       title: 'KI-Entwürfe',
       intro:

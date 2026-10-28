@@ -563,7 +563,7 @@ function ExportCard({ view }: { view: ReportView }) {
     <Card>
       <CardContent className="grid gap-2 pt-5">
         {view.report.export_outdated && (
-          <p className="flex items-start gap-2 text-sm text-warning">
+          <p className="flex items-start gap-2 text-sm text-warning-foreground">
             <AlertTriangle className="mt-0.5 size-4 shrink-0" />
             {t('note.exportOutdatedSince', { date: formatDate(view.report.exported_at, true) })}
           </p>

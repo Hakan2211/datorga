@@ -8,6 +8,7 @@ import { AppShell } from '@/components/app-shell'
 import { UnlockGate } from '@/components/unlock-gate'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { THEME_BOOT_SCRIPT } from '@/lib/theme'
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   head: () => ({
@@ -24,8 +25,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 
 function RootDocument({ children }: { children: ReactNode }) {
   return (
-    <html lang="de">
+    // The boot script sets `dark` on <html> before React hydrates.
+    <html lang="de" suppressHydrationWarning>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
         <HeadContent />
       </head>
       <body>

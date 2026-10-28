@@ -243,7 +243,7 @@ function RecordingControls({ status, onStop, stopping }: { status: RecordingStat
       )}
       {silent && !status.error && <p className="text-sm text-muted-foreground">{t('capture.silent')}</p>}
       {status.minutes_left !== null && (
-        <p className="flex items-center gap-2 text-sm text-warning">
+        <p className="flex items-center gap-2 text-sm text-warning-foreground">
           <AlertTriangle className="size-4" /> {status.minutes_left === 0 ? t('capture.lowDiskNow') : t('capture.lowDisk', { minutes: status.minutes_left })}
         </p>
       )}

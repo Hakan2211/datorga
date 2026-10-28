@@ -109,7 +109,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   )
 }
 
-const ACTIVE = 'bg-white font-medium text-foreground shadow-xs hover:bg-white'
+const ACTIVE = 'bg-card font-medium text-foreground shadow-xs hover:bg-card'
 
 /** `active` overrides the router's own match when set. */
 function NavLink({
@@ -130,7 +130,7 @@ function NavLink({
       to={to}
       activeOptions={{ exact: !!exact }}
       className={cn(
-        'flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors hover:bg-black/5',
+        'flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors hover:bg-foreground/5',
         active && ACTIVE,
       )}
       activeProps={{ className: active === undefined ? ACTIVE : '' }}
@@ -145,7 +145,7 @@ export function PageHeader({ title, subtitle, actions }: { title: ReactNode; sub
   return (
     <div className="flex items-end justify-between gap-4 border-b px-8 pt-7 pb-5">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+        <h1 className="font-serif text-[1.65rem] leading-tight">{title}</h1>
         {subtitle && <div className="mt-1 text-sm text-muted-foreground">{subtitle}</div>}
       </div>
       {actions && <div className="flex items-center gap-2">{actions}</div>}

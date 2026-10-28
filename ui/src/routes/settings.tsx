@@ -4,14 +4,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { open } from '@tauri-apps/plugin-dialog'
-import { AlertTriangle, DatabaseBackup, FolderOpen, KeyRound, Lock, LockOpen } from 'lucide-react'
+import { AlertTriangle, DatabaseBackup, FolderOpen, KeyRound, Lock, LockOpen, Monitor, Moon, Palette, Sun } from 'lucide-react'
 import { Page, PageHeader } from '@/components/app-shell'
 import { RecoveryKitPanel } from '@/components/recovery-kit'
 import { RestoreBackup } from '@/components/backup-restore'
 import { LlmCard } from '@/components/llm-settings'
 import { VoiceCard } from '@/components/voice-settings'
 import { ModelRow } from '@/components/model-row'
-import { formatDate } from '@/components/bits'
+import { formatDate, SectionCard } from '@/components/bits'
 import { DEFAULT_REMINDER_DAYS } from '@/lib/backup'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
@@ -31,6 +31,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { setTheme, THEMES, useTheme, type Theme } from '@/lib/theme'
 import { api, errorMessage, q, type LastBackup, type SttOverview } from '@/lib/api'
 import type { SttConfig } from '@/bindings/SttConfig'
 import type { SttMode } from '@/bindings/SttMode'
@@ -54,6 +56,7 @@ function Settings() {
             <SettingField settingKey="practice_header" label={t('settings.practice')} multiline />
           </CardContent>
         </Card>
+        <AppearanceCard />
         <SttCard />
         <LlmCard />
         <VoiceCard />
@@ -79,6 +82,35 @@ function Settings() {
         </Card>
       </Page>
     </>
+  )
+}
+
+const themeIcon = { hell: Sun, dunkel: Moon, system: Monitor } as const
+
+function AppearanceCard() {
+  const { t } = useTranslation()
+  const { theme } = useTheme()
+  return (
+    <SectionCard icon={Palette} title={t('settings.appearance.title')} className="max-w-2xl" contentClassName="space-y-2">
+      <Label>{t('settings.appearance.theme')}</Label>
+      <ToggleGroup
+        type="single"
+        variant="outline"
+        value={theme}
+        onValueChange={(v) => v && setTheme(v as Theme)}
+        aria-label={t('settings.appearance.theme')}
+      >
+        {THEMES.map((th) => {
+          const Icon = themeIcon[th]
+          return (
+            <ToggleGroupItem key={th} value={th} className="px-4">
+              <Icon /> {t(`settings.appearance.${th}`)}
+            </ToggleGroupItem>
+          )
+        })}
+      </ToggleGroup>
+      <p className="text-xs text-muted-foreground">{t('settings.appearance.hint')}</p>
+    </SectionCard>
   )
 }
 
