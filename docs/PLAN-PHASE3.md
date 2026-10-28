@@ -115,7 +115,7 @@ Each slice below follows the house pattern: core logic plus tests in `crates/cor
 
 ## Phase D: document editor, preview, voice mode (slices 23–24)
 
-**23. Document mode + preview**
+**23. Document mode + preview** (done 2026-10-28, see HANDOFF "Built (slice 23)". Deviation: the preview shows the compiled pages as PNG (`typst-render`) instead of a blob PDF in WebView2's viewer, so re-renders don't flicker or jump back to page 1. Justified is now the default alignment in the DOCX too, matching the PDF.)
 - A toggle in the editor: "Abschnitte" (today's view) | "Dokument" (Word-like).
 - Document mode: one TipTap editor over the whole report, with a custom `section` node per template section (heading not deletable, body editable). It is mapped back to `report_section` rows on save, so storage, drafting, citations and sign-off stay unchanged.
 - An A4 page look (width, margins, print font), plus more toolbar items:

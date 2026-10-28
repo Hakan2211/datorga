@@ -1333,20 +1333,30 @@ fn report_add_addendum(state: State<'_, AppState>, id: String, body: String, sig
     state.with(|s| s.add_addendum(&id, &body, &signed_by))
 }
 
+fn render_doc(s: &Store, id: &str) -> thera_core::Result<(ReportView, render::RenderDoc)> {
+    let v = report_view(s, id)?;
+    let practice = s.setting("practice_header")?.and_then(|v| v.as_str().map(str::to_string));
+    let doc = render::build_doc(&v.report, &v.template, &v.patient, v.episode.as_ref(), v.application.as_ref(), v.session.as_ref(), practice);
+    Ok((v, doc))
+}
+
+/// The pages an export would write right now, as PNG data URLs for the editor's preview.
+/// Nothing is written to disk or marked as exported.
+#[tauri::command]
+async fn report_preview(app: AppHandle, id: String, scale: f32) -> CmdResult<Vec<String>> {
+    use base64::Engine as _;
+    blocking(app, move |state| {
+        let (_, doc) = state.with(|s| render_doc(s, &id))?;
+        let pages = render::preview_pngs(&doc, scale.clamp(0.5, 4.0))?;
+        Ok(pages.iter().map(|png| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png))).collect())
+    })
+    .await
+}
+
 #[tauri::command]
 fn report_export(state: State<'_, AppState>, id: String, format: String, path: String) -> CmdResult<()> {
     state.with(|s| {
-        let v = report_view(s, &id)?;
-        let practice = s.setting("practice_header")?.and_then(|v| v.as_str().map(str::to_string));
-        let doc = render::build_doc(
-            &v.report,
-            &v.template,
-            &v.patient,
-            v.episode.as_ref(),
-            v.application.as_ref(),
-            v.session.as_ref(),
-            practice,
-        );
+        let (v, doc) = render_doc(s, &id)?;
         let bytes = match format.as_str() {
             "pdf" => render::pdf(&doc)?,
             "docx" => render::docx(&doc)?,
@@ -2443,6 +2453,7 @@ pub fn run() {
             report_sign,
             report_add_addendum,
             report_export,
+            report_preview,
             audit_list,
             audit_verify,
             setting_get,

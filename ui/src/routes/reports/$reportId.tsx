@@ -11,7 +11,10 @@ import {
   CircleSlash,
   CornerDownLeft,
   Download,
+  Eye,
   FileSignature,
+  FileText,
+  LayoutList,
   Sparkles,
   Plus,
   TextSelect,
@@ -30,6 +33,8 @@ import { DraftDialog, DraftProposal, DraftSources, ReportDraftCard } from '@/com
 import { Page, PageHeader } from '@/components/app-shell'
 import { StatusBadge, Stepper, StickyActionBar, formatDate, stepStates } from '@/components/bits'
 import { useReportExport, type ExportFormat } from '@/components/report-export'
+import { ReportDocument, type DocumentFrame } from '@/components/report-document'
+import { ReportPreview } from '@/components/report-preview'
 import { RichField } from '@/components/rich-field'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -37,6 +42,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Toggle } from '@/components/ui/toggle'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { api, errorMessage, q, type ReportView } from '@/lib/api'
 import { appendParagraph, estimatePages, isBlank, parseDiagnoses, sectionText } from '@/lib/report'
 import { cn } from '@/lib/utils'
@@ -52,6 +59,10 @@ function ReportEditorPage() {
 }
 
 const SAVE_DELAY_MS = 700
+// View choices are per machine, like the theme (localStorage, not the encrypted settings).
+const VIEW_KEY = 'thera.reportView'
+const PREVIEW_KEY = 'thera.reportPreview'
+type EditorView = 'sections' | 'document'
 
 function ReportEditor({ view }: { view: ReportView }) {
   const { t } = useTranslation()
@@ -61,6 +72,17 @@ function ReportEditor({ view }: { view: ReportView }) {
   const isNote = report.kind === 'sitzungsnotiz'
   // Target for text picked from the transcript: the section last focused.
   const [activeKey, setActiveKey] = useState(() => template.sections[0]?.key ?? '')
+  const [mode, setModeState] = useState<EditorView>(() => (localStorage.getItem(VIEW_KEY) === 'document' ? 'document' : 'sections'))
+  const [preview, setPreviewState] = useState(() => localStorage.getItem(PREVIEW_KEY) === '1')
+  const setMode = (m: EditorView) => {
+    localStorage.setItem(VIEW_KEY, m)
+    setModeState(m)
+  }
+  const setPreview = (on: boolean) => {
+    localStorage.setItem(PREVIEW_KEY, on ? '1' : '0')
+    setPreviewState(on)
+  }
+  const practice = useQuery(q.setting<string>('practice_header'))
 
   const [bodies, setBodies] = useState<Record<string, string>>(() =>
     Object.fromEntries(report.sections.map((s) => [s.key, s.body])),
@@ -192,16 +214,51 @@ function ReportEditor({ view }: { view: ReportView }) {
   ])
   const current = REPORT_FLOW.find((k) => states[k] === 'current')
   const emptyDraftable = draftable.filter((s) => isBlank(bodies[s.key] ?? '')).map((s) => s.key)
-  const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  // After a view switch the target exists only once React has rendered it.
+  const scrollTo = (id: string) =>
+    requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
   const jump = (step: ReportStep) => {
-    if (step === 'draft' && proposals[0]) scrollTo(`section-${proposals[0].section_key}`)
-    else if (step === 'edit') {
+    // Checklist and export live in the side column, which the preview takes over.
+    if ((step === 'check' || step === 'export') && preview) setPreview(false)
+    if (step === 'draft' && proposals[0]) {
+      // Proposals are reviewed next to their section.
+      setMode('sections')
+      scrollTo(`section-${proposals[0].section_key}`)
+    } else if (step === 'edit') {
       const failing = checklist.data?.find((c) => !c.ok && c.section_key)?.section_key
       scrollTo(`section-${failing ?? template.sections[0]?.key}`)
     } else scrollTo(STEP_ANCHOR[step])
   }
   // A note's bar only leads to signing and exporting; the rest of its flow is on the session page.
   const barStep: ReportStep | null = flowOn ? (current ?? null) : isNote ? (readOnly ? (exported ? null : 'export') : 'check') : null
+
+  const editLocked = (key: string) => {
+    setMode('sections')
+    scrollTo(`section-${key}`)
+  }
+  const docSubtitle = session
+    ? `Sitzung vom ${formatDate(session.scheduled_at ?? session.started_at ?? report.created_at)}`
+    : application
+      ? application.kind === 'fortfuehrung'
+        ? `Bericht Nr. ${application.seq} zum Fortführungsantrag`
+        : `Bericht zum ${application.kind === 'erstantrag' ? 'Erstantrag' : 'Umwandlungsantrag'}`
+      : template.title
+  // Mirrors render::build_doc and bericht.typ, so the sheet matches the export.
+  const frame: DocumentFrame = {
+    header: [
+      `Chiffre: ${patient.chiffre ?? '—'}`,
+      episode && `Verfahren: ${episode.method}`,
+      application?.kind === 'fortfuehrung' && `Bericht Nr. ${application.seq}`,
+    ]
+      .filter(Boolean)
+      .join('\u2003'),
+    practice: practice.data?.trim() || null,
+    title: isNote ? template.title : 'Bericht an die Gutachterin / den Gutachter',
+    subtitle: docSubtitle,
+    date: formatDate(report.signed_at ?? report.updated_at),
+    signedBy: report.signed_by,
+  }
+  const activeDef = template.sections.find((s) => s.key === activeKey)
 
   const subtitle = isNote
     ? `${template.title} · ${formatDate(session?.scheduled_at ?? session?.started_at ?? report.created_at)}`
@@ -244,8 +301,28 @@ function ReportEditor({ view }: { view: ReportView }) {
             className="mx-auto max-w-4xl"
           />
         )}
-        <div className="grid grid-cols-[minmax(0,1fr)_20rem] gap-6">
-          <div className="space-y-6">
+        <div className="flex items-center justify-between gap-3">
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            value={mode}
+            onValueChange={(v) => v && setMode(v as EditorView)}
+            aria-label={t('report.view.label')}
+          >
+            <ToggleGroupItem value="sections" className="px-3" data-testid="view-sections">
+              <LayoutList /> {t('report.view.sections')}
+            </ToggleGroupItem>
+            <ToggleGroupItem value="document" className="px-3" data-testid="view-document">
+              <FileText /> {t('report.view.document')}
+            </ToggleGroupItem>
+          </ToggleGroup>
+          <Toggle variant="outline" size="sm" className="px-3" pressed={preview} onPressedChange={setPreview} data-testid="preview-toggle">
+            <Eye /> {t('report.preview')}
+          </Toggle>
+        </div>
+        <div className={cn('grid gap-6', preview ? 'grid-cols-[minmax(0,1fr)_minmax(0,1fr)]' : 'grid-cols-[minmax(0,1fr)_20rem]')}>
+          <div className="min-w-0 space-y-6">
             {readOnly && (
               <p className="rounded-md bg-success/10 px-4 py-2 text-sm text-success">
                 {t(isNote ? 'note.readOnly' : 'report.readOnly')} {t('report.signedBy')} {report.signed_by}, {formatDate(report.signed_at, true)}
@@ -270,7 +347,27 @@ function ReportEditor({ view }: { view: ReportView }) {
                 />
               </div>
             )}
-            {template.sections.map((s) => {
+            {mode === 'document' && proposals.length > 0 && !readOnly && (
+              <div className="flex items-center justify-between gap-3 rounded-md border border-primary/30 bg-primary/5 px-4 py-2 text-sm">
+                <span className="flex items-center gap-2">
+                  <Sparkles className="size-4 text-primary" /> {t('report.proposalsWaiting', { count: proposals.length })}
+                </span>
+                <Button size="sm" variant="outline" onClick={() => jump('draft')}>
+                  {t('report.toSections')}
+                </Button>
+              </div>
+            )}
+            {mode === 'document' ? (
+              <ReportDocument
+                sections={template.sections}
+                bodies={bodies}
+                readOnly={readOnly}
+                frame={frame}
+                onChange={update}
+                onActive={setActiveKey}
+                onEditLocked={editLocked}
+              />
+            ) : template.sections.map((s) => {
               const canDraft = drafting && draftable.some((d) => d.key === s.key)
               const proposal = drafts.data?.find((d) => d.section_key === s.key && d.status === 'proposed')
               const applied = drafts.data?.filter((d) => d.section_key === s.key && d.status === 'applied') ?? []
@@ -320,8 +417,32 @@ function ReportEditor({ view }: { view: ReportView }) {
             )}
             {isNote && readOnly && <Addenda reportId={report.id} addenda={report.addenda} noteSigner={report.signed_by} />}
           </div>
+          {preview ? (
+            <div className="sticky top-4 h-[calc(100vh-12rem)] min-h-96 self-start">
+              <ReportPreview
+                reportId={report.id}
+                content={`${report.status}:${JSON.stringify(bodies)}`}
+                flush={flush}
+                onClose={() => setPreview(false)}
+              />
+            </div>
+          ) : (
           <aside className="space-y-4">
             <div className="sticky top-6 space-y-4">
+              {mode === 'document' && !readOnly && activeDef && activeDef.hints.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">{t('report.activeHints', { section: activeDef.heading })}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <ul className="list-disc space-y-0.5 pl-5 text-[13px] text-muted-foreground">
+                      {activeDef.hints.map((h, i) => (
+                        <li key={i}>{h.text}</li>
+                      ))}
+                    </ul>
+                  </CardContent>
+                </Card>
+              )}
               <LengthMeter pages={pages} target={template.rules.target_pages} />
               <ChecklistCard reportId={report.id} readOnly={readOnly} busy={pending > 0} primary={barStep === 'check'} />
               {isNote && !readOnly && (
@@ -336,6 +457,7 @@ function ReportEditor({ view }: { view: ReportView }) {
               <ExportCard view={view} exportAs={exportAs} />
             </div>
           </aside>
+          )}
         </div>
       </Page>
       <ReportBar

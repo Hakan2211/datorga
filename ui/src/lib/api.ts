@@ -345,6 +345,8 @@ export const api = {
     invoke<Report>('report_add_addendum', { id, body, signedBy }),
   exportReport: (id: string, format: 'pdf' | 'docx', path: string) =>
     invoke<void>('report_export', { id, format, path }),
+  /** The pages an export would write now, as PNG data URLs (`scale` pixels per point). */
+  previewReport: (id: string, scale: number) => invoke<string[]>('report_preview', { id, scale }),
 
   audit: (limit = 200) => invoke<AuditEvent[]>('audit_list', { limit }),
   auditVerify: () => invoke<number | null>('audit_verify'),

@@ -130,6 +130,7 @@
 .prose-editor .ProseMirror p { margin: 0.25rem 0; }
 .prose-editor .ProseMirror ul { list-style: disc; padding-left: 1.25rem; }
 .prose-editor .ProseMirror ol { list-style: decimal; padding-left: 1.25rem; }
+.prose-editor .ProseMirror h3 { font-weight: 600; margin: 0.6rem 0 0.2rem; }
 .prose-editor .ProseMirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   color: var(--muted-foreground);
@@ -137,3 +138,52 @@
   height: 0;
   pointer-events: none;
 }
+
+/* Document mode: an A4 sheet set like render/bericht.typ (11 pt Libertinus, justified,
+   2.2 cm side margins). Paper stays white in the dark theme, as on print. */
+.doc-page {
+  box-sizing: border-box;
+  width: 21cm;
+  min-height: 29.7cm;
+  padding: 1.1cm 2.2cm 2.2cm;
+  background: #fff;
+  color: #1a1a1a;
+  font-family: var(--font-serif);
+  font-size: 11pt;
+  line-height: 1.38;
+  hyphens: auto;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12), 0 8px 24px rgb(0 0 0 / 0.08);
+}
+.doc-header { margin-bottom: 0.9cm; font-size: 8.5pt; color: #5a5a5a; }
+.doc-practice { text-align: right; font-size: 9pt; margin-bottom: 0.6em; }
+.doc-title { font-size: 14pt; font-weight: 700; line-height: 1.2; }
+.doc-subtitle { margin: 0.2em 0 1em; font-size: 10.5pt; color: #3c3c3c; }
+.doc-page .ProseMirror { outline: none; }
+.doc-page .ProseMirror p,
+.doc-page .doc-notes { margin: 0 0 0.6em; text-align: justify; }
+.doc-page .ProseMirror h3 { margin: 0.9em 0 0.35em; font-weight: 700; font-size: 11pt; }
+.doc-page .ProseMirror ul { list-style: disc; padding-left: 1.3em; margin: 0 0 0.6em; }
+.doc-page .ProseMirror ol { list-style: decimal; padding-left: 1.6em; margin: 0 0 0.6em; }
+.doc-page .ProseMirror li p { margin: 0; text-align: left; }
+.doc-section { position: relative; margin-top: 1.1em; scroll-margin-top: 4rem; }
+.doc-section-heading { margin-bottom: 0.4em; font-size: 11pt; font-weight: 700; line-height: 1.3; user-select: none; }
+.doc-section:focus-within::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 -0.6cm;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--primary);
+  opacity: 0.6;
+}
+.doc-page .ProseMirror .is-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: #9a9a9a;
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+.doc-table { width: 100%; margin-bottom: 0.6em; border-collapse: collapse; font-size: 11pt; }
+.doc-table th,
+.doc-table td { border: 0.4pt solid #aaa; padding: 3pt 5pt; text-align: left; }
+.doc-signature { display: grid; grid-template-columns: 1fr 1fr; gap: 2em; margin-top: 2.2em; }

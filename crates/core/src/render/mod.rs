@@ -214,18 +214,29 @@ pub fn consent_form_pdf(form: &ConsentForm) -> Result<Vec<u8>> {
     typst_pdf_from(EINWILLIGUNG_TYP, form)
 }
 
+/// The report's pages as PNG (`scale` pixels per point), from the same compile as [`pdf`]:
+/// the editor's preview shows exactly what the export writes.
+pub fn preview_pngs(doc: &RenderDoc, scale: f32) -> Result<Vec<Vec<u8>>> {
+    let opts = typst_render::RenderOptions { pixel_per_pt: f64::from(scale).into(), ..Default::default() };
+    compile(BERICHT_TYP, doc)?
+        .pages()
+        .iter()
+        .map(|page| typst_render::render(page, &opts).encode_png().map_err(|e| Error::Render(format!("png: {e}"))))
+        .collect()
+}
+
 fn typst_pdf_from(main: &str, data: &impl Serialize) -> Result<Vec<u8>> {
+    typst_pdf::pdf(&compile(main, data)?, &Default::default()).map_err(|e| Error::Render(format!("pdf: {e:?}")))
+}
+
+fn compile(main: &str, data: &impl Serialize) -> Result<typst_layout::PagedDocument> {
     let engine = TypstEngine::builder()
         .main_file(main)
         .search_fonts_with(TypstKitFontOptions::default().include_system_fonts(false).include_embedded_fonts(true))
         .build();
     let mut input = Dict::new();
     input.insert("data".into(), serde_json::to_string(data)?.into_value());
-    let compiled = engine
-        .compile_with_input(input)
-        .output
-        .map_err(|e| Error::Render(format!("typst: {e:?}")))?;
-    typst_pdf::pdf(&compiled, &Default::default()).map_err(|e| Error::Render(format!("pdf: {e:?}")))
+    engine.compile_with_input(input).output.map_err(|e| Error::Render(format!("typst: {e:?}")))
 }
 
 pub fn docx(doc: &RenderDoc) -> Result<Vec<u8>> {
@@ -246,14 +257,32 @@ pub fn docx(doc: &RenderDoc) -> Result<Vec<u8>> {
             if r.italic {
                 run = run.italic();
             }
+            if r.underline {
+                run = run.underline("single");
+            }
             p.add_run(run)
+        })
+    }
+
+    // Same default as the PDF: justified.
+    fn aligned(p: Paragraph, align: Option<richtext::Align>) -> Paragraph {
+        use docx_rs::AlignmentType;
+        p.align(match align {
+            Some(richtext::Align::Left) => AlignmentType::Left,
+            Some(richtext::Align::Center) => AlignmentType::Center,
+            Some(richtext::Align::Right) => AlignmentType::Right,
+            Some(richtext::Align::Justify) | None => AlignmentType::Both,
         })
     }
 
     fn add_blocks(mut d: Docx, blocks: &[Block]) -> Docx {
         for b in blocks {
             match b {
-                Block::P { runs } => d = d.add_paragraph(runs_para(runs)),
+                Block::P { runs, align } => d = d.add_paragraph(aligned(runs_para(runs), *align)),
+                Block::H { runs, align } => {
+                    let bold: Vec<_> = runs.iter().map(|r| richtext::Run { bold: true, ..r.clone() }).collect();
+                    d = d.add_paragraph(aligned(runs_para(&bold), *align).keep_next(true));
+                }
                 Block::Ul { items } | Block::Ol { items } => {
                     let num = if matches!(b, Block::Ul { .. }) { 1 } else { 2 };
                     for it in items {
@@ -389,7 +418,13 @@ mod tests {
         let app = store.create_application(&ep.id, ApplicationKind::Erstantrag).unwrap();
         let rid = app.report_id.clone().unwrap();
         store.save_section(&rid, "soziodemographie", "<p>Bürokauffrau, verheiratet, <strong>2 Kinder</strong></p>").unwrap();
-        store.save_section(&rid, "symptomatik_befund", "<ul><li><p>Panikattacken seit 2024</p></li><li><p>Vermeidung</p></li></ul>").unwrap();
+        store
+            .save_section(
+                &rid,
+                "symptomatik_befund",
+                r#"<h3>Aktuell</h3><ul><li><p>Panikattacken seit 2024</p></li><li><p>Vermeidung</p></li></ul><p style="text-align: center;"><u>Befund</u> zentriert</p><p style="text-align: right;">rechts</p>"#,
+            )
+            .unwrap();
         let diag = serde_json::to_string(&crate::pii::DiagnosesBody {
             diagnoses: vec![Diagnosis { code: "F41.0".into(), label: "Panikstörung".into(), certainty: "G".into() }],
             notes: "<p>DD: Agoraphobie ausgeschlossen</p>".into(),
@@ -415,6 +450,9 @@ mod tests {
         if let Ok(dir) = std::env::var("THERA_RENDER_OUT") {
             std::fs::write(format!("{dir}/bericht-test.pdf"), &pdf).unwrap();
         }
+        let pages = preview_pngs(&doc, 1.0).unwrap();
+        assert_eq!(pages.len(), 1);
+        assert!(pages[0].starts_with(&[0x89, b'P', b'N', b'G']));
     }
 
     #[test]
@@ -528,11 +566,20 @@ mod tests {
         assert_eq!(file_stamp("2026-10-27T13:36:21.5Z"), "20261027-143621");
     }
 
+    fn docx_document_xml(bytes: &[u8]) -> String {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        std::io::read_to_string(zip.by_name("word/document.xml").unwrap()).unwrap()
+    }
+
     #[test]
     fn renders_docx() {
         let (doc, _) = signed_fixture();
         let bytes = docx(&doc).unwrap();
         assert!(bytes.starts_with(b"PK"), "docx is a zip");
+        let xml = docx_document_xml(&bytes);
+        assert!(xml.contains(r#"<w:u w:val="single""#), "underline");
+        assert!(xml.contains(r#"<w:jc w:val="center""#) && xml.contains(r#"<w:jc w:val="right""#), "alignment");
+        assert!(xml.contains(r#"<w:jc w:val="both""#), "justified by default, like the PDF");
         if let Ok(dir) = std::env::var("THERA_RENDER_OUT") {
             std::fs::write(format!("{dir}/bericht-test.docx"), &bytes).unwrap();
         }

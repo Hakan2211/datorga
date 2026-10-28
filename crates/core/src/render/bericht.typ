@@ -19,15 +19,23 @@
       let c = [#p]
       if r.bold { c = strong(c) }
       if r.italic { c = emph(c) }
+      if r.underline { c = underline(c) }
       c
       if i < parts.len() - 1 { linebreak() }
     }
   }
 }
 
+// Alignment from the editor; none = the justified default.
+#let aligned(a, body) = {
+  if a == none or a == "justify" { body }
+  else { set par(justify: false); align(if a == "center" { center } else if a == "right" { right } else { left }, body) }
+}
+
 #let blocks(bs) = {
   for b in bs {
-    if b.type == "p" { par(runs(b.runs)) }
+    if b.type == "p" { aligned(b.align, par(runs(b.runs))) }
+    else if b.type == "h" { block(above: 1em, below: 0.45em, sticky: true, aligned(b.align, strong(runs(b.runs)))) }
     else if b.type == "ul" { list(..b.items.map(it => runs(it))) }
     else if b.type == "ol" { enum(..b.items.map(it => runs(it))) }
   }

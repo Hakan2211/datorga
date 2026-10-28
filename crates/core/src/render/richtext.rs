@@ -1,5 +1,5 @@
-//! Minimal parser for the HTML subset TipTap's StarterKit emits (p, ul/ol/li, strong/b, em/i,
-//! br, h1-h4 treated as bold paragraphs). Produces a neutral block model for PDF and DOCX.
+//! Minimal parser for the HTML subset the editor emits (p, h1-h4, ul/ol/li, strong/b, em/i, u,
+//! br, `style="text-align: …"` on p and headings). Produces a neutral block model for PDF and DOCX.
 
 use serde::Serialize;
 
@@ -8,12 +8,25 @@ pub struct Run {
     pub text: String,
     pub bold: bool,
     pub italic: bool,
+    pub underline: bool,
+}
+
+/// Paragraph alignment. `None` on a block is the document default (justified).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Align {
+    Left,
+    Center,
+    Right,
+    Justify,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Block {
-    P { runs: Vec<Run> },
+    P { runs: Vec<Run>, align: Option<Align> },
+    /// A sub-heading inside a section (the section heading itself comes from the template).
+    H { runs: Vec<Run>, align: Option<Align> },
     Ul { items: Vec<Vec<Run>> },
     Ol { items: Vec<Vec<Run>> },
 }
@@ -42,6 +55,10 @@ struct Parser {
     runs: Vec<Run>,
     bold: u32,
     italic: u32,
+    underline: u32,
+    /// Alignment of the open p/h; `heading` = inside h1-h4.
+    align: Option<Align>,
+    heading: bool,
     list: Option<(bool, Vec<Vec<Run>>)>, // (ordered, items)
 }
 
@@ -54,16 +71,23 @@ impl Parser {
             ("strong" | "b", true) => self.bold = self.bold.saturating_sub(1),
             ("em" | "i", false) => self.italic += 1,
             ("em" | "i", true) => self.italic = self.italic.saturating_sub(1),
+            ("u", false) => self.underline += 1,
+            ("u", true) => self.underline = self.underline.saturating_sub(1),
             ("br", _) => self.text("\n"),
-            ("h1" | "h2" | "h3" | "h4", false) => {
+            ("h1" | "h2" | "h3" | "h4", false) if self.list.is_none() => {
                 self.flush_para();
-                self.bold += 1;
+                self.heading = true;
+                self.align = align_of(raw);
             }
-            ("h1" | "h2" | "h3" | "h4", true) => {
-                self.bold = self.bold.saturating_sub(1);
+            ("h1" | "h2" | "h3" | "h4", true) if self.list.is_none() => {
                 self.flush_para();
+                self.heading = false;
             }
-            ("p", true) => self.flush_para(),
+            ("p", false) if self.list.is_none() => {
+                self.flush_para();
+                self.align = align_of(raw);
+            }
+            ("p" | "h1" | "h2" | "h3" | "h4", true) => self.flush_para(),
             ("ul" | "ol", false) => {
                 self.flush_para();
                 self.list = Some((name == "ol", Vec::new()));
@@ -85,10 +109,10 @@ impl Parser {
         if t.is_empty() {
             return;
         }
-        let (bold, italic) = (self.bold > 0, self.italic > 0);
+        let (bold, italic, underline) = (self.bold > 0, self.italic > 0, self.underline > 0);
         match self.runs.last_mut() {
-            Some(r) if r.bold == bold && r.italic == italic => r.text.push_str(t),
-            _ => self.runs.push(Run { text: t.to_string(), bold, italic }),
+            Some(r) if r.bold == bold && r.italic == italic && r.underline == underline => r.text.push_str(t),
+            _ => self.runs.push(Run { text: t.to_string(), bold, italic, underline }),
         }
     }
 
@@ -109,9 +133,22 @@ impl Parser {
         if self.list.is_some() {
             return; // <p> inside <li>: keep collecting into the item
         }
+        let align = self.align.take();
         if let Some(runs) = self.take_runs() {
-            self.blocks.push(Block::P { runs });
+            self.blocks.push(if self.heading { Block::H { runs, align } } else { Block::P { runs, align } });
         }
+    }
+}
+
+/// `text-align` from a tag's style attribute.
+fn align_of(raw: &str) -> Option<Align> {
+    let rest = &raw[raw.find("text-align:")? + "text-align:".len()..];
+    match rest.trim_start().split(|c: char| !c.is_ascii_alphabetic()).next()? {
+        "left" => Some(Align::Left),
+        "center" => Some(Align::Center),
+        "right" => Some(Align::Right),
+        "justify" => Some(Align::Justify),
+        _ => None,
     }
 }
 
@@ -133,7 +170,7 @@ mod tests {
         let b = parse("<p>Sehr <strong>starke</strong> Angst &amp; Unruhe</p><ul><li><p>Schlaf</p></li><li><p><em>Appetit</em></p></li></ul>");
         assert_eq!(b.len(), 2);
         match &b[0] {
-            Block::P { runs } => {
+            Block::P { runs, align: None } => {
                 assert_eq!(runs.len(), 3);
                 assert!(runs[1].bold);
                 assert_eq!(runs[2].text, " Angst & Unruhe");
@@ -147,6 +184,18 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn parses_underline_subheadings_and_alignment() {
+        let b = parse(r#"<h3 style="text-align: center;">Verlauf <u>2025</u></h3><p style="text-align: right;">rechts</p><p>normal</p><ul><li><p style="text-align: center;">Punkt</p></li></ul>"#);
+        let Block::H { runs, align } = &b[0] else { panic!("{b:?}") };
+        assert_eq!(*align, Some(Align::Center));
+        assert!(!runs[0].bold && !runs[0].underline && runs[1].underline);
+        assert_eq!(b[1], Block::P { runs: vec![Run { text: "rechts".into(), ..Default::default() }], align: Some(Align::Right) });
+        assert!(matches!(&b[2], Block::P { align: None, .. }));
+        assert!(matches!(&b[3], Block::Ul { items } if items.len() == 1), "alignment inside lists is ignored");
+        assert_eq!(b.len(), 4);
     }
 
     #[test]
