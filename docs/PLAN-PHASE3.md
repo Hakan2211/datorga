@@ -53,7 +53,7 @@ Each slice below follows the house pattern: core logic plus tests in `crates/cor
 - **[OI] whisper-cli into the job object**: reuse the kill-on-close job object from `local.rs` (llama-server) for whisper-cli, and later for whisper-server (slice 24), so a crashed app can't leave it running.
 - **[OI] Her laptop specs**: the "Ausweichlösung" uses the hardware probe. Once she sends specs, choose the default engine and the GPU vs. CPU whisper build. Until then, CPU build + local default.
 
-**18. Cloud TTS + OpenAI provider entry**
+**18. Cloud TTS + OpenAI provider entry** (done 2026-10-28, see HANDOFF)
 - `ProviderId::Openai` with a keychain entry `llm-openai`, only for Realtime (slice 26) and optionally TTS. Settings shows a US-provider warning plus a hint to use an EU data-residency project.
 - `core::tts` (small): OpenRouter `/audio/speech` for reading answers aloud in the agent chat (slice 25). Optional and off by default.
 

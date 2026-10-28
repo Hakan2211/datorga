@@ -47,6 +47,8 @@ import type { SectionDraft } from '@/bindings/SectionDraft'
 import type { SttConfig } from '@/bindings/SttConfig'
 import type { CloudSttModel } from '@/bindings/CloudSttModel'
 import type { SttTarget } from '@/bindings/SttTarget'
+import type { TtsConfig } from '@/bindings/TtsConfig'
+import type { TtsVoice } from '@/bindings/TtsVoice'
 
 export type InitResult = {
   status: 'ready' | 'recovery_required' | 'new'
@@ -105,6 +107,14 @@ export type LlmOverview = { config: LlmConfig; providers: (ProviderInfo & { has_
 export type LlmTestResult = { model: string; latency_ms: number; answer: string }
 export type LlmCatalog = { models: CloudModel[]; recommended: Tier }
 export type LlmSpendView = { month: LlmSpend; total: LlmSpend }
+export type TtsOverview = {
+  config: TtsConfig
+  voices: TtsVoice[]
+  default_models: Partial<Record<ProviderId, string>>
+  problem: string | null
+}
+/** OpenAI's EU data-residency host (`llm::OPENAI_EU_BASE_URL`). */
+export const OPENAI_EU_BASE_URL = 'https://eu.api.openai.com/v1'
 /** Redaction preview: the outgoing text, the local token table and where it would go. */
 export type ExtractPreview = Preview & { terms: PseudoTerm[]; provider: ProviderInfo | null; model: string | null }
 /** `chunks` < `total` when cancelled: facts from the finished chunks were kept. */
@@ -221,6 +231,10 @@ export const api = {
   testLlm: (provider: ProviderId) => invoke<LlmTestResult>('llm_test', { provider }),
   llmCatalog: () => invoke<LlmCatalog>('llm_catalog'),
   llmSpend: () => invoke<LlmSpendView>('llm_spend'),
+  tts: () => invoke<TtsOverview>('tts_overview'),
+  setTtsConfig: (config: TtsConfig) => invoke<void>('tts_config_set', { config }),
+  /** MP3 of a fixed sample sentence with the saved read-aloud settings. */
+  ttsSample: () => invoke<ArrayBuffer>('tts_sample'),
 
   extractPreview: (reportId: string) => invoke<ExtractPreview>('extract_preview', { reportId }),
   extractRun: (reportId: string, digest: string, requestId: string) =>
@@ -304,6 +318,7 @@ export const q = {
   llm: () => queryOptions({ queryKey: ['llm'], queryFn: api.llm }),
   llmCatalog: () => queryOptions({ queryKey: ['llmCatalog'], queryFn: api.llmCatalog, staleTime: Infinity }),
   llmSpend: () => queryOptions({ queryKey: ['llm', 'spend'], queryFn: api.llmSpend }),
+  tts: () => queryOptions({ queryKey: ['llm', 'tts'], queryFn: api.tts }),
   noteFacts: (reportId: string) => queryOptions({ queryKey: ['noteFacts', reportId], queryFn: () => api.noteFacts(reportId) }),
   draftSources: (reportId: string) =>
     queryOptions({ queryKey: ['draftSources', reportId], queryFn: () => api.draftSources(reportId) }),

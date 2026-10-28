@@ -12,4 +12,8 @@ key_url: string | null,
 /**
  * A US company sits between the app and the model: shown as a warning (PLAN-AMENDMENTS A6).
  */
-us_intermediary: boolean, needs_key: boolean, };
+us_intermediary: boolean, needs_key: boolean, 
+/**
+ * Offered for drafting and extraction ([`LlmConfig::active`]).
+ */
+drafting: boolean, };

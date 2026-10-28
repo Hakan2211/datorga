@@ -18,6 +18,7 @@ pub mod render;
 pub mod store;
 pub mod stt;
 pub mod templates;
+pub mod tts;
 
 #[cfg(not(any(feature = "sqlcipher", feature = "plain-sqlite")))]
 compile_error!("enable feature `sqlcipher` (production) or `plain-sqlite` (dev only)");

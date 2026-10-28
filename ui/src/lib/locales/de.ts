@@ -568,6 +568,30 @@ export const de = {
         'small-q5_1': 'Für ältere oder schwache Rechner, weniger genau',
       },
     },
+    voice: {
+      title: 'Stimme: OpenAI-Schlüssel und Vorlesen',
+      openai: 'OpenAI-Schlüssel',
+      openaiIntro:
+        'Nur für Sprachfunktionen: das Vorlesen (falls Sie hier OpenAI wählen) und später die Sitzungsvorbereitung im Gespräch. Entwürfe laufen weiter über den Anbieter unter „KI-Entwürfe“.',
+      openaiWarning:
+        'OpenAI ist ein US-Unternehmen. Legen Sie den Schlüssel möglichst in einem Projekt mit EU-Datenresidenz an (beim Anlegen des Projekts die Region Europa wählen) und wählen Sie unten „EU-Datenresidenz“: Anfragen werden dann in Europa verarbeitet und gespeichert.',
+      region: 'Region',
+      regions: { us: 'Standard (USA)', eu: 'EU-Datenresidenz (eu.api.openai.com)' },
+      check: 'Schlüssel prüfen',
+      checkOk: 'Schlüssel gültig ({{count}} Modelle verfügbar)',
+      readAloud: 'Vorlesen',
+      readAloudIntro:
+        'Lässt Antworten des Assistenten vorlesen. Aus ist voreingestellt. Es wird nur pseudonymisierter Text gesendet; der Ton wird nur abgespielt und nicht gespeichert.',
+      enabled: 'Antworten vorlesen lassen',
+      provider: 'Anbieter',
+      providers: { openrouter: 'OpenRouter (ohne Datenspeicherung)', openai: 'OpenAI (direkt)', custom: 'Eigener Endpunkt (aus KI-Entwürfe)' },
+      model: 'Sprachmodell',
+      modelDefault: 'Standard: {{model}}',
+      voice: 'Stimme',
+      voicePlaceholder: 'Stimmen-ID des Modells',
+      sample: 'Probe anhören',
+      sampleRunning: 'Erzeuge…',
+    },
   },
   dashboard: {
     title: 'Übersicht',

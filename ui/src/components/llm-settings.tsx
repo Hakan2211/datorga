@@ -80,7 +80,7 @@ export function LlmCard() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={OFF}>{t("settings.llm.off")}</SelectItem>
-                {data.providers.map((p) => (
+                {data.providers.filter((p) => p.drafting).map((p) => (
                   <SelectItem key={p.id} value={p.id}>
                     {p.label}
                   </SelectItem>

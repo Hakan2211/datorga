@@ -31,7 +31,12 @@ pub enum ProviderId {
     /// The bundled llama.cpp server with a downloaded model ([`crate::local`]). Nothing leaves
     /// the machine. Its address and key are new on every start, so they aren't configured.
     Local,
+    /// OpenAI directly, with its own key: only for voice (Realtime prep, read-aloud), never
+    /// for drafting. A US provider; an EU data-residency project uses [`OPENAI_EU_BASE_URL`].
+    Openai,
 }
+
+pub const OPENAI_EU_BASE_URL: &str = "https://eu.api.openai.com/v1";
 
 /// Fixed facts about a provider, shown in Settings.
 #[derive(Debug, Clone, Serialize, TS)]
@@ -45,6 +50,8 @@ pub struct ProviderInfo {
     /// A US company sits between the app and the model: shown as a warning (PLAN-AMENDMENTS A6).
     pub us_intermediary: bool,
     pub needs_key: bool,
+    /// Offered for drafting and extraction ([`LlmConfig::active`]).
+    pub drafting: bool,
 }
 
 pub fn providers() -> Vec<ProviderInfo> {
@@ -56,6 +63,7 @@ pub fn providers() -> Vec<ProviderInfo> {
             key_url: Some("https://openrouter.ai/settings/keys".into()),
             us_intermediary: true,
             needs_key: true,
+            drafting: true,
         },
         ProviderInfo {
             id: ProviderId::Requesty,
@@ -65,6 +73,7 @@ pub fn providers() -> Vec<ProviderInfo> {
             key_url: Some("https://app.requesty.ai/api-keys".into()),
             us_intermediary: true,
             needs_key: true,
+            drafting: true,
         },
         ProviderInfo {
             id: ProviderId::Custom,
@@ -73,6 +82,7 @@ pub fn providers() -> Vec<ProviderInfo> {
             key_url: None,
             us_intermediary: false,
             needs_key: false,
+            drafting: true,
         },
         ProviderInfo {
             id: ProviderId::Local,
@@ -81,6 +91,17 @@ pub fn providers() -> Vec<ProviderInfo> {
             key_url: None,
             us_intermediary: false,
             needs_key: false,
+            drafting: true,
+        },
+        ProviderInfo {
+            id: ProviderId::Openai,
+            label: "OpenAI (direkt)".into(),
+            default_base_url: "https://api.openai.com/v1".into(),
+            key_url: Some("https://platform.openai.com/api-keys".into()),
+            // Not an intermediary but the US provider itself; Settings warns separately.
+            us_intermediary: false,
+            needs_key: true,
+            drafting: false,
         },
     ]
 }
@@ -112,6 +133,13 @@ pub struct LlmConfig {
 }
 
 impl LlmConfig {
+    pub fn validate(&self) -> Result<()> {
+        match self.active {
+            Some(id) if !provider(id).drafting => Err(Error::Invalid(format!("{} ist nicht für Entwürfe vorgesehen", provider(id).label))),
+            _ => Ok(()),
+        }
+    }
+
     pub fn settings(&self, id: ProviderId) -> ProviderSettings {
         self.providers.get(&id).cloned().unwrap_or_default()
     }
@@ -518,6 +546,11 @@ mod tests {
         assert_eq!(c.base_url(ProviderId::Openrouter), "https://openrouter.ai/api/v1");
         c.providers.insert(ProviderId::Openrouter, ProviderSettings { model: None, base_url: Some("https://eu.openrouter.ai/api/v1".into()) });
         assert_eq!(c.base_url(ProviderId::Openrouter), "https://eu.openrouter.ai/api/v1");
+        assert!(c.validate().is_ok());
+        c.active = Some(ProviderId::Openai);
+        assert!(c.validate().is_err(), "OpenAI is for voice only");
+        c.active = Some(ProviderId::Requesty);
+        assert!(c.validate().is_ok());
         let json = serde_json::to_value(&c).unwrap();
         assert_eq!(serde_json::from_value::<LlmConfig>(json).unwrap(), c);
     }

@@ -150,6 +150,7 @@ impl Store {
     }
 
     pub fn set_llm_config(&self, c: &crate::llm::LlmConfig) -> Result<()> {
+        c.validate()?;
         self.set_setting(crate::llm::CONFIG_SETTING, &serde_json::to_value(c)?)
     }
 
@@ -188,6 +189,37 @@ impl Store {
             Err(reason) => json!({ "provider": provider, "model": model, "ok": false, "error": reason }),
         };
         audit::append(&self.conn, Entry { actor: ACTOR, action, entity_type: "llm", entity_id: None, meta })
+    }
+
+    pub fn tts_config(&self) -> Result<crate::tts::TtsConfig> {
+        Ok(self.setting(crate::tts::CONFIG_SETTING)?.map(serde_json::from_value).transpose()?.unwrap_or_default())
+    }
+
+    /// Audited like [`Self::set_stt_config`]: read-aloud sends answer text off the machine.
+    pub fn set_tts_config(&self, c: &crate::tts::TtsConfig) -> Result<()> {
+        c.validate()?;
+        let tx = self.conn.unchecked_transaction()?;
+        self.set_setting(crate::tts::CONFIG_SETTING, &serde_json::to_value(c)?)?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "settings.tts", entity_type: "setting", entity_id: Some(crate::tts::CONFIG_SETTING),
+            meta: json!({ "enabled": c.enabled, "provider": c.provider, "model": c.model(), "voice": c.voice() }),
+        })?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// One read-aloud request: provider, model, characters and outcome, never the text.
+    pub fn log_tts(
+        &self,
+        provider: crate::llm::ProviderId,
+        model: &str,
+        outcome: std::result::Result<&crate::tts::Speech, &str>,
+    ) -> Result<()> {
+        let meta = match outcome {
+            Ok(s) => json!({ "provider": provider, "model": model, "ok": true, "chars": s.chars, "bytes": s.audio.len(), "latency_ms": s.latency_ms }),
+            Err(reason) => json!({ "provider": provider, "model": model, "ok": false, "error": reason }),
+        };
+        audit::append(&self.conn, Entry { actor: ACTOR, action: "llm.tts", entity_type: "llm", entity_id: None, meta })
     }
 
     /// One cloud transcription (all pieces of a recording). No text, no audio.

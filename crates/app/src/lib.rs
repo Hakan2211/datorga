@@ -28,6 +28,7 @@ use thera_core::render;
 use thera_core::store::Store;
 use thera_core::stt::{self, CloudStt, CloudSttModel, SttConfig, SttEngine, WhisperCli};
 use thera_core::templates::{Context, Template};
+use thera_core::tts::{self, TtsConfig};
 
 const KEYRING_SERVICE: &str = "de.datorga.thera";
 const KEYRING_USER: &str = "master-key";
@@ -1439,6 +1440,54 @@ fn llm_spend(state: State<'_, AppState>) -> CmdResult<LlmSpendView> {
     Ok(state.with(|s| Ok(LlmSpendView { month: s.llm_spend(&month)?, total: s.llm_spend("")? }))?)
 }
 
+// ---------- read-aloud (slice 18) ----------
+
+#[derive(Serialize)]
+struct TtsOverview {
+    config: TtsConfig,
+    voices: &'static [tts::TtsVoice],
+    default_models: std::collections::BTreeMap<ProviderId, &'static str>,
+    /// Why read-aloud can't run with this config (no key, no endpoint, no model), or `None`.
+    problem: Option<String>,
+}
+
+fn tts_problem(state: &AppState, config: &TtsConfig) -> Option<String> {
+    match config.model() {
+        None => Some("Kein Sprachmodell eingetragen".to_string()),
+        Some(_) => llm_endpoint(state, config.provider, &AtomicBool::new(false)).err().map(|e| e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn tts_overview(state: State<'_, AppState>) -> CmdResult<TtsOverview> {
+    let config = state.with(|s| s.tts_config())?;
+    let default_models = [ProviderId::Openrouter, ProviderId::Openai]
+        .into_iter()
+        .filter_map(|p| Some((p, tts::default_model(p)?)))
+        .collect();
+    Ok(TtsOverview { problem: tts_problem(&state, &config), config, voices: tts::VOICES, default_models })
+}
+
+#[tauri::command]
+fn tts_config_set(state: State<'_, AppState>, config: TtsConfig) -> CmdResult<()> {
+    state.with(|s| s.set_tts_config(&config))
+}
+
+/// Speaks a fixed sentence (no patient data) with the saved config, even while read-aloud is
+/// off, so a voice can be tried first. Returns MP3 bytes.
+#[tauri::command]
+async fn tts_sample(app: AppHandle) -> CmdResult<tauri::ipc::Response> {
+    blocking(app, move |state| {
+        let config = state.with(|s| s.tts_config())?;
+        let model = config.model().ok_or_else(|| CmdError::Other("Kein Sprachmodell eingetragen".into()))?;
+        let (ep, _) = llm_endpoint(state, config.provider, &AtomicBool::new(false))?;
+        let result = tts::sample(&ep, &model, &config.voice());
+        state.with(|s| s.log_tts(config.provider, &model, result.as_ref().map_err(|_| "error")))?;
+        Ok(tauri::ipc::Response::new(result?.audio))
+    })
+    .await
+}
+
 // ---------- fact extraction (Phase 2) ----------
 
 fn provider_str(id: ProviderId) -> String {
@@ -2014,6 +2063,9 @@ pub fn run() {
             stt_overview,
             stt_model_select,
             stt_config_set,
+            tts_overview,
+            tts_config_set,
+            tts_sample,
             stt_model_delete,
             stt_model_download,
             stt_model_import,
