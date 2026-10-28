@@ -152,6 +152,23 @@ impl Store {
         self.set_setting(crate::llm::CONFIG_SETTING, &serde_json::to_value(c)?)
     }
 
+    pub fn stt_config(&self) -> Result<crate::stt::SttConfig> {
+        Ok(self.setting(crate::stt::CONFIG_SETTING)?.map(serde_json::from_value).transpose()?.unwrap_or_default())
+    }
+
+    /// Audited: switching own dictations to the cloud sends audio off the machine.
+    pub fn set_stt_config(&self, c: &crate::stt::SttConfig) -> Result<()> {
+        c.validate()?;
+        let tx = self.conn.unchecked_transaction()?;
+        self.set_setting(crate::stt::CONFIG_SETTING, &serde_json::to_value(c)?)?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "settings.stt", entity_type: "setting", entity_id: Some(crate::stt::CONFIG_SETTING),
+            meta: json!({ "mode": c.mode, "provider": c.cloud_provider, "model": c.model() }),
+        })?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// One outbound model call (`llm.test`, later `llm.draft`…): provider, model, size and
     /// outcome only, never prompt or answer text.
     pub fn log_llm_call(
@@ -172,10 +189,31 @@ impl Store {
         audit::append(&self.conn, Entry { actor: ACTOR, action, entity_type: "llm", entity_id: None, meta })
     }
 
+    /// One cloud transcription (all pieces of a recording). No text, no audio.
+    pub fn log_stt_cloud(
+        &self,
+        source_id: &str,
+        provider: crate::llm::ProviderId,
+        model: &str,
+        outcome: std::result::Result<&crate::stt::CloudUsage, &str>,
+    ) -> Result<()> {
+        let meta = match outcome {
+            Ok(u) => json!({
+                "provider": provider, "model": model, "ok": true,
+                "seconds": (u.seconds * 10.0).round() / 10.0, "requests": u.requests, "cost_usd": u.cost,
+            }),
+            Err(reason) => json!({ "provider": provider, "model": model, "ok": false, "error": reason }),
+        };
+        audit::append(&self.conn, Entry { actor: ACTOR, action: "transcription.cloud", entity_type: "session_source", entity_id: Some(source_id), meta })
+    }
+
     /// What the LLM calls since `since` (RFC 3339 prefix, e.g. "2026-10") cost, from the audit
-    /// log. Calls without a reported cost (local, Requesty, custom) count as requests only.
+    /// log, cloud transcription included. Calls without a reported cost (local, Requesty, custom)
+    /// count as requests only.
     pub fn llm_spend(&self, since: &str) -> Result<LlmSpend> {
-        let mut stmt = self.conn.prepare("SELECT meta_json FROM audit_event WHERE action LIKE 'llm.%' AND at >= ?1")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT meta_json FROM audit_event WHERE (action LIKE 'llm.%' OR action = 'transcription.cloud') AND at >= ?1",
+        )?;
         let mut spend = LlmSpend::default();
         for meta in stmt.query_map([since], |r| r.get::<_, String>(0))? {
             let meta: serde_json::Value = serde_json::from_str(&meta?)?;

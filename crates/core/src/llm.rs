@@ -143,7 +143,7 @@ impl std::fmt::Debug for Endpoint {
 }
 
 impl Endpoint {
-    fn url(&self, path: &str) -> Result<String> {
+    pub(crate) fn url(&self, path: &str) -> Result<String> {
         let base = self.base_url.trim().trim_end_matches('/');
         let local = is_loopback(base);
         if !(base.starts_with("https://") || (local && base.starts_with("http://"))) {
@@ -152,7 +152,7 @@ impl Endpoint {
         Ok(format!("{base}{path}"))
     }
 
-    fn agent(&self, timeout: Duration) -> ureq::Agent {
+    pub(crate) fn agent(&self, timeout: Duration) -> ureq::Agent {
         ureq::Agent::config_builder()
             .timeout_global(Some(timeout))
             .http_status_as_error(false)
@@ -160,7 +160,7 @@ impl Endpoint {
             .into()
     }
 
-    fn auth<B>(&self, req: ureq::RequestBuilder<B>) -> ureq::RequestBuilder<B> {
+    pub(crate) fn auth<B>(&self, req: ureq::RequestBuilder<B>) -> ureq::RequestBuilder<B> {
         let req = match &self.api_key {
             Some(k) if !k.is_empty() => req.header("Authorization", format!("Bearer {k}")),
             _ => req,
@@ -470,12 +470,12 @@ pub fn ping(ep: &Endpoint, model: &str) -> Result<Completion> {
     })
 }
 
-fn net(e: ureq::Error) -> Error {
+pub(crate) fn net(e: ureq::Error) -> Error {
     Error::Llm(format!("Verbindung fehlgeschlagen: {e}"))
 }
 
 /// A short German message from an error response. Never echoes request content.
-fn api_error(status: u16, body: &str) -> String {
+pub(crate) fn api_error(status: u16, body: &str) -> String {
     let detail = serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|v| {

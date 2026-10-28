@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use thera_core::audio::{AudioKey, ChunkWriter};
-use thera_core::stt::{self, WhisperCli};
+use thera_core::domain::SourceKind;
+use thera_core::stt::{self, SttEngine, WhisperCli};
 use thera_core::Error;
 
 fn recording(dir: &Path, seconds: usize) -> AudioKey {
@@ -22,7 +23,23 @@ fn cli(model: &str) -> WhisperCli {
         model: model.into(),
         language: "de".into(),
         threads: 2,
+        on_spawn: None,
     }
+}
+
+/// A dictation through the local engine.
+fn run(
+    audio: &Path,
+    key: &AudioKey,
+    cli: WhisperCli,
+    work: &Path,
+    progress: impl FnMut(u8),
+    cancel: &AtomicBool,
+) -> thera_core::Result<Vec<stt::Segment>> {
+    stt::transcribe(SourceKind::Dictation, audio, key, &SttEngine::Local(cli), work, progress, cancel).map(|t| {
+        assert!(t.cloud.is_none());
+        t.segments
+    })
 }
 
 #[test]
@@ -31,10 +48,23 @@ fn transcribes_reports_progress_and_removes_plaintext() {
     let key = recording(&tmp.path().join("audio"), 2);
     let work = tmp.path().join("work");
     let mut seen = vec![];
-    let segs = stt::transcribe(&tmp.path().join("audio"), &key, &cli("model"), &work, |p| seen.push(p), &AtomicBool::new(false)).unwrap();
+    let segs = run(&tmp.path().join("audio"), &key, cli("model"), &work, |p| seen.push(p), &AtomicBool::new(false)).unwrap();
     assert_eq!(segs, vec![stt::Segment { start_ms: 0, end_ms: 2000, text: "Hallo aus dem Test.".into() }]);
     assert_eq!(seen, vec![0, 50, 100]);
     assert!(!work.exists(), "WAV and JSON are deleted");
+}
+
+#[test]
+fn session_recordings_run_locally_and_the_process_is_handed_out() {
+    let tmp = tempfile::tempdir().unwrap();
+    let key = recording(&tmp.path().join("audio"), 2);
+    let spawned = Arc::new(AtomicBool::new(false));
+    let mut c = cli("model");
+    let s2 = spawned.clone();
+    c.on_spawn = Some(Arc::new(move |_| s2.store(true, Ordering::Relaxed)));
+    let t = stt::transcribe(SourceKind::SessionAudio, &tmp.path().join("audio"), &key, &SttEngine::Local(c), &tmp.path().join("work"), |_| {}, &AtomicBool::new(false)).unwrap();
+    assert_eq!(t.segments.len(), 1);
+    assert!(spawned.load(Ordering::Relaxed), "on_spawn saw the sidecar");
 }
 
 #[test]
@@ -42,7 +72,7 @@ fn segments_over_silence_are_dropped() {
     let tmp = tempfile::tempdir().unwrap();
     let key = AudioKey::generate().unwrap();
     ChunkWriter::create(&tmp.path().join("audio"), &key).unwrap().write(&vec![0i16; 32_000]).unwrap();
-    let segs = stt::transcribe(&tmp.path().join("audio"), &key, &cli("model"), &tmp.path().join("work"), |_| {}, &AtomicBool::new(false)).unwrap();
+    let segs = run(&tmp.path().join("audio"), &key, cli("model"), &tmp.path().join("work"), |_| {}, &AtomicBool::new(false)).unwrap();
     assert!(segs.is_empty(), "the fake's text over digital silence is discarded");
 }
 
@@ -51,13 +81,13 @@ fn failure_and_missing_binary_still_clean_up() {
     let tmp = tempfile::tempdir().unwrap();
     let key = recording(&tmp.path().join("audio"), 1);
     let work = tmp.path().join("work");
-    let err = stt::transcribe(&tmp.path().join("audio"), &key, &cli("fail"), &work, |_| {}, &AtomicBool::new(false)).unwrap_err();
+    let err = run(&tmp.path().join("audio"), &key, cli("fail"), &work, |_| {}, &AtomicBool::new(false)).unwrap_err();
     assert!(err.to_string().contains("failed to load model"), "{err}");
     assert!(!work.exists());
 
     let mut missing = cli("model");
     missing.exe = tmp.path().join("nope.exe");
-    assert!(matches!(stt::transcribe(&tmp.path().join("audio"), &key, &missing, &work, |_| {}, &AtomicBool::new(false)), Err(Error::Stt(_))));
+    assert!(matches!(run(&tmp.path().join("audio"), &key, missing, &work, |_| {}, &AtomicBool::new(false)), Err(Error::Stt(_))));
     assert!(!work.exists());
 }
 
@@ -69,7 +99,7 @@ fn cancel_kills_the_sidecar() {
     let cancel = Arc::new(AtomicBool::new(false));
     let c = cancel.clone();
     let start = std::time::Instant::now();
-    let err = stt::transcribe(&tmp.path().join("audio"), &key, &cli("slow"), &work, move |p| {
+    let err = run(&tmp.path().join("audio"), &key, cli("slow"), &work, move |p| {
         if p == 50 {
             c.store(true, Ordering::Relaxed);
         }
@@ -89,9 +119,9 @@ fn real_whisper() {
     let tmp = tempfile::tempdir().unwrap();
     let key = AudioKey::generate().unwrap();
     ChunkWriter::create(&tmp.path().join("audio"), &key).unwrap().write(&pcm).unwrap();
-    let cli = WhisperCli { exe: var("THERA_WHISPER_CLI").into(), model: var("THERA_WHISPER_MODEL").into(), language: "de".into(), threads: 8 };
+    let cli = WhisperCli { exe: var("THERA_WHISPER_CLI").into(), model: var("THERA_WHISPER_MODEL").into(), language: "de".into(), threads: 8, on_spawn: None };
     let t = std::time::Instant::now();
-    let segs = stt::transcribe(&tmp.path().join("audio"), &key, &cli, &tmp.path().join("work"), |p| eprintln!("{p}%"), &AtomicBool::new(false)).unwrap();
+    let segs = run(&tmp.path().join("audio"), &key, cli, &tmp.path().join("work"), |p| eprintln!("{p}%"), &AtomicBool::new(false)).unwrap();
     eprintln!("{:.1}s for {:.1}s audio", t.elapsed().as_secs_f32(), pcm.len() as f32 / 16_000.0);
     for s in &segs {
         eprintln!("[{} - {}] {}", s.start_ms, s.end_ms, s.text);

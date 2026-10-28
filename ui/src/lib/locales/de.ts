@@ -495,9 +495,31 @@ export const de = {
       engineMissing: 'Der lokale KI-Server fehlt in dieser Installation.',
     },
     stt: {
-      title: 'Transkription (lokal)',
+      title: 'Transkription',
       intro:
         'Sprachmodelle für die Spracherkennung auf diesem Rechner. Beim Herunterladen wird nur das Modell geladen; es werden keine Patientendaten übertragen.',
+      where: 'Wo transkribiert wird',
+      mode: {
+        local: 'Lokal (auf diesem Computer)',
+        cloud: 'Cloud (nur eigene Diktate)',
+        fallback: 'Lokal, Cloud als Ausweichlösung',
+      },
+      modeHint: {
+        local: 'Alle Aufnahmen bleiben auf diesem Computer.',
+        cloud: 'Ihre eigenen Diktate werden in der Cloud transkribiert, Sitzungsaufnahmen weiterhin lokal.',
+        fallback: 'Diktate werden lokal transkribiert. Nur wenn kein lokales Sprachmodell bereit ist, gehen sie in die Cloud.',
+      },
+      cloudWarning:
+        'In der Cloud verlässt die Tonaufnahme Ihres Diktats diesen Computer. Ton lässt sich nicht pseudonymisieren: Was Sie diktieren, hört der Anbieter so, wie Sie es sagen. Nennen Sie im Diktat keine Namen, Adressen oder Geburtsdaten. Sitzungsaufnahmen mit der Stimme der Patientin oder des Patienten werden nie in die Cloud gesendet.',
+      provider: 'Anbieter',
+      providers: { openrouter: 'OpenRouter', custom: 'Eigener Endpunkt (aus KI-Entwürfe)' },
+      model: 'Sprachmodell',
+      modelPlaceholder: 'z. B. whisper-1',
+      perHour: '≈ {{price}} $ pro Stunde Audio',
+      zdr: 'ohne Datenspeicherung über {{via}}',
+      fallbackLocal: 'Ein lokales Sprachmodell ist bereit: Diktate werden zurzeit lokal transkribiert.',
+      fallbackCloud: 'Kein lokales Sprachmodell bereit: Diktate gehen zurzeit in die Cloud.',
+      saved: 'Gespeichert',
       engine: 'Programm',
       engineMissing: 'Das Transkriptionsprogramm fehlt in dieser Installation.',
       active: 'Aktiv',

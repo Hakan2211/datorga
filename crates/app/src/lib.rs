@@ -26,7 +26,7 @@ use thera_core::pii::{self, CheckItem};
 use thera_core::pseudo::EntityKind;
 use thera_core::render;
 use thera_core::store::Store;
-use thera_core::stt::{self, WhisperCli};
+use thera_core::stt::{self, CloudStt, CloudSttModel, SttConfig, SttEngine, WhisperCli};
 use thera_core::templates::{Context, Template};
 
 const KEYRING_SERVICE: &str = "de.datorga.thera";
@@ -94,7 +94,7 @@ struct AppState {
     /// Model downloads/imports in progress (or failed), by model id.
     model_transfers: Mutex<HashMap<String, Transfer>>,
     /// Sidecars are assigned to it, so they die with the app, also on a crash.
-    job: Option<ProcessJob>,
+    job: Option<Arc<ProcessJob>>,
     /// The running local model server (provider `local`).
     llama: Mutex<Option<LlamaServer>>,
     /// Held while a server starts, so two requests don't load two models.
@@ -783,7 +783,49 @@ fn run_job(state: &AppState, job: Job) {
     }
 }
 
+/// Transcribes with the engine Settings choose for this kind of recording. Only dictations can
+/// reach the cloud (`stt::choose`, enforced again in `stt::transcribe`).
 fn transcribe_job(state: &AppState, job: &Job, source_id: &str, cancel: &AtomicBool) -> CmdResult<(String, String, Vec<stt::Segment>)> {
+    let (source, (dir, key)) = state.with(|s| Ok((s.source(source_id)?, s.audio_location(source_id)?)))?;
+    let config = state.with(|s| s.stt_config())?;
+    let local = local_stt(state, &source.language);
+    let mut last = None;
+    let on_progress = |p: u8| {
+        if last != Some(p) {
+            last = Some(p);
+            let _ = state.with(|s| s.set_job_progress(&job.id, p));
+        }
+    };
+    let work = state.stt_tmp().join(&job.id);
+    match stt::choose(&config, source.kind, local.is_ok()) {
+        stt::Choice::Local => {
+            let (engine, model_id, cli) = local.map_err(|e| match (source.kind, config.mode) {
+                (SourceKind::SessionAudio, stt::SttMode::Cloud | stt::SttMode::Fallback) => {
+                    CmdError::Other(format!("{e}. Sitzungsaufnahmen werden immer lokal transkribiert, nie in der Cloud."))
+                }
+                _ => e,
+            })?;
+            let t = stt::transcribe(source.kind, &dir, &key, &SttEngine::Local(cli), &work, on_progress, cancel)?;
+            Ok((engine, model_id, t.segments))
+        }
+        stt::Choice::Cloud => {
+            let provider = config.cloud_provider;
+            let model = config
+                .model()
+                .ok_or_else(|| CmdError::Other("Kein Cloud-Sprachmodell gewählt (Einstellungen → Transkription)".into()))?;
+            let (endpoint, _) = llm_endpoint(state, provider, &AtomicBool::new(false))?;
+            let engine = SttEngine::Cloud(CloudStt { endpoint, model: model.clone(), language: source.language.clone() });
+            let result = stt::transcribe(source.kind, &dir, &key, &engine, &work, on_progress, cancel);
+            let reason = if matches!(result, Err(thera_core::Error::Cancelled)) { "cancelled" } else { "error" };
+            let usage = result.as_ref().map(|t| t.cloud.clone().unwrap_or_default()).map_err(|_| reason);
+            state.with(|s| s.log_stt_cloud(source_id, provider, &model, usage.as_ref().map_err(|r| *r)))?;
+            Ok((format!("cloud:{}", provider_str(provider)), model, result?.segments))
+        }
+    }
+}
+
+/// The local sidecar with the chosen speech model: (engine, model id, runner), or why not.
+fn local_stt(state: &AppState, language: &str) -> CmdResult<(String, String, WhisperCli)> {
     let engine = state
         .engine()
         .ok_or_else(|| CmdError::Other("Das Transkriptionsprogramm fehlt in dieser Installation".into()))?;
@@ -793,19 +835,16 @@ fn transcribe_job(state: &AppState, job: &Job, source_id: &str, cancel: &AtomicB
     if !model_path.exists() {
         return Err(CmdError::Other("Kein Sprachmodell installiert (Einstellungen → Transkription)".into()));
     }
-    let ((dir, key), language) = state.with(|s| Ok((s.audio_location(source_id)?, s.source(source_id)?.language)))?;
     // Leave one core for the UI; beyond 8 threads whisper.cpp stops getting faster.
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get().saturating_sub(1).clamp(1, 8));
-    let cli = WhisperCli { exe: state.whisper_dir().join("whisper-cli.exe"), model: model_path, language, threads };
-    let mut last = None;
-    let on_progress = |p: u8| {
-        if last != Some(p) {
-            last = Some(p);
-            let _ = state.with(|s| s.set_job_progress(&job.id, p));
-        }
-    };
-    let segments = stt::transcribe(&dir, &key, &cli, &state.stt_tmp().join(&job.id), on_progress, cancel)?;
-    Ok((engine, model_id, segments))
+    // In the kill-on-close job, so a crashed app can't leave whisper-cli running.
+    let on_spawn = state.job.clone().map(|job| -> Arc<dyn Fn(&std::process::Child) + Send + Sync> {
+        Arc::new(move |child| {
+            job.assign(child);
+        })
+    });
+    let cli = WhisperCli { exe: state.whisper_dir().join("whisper-cli.exe"), model: model_path, language: language.to_string(), threads, on_spawn };
+    Ok((engine, model_id, cli))
 }
 
 fn active_model(state: &AppState) -> CmdResult<String> {
@@ -821,6 +860,12 @@ struct SttOverview {
     engine: Option<String>,
     active: String,
     models: Vec<ModelView>,
+    config: SttConfig,
+    cloud_models: &'static [CloudSttModel],
+    /// Why the cloud can't be used right now (no key, no endpoint, no model), or `None`.
+    cloud_problem: Option<String>,
+    /// Whether the local engine and model are ready (decides "Ausweichlösung").
+    local_ready: bool,
 }
 
 #[derive(Serialize)]
@@ -845,7 +890,25 @@ fn stt_overview(state: State<'_, AppState>) -> CmdResult<SttOverview> {
             transfer: transfers.get(m.id).cloned(),
         })
         .collect();
-    Ok(SttOverview { engine: state.engine(), active: active_model(&state)?, models })
+    let config = state.with(|s| s.stt_config())?;
+    let cloud_problem = match config.model() {
+        None => Some("Kein Cloud-Sprachmodell eingetragen".to_string()),
+        Some(_) => llm_endpoint(&state, config.cloud_provider, &AtomicBool::new(false)).err().map(|e| e.to_string()),
+    };
+    Ok(SttOverview {
+        engine: state.engine(),
+        active: active_model(&state)?,
+        models,
+        local_ready: local_stt(&state, "de").is_ok(),
+        config,
+        cloud_models: stt::CLOUD_MODELS,
+        cloud_problem,
+    })
+}
+
+#[tauri::command]
+fn stt_config_set(state: State<'_, AppState>, config: SttConfig) -> CmdResult<()> {
+    state.with(|s| s.set_stt_config(&config))
 }
 
 #[tauri::command]
@@ -1840,7 +1903,7 @@ pub fn run() {
                 transcribing: Mutex::new(None),
                 exiting: AtomicBool::new(false),
                 model_transfers: Mutex::new(HashMap::new()),
-                job: ProcessJob::new(),
+                job: ProcessJob::new().map(Arc::new),
                 llama: Mutex::new(None),
                 llama_start: Mutex::new(()),
                 llama_loading: Mutex::new(None),
@@ -1881,6 +1944,7 @@ pub fn run() {
             transcript_confirm,
             stt_overview,
             stt_model_select,
+            stt_config_set,
             stt_model_delete,
             stt_model_download,
             stt_model_import,

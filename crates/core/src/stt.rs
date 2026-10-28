@@ -1,19 +1,25 @@
-//! Local speech-to-text through a whisper.cpp sidecar (`whisper-cli`), run as a separate process.
+//! Speech-to-text: locally through a whisper.cpp sidecar (`whisper-cli`, a separate process), or
+//! for the therapist's own dictations through an OpenAI-compatible cloud endpoint.
 //!
 //! whisper-cli reads a WAV file and writes JSON, so plaintext audio and text exist on disk while
 //! it runs. Both live in a per-job work directory that is always removed afterwards, also on
 //! error or cancel. A crash can leave one behind: the caller wipes the whole work root on startup.
+//! The cloud engine sends the audio from memory; it never touches the disk.
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use ts_rs::TS;
 
 use crate::audio::{self, AudioKey};
+use crate::domain::SourceKind;
+use crate::llm::{Endpoint, ProviderId};
 use crate::{Error, Result};
 
 pub const ENGINE: &str = "whisper.cpp";
@@ -67,6 +73,8 @@ pub struct WhisperCli {
     pub model: PathBuf,
     pub language: String,
     pub threads: usize,
+    /// Called with the started process (the app puts it into its kill-on-close job object).
+    pub on_spawn: Option<Arc<dyn Fn(&Child) + Send + Sync>>,
 }
 
 impl WhisperCli {
@@ -91,6 +99,9 @@ impl WhisperCli {
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
         let mut child = cmd.spawn().map_err(|e| Error::Stt(format!("Transkriptionsprogramm startet nicht: {e}")))?;
+        if let Some(f) = &self.on_spawn {
+            f(&child);
+        }
 
         let stderr = child.stderr.take().expect("piped");
         let (tx, rx) = mpsc::channel::<String>();
@@ -144,32 +155,376 @@ impl WhisperCli {
     }
 }
 
-/// Decrypts a recording, runs the sidecar and returns its segments. The work directory holds
-/// the only plaintext copies (WAV, JSON) and is removed in every case.
+// ---------- engine choice ----------
+
+/// Setting key holding the [`SttConfig`] JSON.
+pub const CONFIG_SETTING: &str = "stt_config";
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SttMode {
+    /// Everything on this computer.
+    #[default]
+    Local,
+    /// Own dictations in the cloud; session recordings stay local.
+    Cloud,
+    /// Own dictations locally, in the cloud only when no local model is ready.
+    Fallback,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SttConfig {
+    #[serde(default)]
+    pub mode: SttMode,
+    /// OpenRouter or the custom endpoint of the AI settings (same key, same base URL).
+    #[serde(default = "default_cloud_provider")]
+    pub cloud_provider: ProviderId,
+    /// `None` = [`CLOUD_DEFAULT_MODEL`] on OpenRouter; a custom endpoint needs one.
+    #[serde(default)]
+    pub cloud_model: Option<String>,
+}
+
+fn default_cloud_provider() -> ProviderId {
+    ProviderId::Openrouter
+}
+
+impl Default for SttConfig {
+    fn default() -> Self {
+        Self { mode: SttMode::Local, cloud_provider: default_cloud_provider(), cloud_model: None }
+    }
+}
+
+impl SttConfig {
+    pub fn validate(&self) -> Result<()> {
+        if !matches!(self.cloud_provider, ProviderId::Openrouter | ProviderId::Custom) {
+            return Err(Error::Invalid("Cloud-Transkription gibt es nur über OpenRouter oder einen eigenen Endpunkt".into()));
+        }
+        Ok(())
+    }
+
+    /// The model to send, if any.
+    pub fn model(&self) -> Option<String> {
+        match self.cloud_model.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+            Some(m) => Some(m.to_string()),
+            None if self.cloud_provider == ProviderId::Openrouter => Some(CLOUD_DEFAULT_MODEL.to_string()),
+            None => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Choice {
+    Local,
+    Cloud,
+}
+
+/// Which engine a recording gets. A session recording holds the patient's voice and always stays
+/// local, whatever the mode. `local_ready`: sidecar and speech model are installed.
+pub fn choose(config: &SttConfig, kind: SourceKind, local_ready: bool) -> Choice {
+    match (kind, config.mode) {
+        (SourceKind::SessionAudio, _) | (_, SttMode::Local) => Choice::Local,
+        (_, SttMode::Cloud) => Choice::Cloud,
+        (_, SttMode::Fallback) if local_ready => Choice::Local,
+        (_, SttMode::Fallback) => Choice::Cloud,
+    }
+}
+
+/// A transcription model on OpenRouter, curated: German-capable, with a zero-retention endpoint
+/// (requests are sent with `zdr: true` and fail without one). No Mistral models.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct CloudSttModel {
+    pub id: &'static str,
+    pub label: &'static str,
+    /// OpenRouter price per hour of audio (2026-10-28).
+    pub usd_per_hour: f64,
+    /// Who serves it with zero retention.
+    pub zdr_via: &'static str,
+}
+
+pub const CLOUD_DEFAULT_MODEL: &str = "openai/whisper-large-v3-turbo";
+
+pub const CLOUD_MODELS: &[CloudSttModel] = &[
+    CloudSttModel { id: "openai/whisper-large-v3-turbo", label: "Whisper Large v3 Turbo", usd_per_hour: 0.012, zdr_via: "Groq, DeepInfra" },
+    CloudSttModel { id: "openai/whisper-large-v3", label: "Whisper Large v3", usd_per_hour: 0.027, zdr_via: "Groq, Together, DeepInfra" },
+    CloudSttModel { id: "elevenlabs/scribe-v2-medical", label: "ElevenLabs Scribe v2 Medical", usd_per_hour: 0.22, zdr_via: "ElevenLabs" },
+    CloudSttModel { id: "elevenlabs/scribe-v2", label: "ElevenLabs Scribe v2", usd_per_hour: 0.22, zdr_via: "ElevenLabs" },
+    CloudSttModel { id: "deepgram/nova-3", label: "Deepgram Nova 3", usd_per_hour: 0.258, zdr_via: "Deepgram" },
+];
+
+// ---------- engines ----------
+
+/// Where a recording is transcribed. The cloud gets the audio itself, which can't be
+/// pseudonymized, so [`transcribe`] runs it only for the therapist's own dictations.
+pub enum SttEngine {
+    Local(WhisperCli),
+    Cloud(CloudStt),
+}
+
+/// What a cloud transcription used, for the audit log (no text).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CloudUsage {
+    /// Audio seconds sent (silent pieces are skipped).
+    pub seconds: f64,
+    /// Billed USD, when the router reports it (OpenRouter does).
+    pub cost: Option<f64>,
+    pub requests: usize,
+}
+
+#[derive(Debug)]
+pub struct Transcribed {
+    pub segments: Vec<Segment>,
+    /// `None` for the local engine.
+    pub cloud: Option<CloudUsage>,
+}
+
+/// Decrypts a recording and transcribes it with `engine`. The local engine's work directory
+/// holds the only plaintext copies (WAV, JSON) and is removed in every case; the cloud engine
+/// keeps the audio in memory. Cloud is refused for anything but a dictation.
 pub fn transcribe(
+    kind: SourceKind,
     audio_dir: &Path,
     key: &AudioKey,
-    cli: &WhisperCli,
+    engine: &SttEngine,
     work_dir: &Path,
     progress: impl FnMut(u8),
     cancel: &AtomicBool,
-) -> Result<Vec<Segment>> {
+) -> Result<Transcribed> {
+    if matches!(engine, SttEngine::Cloud(_)) && kind != SourceKind::Dictation {
+        return Err(Error::Invalid("Sitzungsaufnahmen werden nur lokal transkribiert".into()));
+    }
     let result = (|| {
-        std::fs::create_dir_all(work_dir)?;
         let pcm = audio::read_pcm(audio_dir, key)?;
         if pcm.is_empty() {
             return Err(Error::Invalid("Die Aufnahme ist leer".into()));
         }
         let envelope = loudness_envelope(&pcm);
-        let wav = work_dir.join("input.wav");
-        audio::write_wav(&wav, &pcm)?;
-        drop(pcm);
-        let mut segments = cli.run(&wav, work_dir, progress, cancel)?;
-        segments.retain(|s| has_sound(&envelope, s.start_ms, s.end_ms));
-        Ok(segments)
+        let (mut segments, cloud) = match engine {
+            SttEngine::Local(cli) => {
+                std::fs::create_dir_all(work_dir)?;
+                let wav = work_dir.join("input.wav");
+                audio::write_wav(&wav, &pcm)?;
+                drop(pcm);
+                (cli.run(&wav, work_dir, progress, cancel)?, None)
+            }
+            SttEngine::Cloud(cloud) => {
+                let (segments, usage) = cloud.run(&pcm, &envelope, progress, cancel)?;
+                (segments, Some(usage))
+            }
+        };
+        segments.retain(|s| has_sound(&envelope, s.start_ms, s.end_ms) && !is_hallucination(&s.text));
+        Ok(Transcribed { segments, cloud })
     })();
     let _ = std::fs::remove_dir_all(work_dir);
     result
+}
+
+// ---------- cloud ----------
+
+/// Upstream providers give up after 60 s per request (OpenRouter), and a multipart upload may
+/// be at most 25 MB: 4 minutes of 16 kHz mono WAV is 7.7 MB and transcribes in a few seconds.
+const PIECE_MS: i64 = 240_000;
+/// A piece ends at the quietest 100 ms within its last 20 s, so words aren't cut in half.
+const CUT_SEARCH_MS: i64 = 20_000;
+
+/// An OpenAI-compatible `POST /audio/transcriptions` (OpenRouter or a custom endpoint).
+pub struct CloudStt {
+    pub endpoint: Endpoint,
+    pub model: String,
+    pub language: String,
+}
+
+impl CloudStt {
+    /// Transcribes `pcm` piece by piece. `envelope` is its [`loudness_envelope`]: silent pieces
+    /// aren't sent. Setting `cancel` returns within ~100 ms.
+    fn run(&self, pcm: &[i16], envelope: &[f32], mut progress: impl FnMut(u8), cancel: &AtomicBool) -> Result<(Vec<Segment>, CloudUsage)> {
+        if self.model.trim().is_empty() {
+            return Err(Error::Invalid("Kein Cloud-Sprachmodell gewählt".into()));
+        }
+        let pieces = pieces(envelope, PIECE_MS, CUT_SEARCH_MS);
+        let (mut segments, mut usage) = (Vec::new(), CloudUsage::default());
+        let samples_per_ms = audio::SAMPLE_RATE as usize / 1000;
+        for (i, (from_ms, to_ms)) in pieces.iter().copied().enumerate() {
+            if !has_sound(envelope, from_ms, to_ms) {
+                continue;
+            }
+            let piece = &pcm[(from_ms as usize * samples_per_ms).min(pcm.len())..(to_ms as usize * samples_per_ms).min(pcm.len())];
+            let wav = audio::wav_bytes(piece);
+            let (req, ep) = (self.request(wav)?, self.endpoint.clone());
+            let answer = cancellable(cancel, move || req.send(&ep))?;
+            usage.requests += 1;
+            usage.seconds += answer.seconds.unwrap_or((to_ms - from_ms) as f64 / 1000.0);
+            if let Some(c) = answer.cost {
+                *usage.cost.get_or_insert(0.0) += c;
+            }
+            segments.extend(answer.segments.into_iter().map(|s| Segment {
+                start_ms: (s.start_ms + from_ms).min(to_ms),
+                end_ms: s.end_ms.map_or(to_ms, |e| (e + from_ms).min(to_ms)),
+                text: s.text,
+            }));
+            progress(((i + 1) * 100 / pieces.len()) as u8);
+        }
+        progress(100);
+        Ok((segments, usage))
+    }
+
+    fn request(&self, wav: Vec<u8>) -> Result<CloudRequest> {
+        Ok(CloudRequest {
+            url: self.endpoint.url("/audio/transcriptions")?,
+            model: self.model.clone(),
+            language: self.language.clone(),
+            wav,
+        })
+    }
+}
+
+/// One piece, ready to send from a helper thread.
+struct CloudRequest {
+    url: String,
+    model: String,
+    language: String,
+    wav: Vec<u8>,
+}
+
+impl Drop for CloudRequest {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.wav);
+    }
+}
+
+/// A segment relative to its piece. `end_ms: None` = the whole piece (text-only answer).
+struct PieceSegment {
+    start_ms: i64,
+    end_ms: Option<i64>,
+    text: String,
+}
+
+struct PieceAnswer {
+    segments: Vec<PieceSegment>,
+    seconds: Option<f64>,
+    cost: Option<f64>,
+}
+
+impl CloudRequest {
+    /// Asks for segments (`verbose_json`); a model that refuses that (HTTP 400) is asked again
+    /// for plain text, which becomes one segment over the piece.
+    fn send(&self, ep: &Endpoint) -> Result<PieceAnswer> {
+        match self.post(ep, true) {
+            Err(Error::Llm(m)) if m.contains("HTTP 400") => self.post(ep, false),
+            r => r,
+        }
+    }
+
+    fn post(&self, ep: &Endpoint, verbose: bool) -> Result<PieceAnswer> {
+        let format = if verbose { "verbose_json" } else { "json" };
+        let req = ep.auth(ep.agent(Duration::from_secs(120)).post(&self.url));
+        let resp = if ep.provider == ProviderId::Openrouter {
+            // JSON with base64 audio, so the zero-retention routing rule can go along.
+            use base64::Engine as _;
+            let mut body = json!({
+                "model": self.model,
+                "input_audio": { "data": base64::engine::general_purpose::STANDARD.encode(&self.wav), "format": "wav" },
+                "language": self.language,
+                "response_format": format,
+                "provider": { "zdr": true, "data_collection": "deny" },
+            });
+            if verbose {
+                body["timestamp_granularities"] = json!(["segment"]);
+            }
+            req.header("Content-Type", "application/json").send(body.to_string())
+        } else {
+            let boundary = format!("thera-{}", uuid::Uuid::new_v4().simple());
+            let mut body = Vec::with_capacity(self.wav.len() + 1024);
+            for (name, value) in [("model", self.model.as_str()), ("language", &self.language), ("response_format", format)] {
+                body.extend(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").as_bytes());
+            }
+            body.extend(
+                format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n")
+                    .as_bytes(),
+            );
+            body.extend(&self.wav);
+            body.extend(format!("\r\n--{boundary}--\r\n").as_bytes());
+            req.header("Content-Type", format!("multipart/form-data; boundary={boundary}")).send(&body[..])
+        };
+        let mut resp = resp.map_err(crate::llm::net)?;
+        let status = resp.status().as_u16();
+        let text = resp.body_mut().with_config().limit(16 << 20).read_to_string().map_err(crate::llm::net)?;
+        if status != 200 {
+            return Err(Error::Llm(crate::llm::api_error(status, &text)));
+        }
+        let v: Value = serde_json::from_str(&text)?;
+        if v.get("error").is_some() {
+            return Err(Error::Llm(crate::llm::api_error(status, &text)));
+        }
+        Ok(parse_cloud(&v))
+    }
+}
+
+/// Reads `verbose_json` segments (seconds) or, without them, the plain `text`.
+fn parse_cloud(v: &Value) -> PieceAnswer {
+    let ms = |x: &Value| x.as_f64().map(|s| (s * 1000.0).round() as i64);
+    let segments: Vec<PieceSegment> = match v.get("segments").and_then(Value::as_array).filter(|s| !s.is_empty()) {
+        Some(list) => list
+            .iter()
+            .filter_map(|s| {
+                Some(PieceSegment {
+                    start_ms: ms(s.get("start")?)?.max(0),
+                    end_ms: Some(ms(s.get("end")?)?),
+                    text: s.get("text")?.as_str()?.trim().to_string(),
+                })
+            })
+            .collect(),
+        None => v
+            .get("text")
+            .and_then(Value::as_str)
+            .map(|t| vec![PieceSegment { start_ms: 0, end_ms: None, text: t.trim().to_string() }])
+            .unwrap_or_default(),
+    };
+    PieceAnswer {
+        segments: segments.into_iter().filter(|s| !s.text.is_empty()).collect(),
+        seconds: v.pointer("/usage/seconds").and_then(Value::as_f64).or_else(|| v.get("duration").and_then(Value::as_f64)),
+        cost: v.pointer("/usage/cost").and_then(Value::as_f64),
+    }
+}
+
+/// Splits a recording (given by its 100 ms envelope) into pieces of at most `max_ms`, each
+/// ending at the quietest window of its last `search_ms`. Returns (from_ms, to_ms) pairs.
+fn pieces(envelope: &[f32], max_ms: i64, search_ms: i64) -> Vec<(i64, i64)> {
+    let total = envelope.len() as i64 * WINDOW_MS;
+    let mut out = Vec::new();
+    let mut from = 0;
+    while total - from > max_ms {
+        let hi = ((from + max_ms) / WINDOW_MS) as usize;
+        let lo = ((from + max_ms - search_ms) / WINDOW_MS) as usize;
+        // The quietest window; ties go to the latest, so pieces stay long.
+        let cut = (lo..hi).rev().min_by(|&a, &b| envelope[a].total_cmp(&envelope[b])).unwrap_or(hi);
+        let to = (cut as i64 * WINDOW_MS + WINDOW_MS / 2).max(from + WINDOW_MS);
+        out.push((from, to));
+        from = to;
+    }
+    out.push((from, total));
+    out
+}
+
+/// Runs `f` on a helper thread and returns early with [`Error::Cancelled`] when `cancel` is set.
+/// An abandoned request finishes or times out on its own; its answer is dropped.
+fn cancellable<T: Send + 'static>(cancel: &AtomicBool, f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(Error::Cancelled);
+        }
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(r) => return r,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(Error::Stt("Transkription abgebrochen".into())),
+        }
+    }
 }
 
 const WINDOW_MS: i64 = 100;
@@ -281,6 +636,55 @@ mod tests {
             assert!(is_hallucination(t), "{t}");
         }
         assert!(!is_hallucination("Sie sieht abends gern ZDF."));
+    }
+
+    #[test]
+    fn session_recordings_always_stay_local() {
+        for mode in [SttMode::Local, SttMode::Cloud, SttMode::Fallback] {
+            let c = SttConfig { mode, ..Default::default() };
+            for ready in [true, false] {
+                assert_eq!(choose(&c, SourceKind::SessionAudio, ready), Choice::Local, "{mode:?} {ready}");
+            }
+        }
+        let c = |mode| SttConfig { mode, ..Default::default() };
+        assert_eq!(choose(&c(SttMode::Local), SourceKind::Dictation, false), Choice::Local);
+        assert_eq!(choose(&c(SttMode::Cloud), SourceKind::Dictation, true), Choice::Cloud);
+        assert_eq!(choose(&c(SttMode::Fallback), SourceKind::Dictation, true), Choice::Local);
+        assert_eq!(choose(&c(SttMode::Fallback), SourceKind::Dictation, false), Choice::Cloud);
+    }
+
+    #[test]
+    fn config_defaults_and_validation() {
+        let c: SttConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(c, SttConfig::default());
+        assert_eq!(c.model().as_deref(), Some(CLOUD_DEFAULT_MODEL));
+        let custom = SttConfig { cloud_provider: ProviderId::Custom, ..Default::default() };
+        assert_eq!(custom.model(), None, "a custom endpoint names its model");
+        assert!(SttConfig { cloud_provider: ProviderId::Local, ..Default::default() }.validate().is_err());
+        assert!(SttConfig { cloud_provider: ProviderId::Requesty, ..Default::default() }.validate().is_err());
+        assert!(CLOUD_MODELS.iter().any(|m| m.id == CLOUD_DEFAULT_MODEL));
+        assert!(CLOUD_MODELS.iter().all(|m| !m.id.starts_with("mistralai/")));
+    }
+
+    #[test]
+    fn pieces_end_at_the_quietest_window() {
+        // 10 s of speech with one quiet 100 ms window at 7.3 s; pieces of at most 8 s.
+        let mut env = vec![-20.0f32; 100];
+        env[73] = -70.0;
+        assert_eq!(pieces(&env, 8_000, 2_000), vec![(0, 7_350), (7_350, 10_000)]);
+        // No quiet window: still at most `max_ms`, cut inside the search range.
+        let p = pieces(&vec![-20.0f32; 100], 8_000, 2_000);
+        assert!(p[0].1 <= 8_000 && p[0].1 >= 6_000, "{p:?}");
+        assert_eq!(pieces(&vec![-20.0f32; 30], 8_000, 2_000), vec![(0, 3_000)], "short = one piece");
+    }
+
+    #[test]
+    fn cloud_answers_with_and_without_segments() {
+        let a = parse_cloud(&json!({"segments": [{"start": 0.5, "end": 1.25, "text": " Hallo "}, {"start": 2, "end": 3, "text": " "}], "duration": 3.0}));
+        assert_eq!((a.segments.len(), a.segments[0].start_ms, a.segments[0].end_ms, a.seconds), (1, 500, Some(1250), Some(3.0)));
+        let b = parse_cloud(&json!({"text": "Nur Text", "usage": {"seconds": 4.0, "cost": 0.001}}));
+        assert_eq!((b.segments[0].end_ms, b.seconds, b.cost), (None, Some(4.0), Some(0.001)));
+        assert!(parse_cloud(&json!({})).segments.is_empty());
     }
 
     #[test]

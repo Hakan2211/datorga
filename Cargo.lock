@@ -5836,6 +5836,7 @@ name = "thera-core"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "base64 0.22.1",
  "docx-rs",
  "getrandom 0.3.4",
  "hex",

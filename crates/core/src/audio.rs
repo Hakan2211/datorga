@@ -154,6 +154,14 @@ pub fn read_pcm(dir: &Path, key: &AudioKey) -> Result<Vec<i16>> {
 
 /// Plain 16-bit mono WAV, for handing to the transcription sidecar. The caller deletes it.
 pub fn write_wav(path: &Path, pcm: &[i16]) -> Result<()> {
+    let mut b = wav_bytes(pcm);
+    let written = fs::write(path, &b);
+    b.zeroize();
+    Ok(written?)
+}
+
+/// `pcm` as a 16 kHz mono 16-bit WAV file in memory.
+pub fn wav_bytes(pcm: &[i16]) -> Vec<u8> {
     let data_len = (pcm.len() * 2) as u32;
     let mut b = Vec::with_capacity(44 + data_len as usize);
     b.extend(b"RIFF");
@@ -169,9 +177,7 @@ pub fn write_wav(path: &Path, pcm: &[i16]) -> Result<()> {
     b.extend(b"data");
     b.extend(data_len.to_le_bytes());
     b.extend(pcm.iter().flat_map(|s| s.to_le_bytes()));
-    fs::write(path, &b)?;
-    b.zeroize();
-    Ok(())
+    b
 }
 
 #[cfg(test)]

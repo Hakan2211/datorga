@@ -44,6 +44,8 @@ import type { PseudoTerm } from '@/bindings/PseudoTerm'
 import type { ApplyMode } from '@/bindings/ApplyMode'
 import type { EpisodeFact } from '@/bindings/EpisodeFact'
 import type { SectionDraft } from '@/bindings/SectionDraft'
+import type { SttConfig } from '@/bindings/SttConfig'
+import type { CloudSttModel } from '@/bindings/CloudSttModel'
 
 export type InitResult = {
   status: 'ready' | 'recovery_required' | 'new'
@@ -83,6 +85,11 @@ export type SttOverview = {
   engine: string | null
   active: string
   models: { id: string; file: string; bytes: number; installed: boolean; transfer: Transfer | null }[]
+  config: SttConfig
+  cloud_models: CloudSttModel[]
+  /** Why the cloud can't be used right now, or null. */
+  cloud_problem: string | null
+  local_ready: boolean
 }
 
 export type LlmOverview = { config: LlmConfig; providers: (ProviderInfo & { has_key: boolean })[] }
@@ -192,6 +199,7 @@ export const api = {
 
   stt: () => invoke<SttOverview>('stt_overview'),
   selectModel: (id: string) => invoke<void>('stt_model_select', { id }),
+  setSttConfig: (config: SttConfig) => invoke<void>('stt_config_set', { config }),
   deleteModel: (id: string) => invoke<void>('stt_model_delete', { id }),
   downloadModel: (id: string) => invoke<void>('stt_model_download', { id }),
   importModel: (id: string, path: string) => invoke<void>('stt_model_import', { id, path }),
