@@ -392,6 +392,18 @@ impl CloudStt {
         Ok((segments, usage))
     }
 
+    /// One short piece of a live dictation, from memory, as plain text.
+    pub fn transcribe_piece(&self, pcm: &[i16], cancel: &AtomicBool) -> Result<(String, CloudUsage)> {
+        if self.model.trim().is_empty() {
+            return Err(Error::Invalid("Kein Cloud-Sprachmodell gewählt".into()));
+        }
+        let (req, ep) = (self.request(audio::wav_bytes(pcm))?, self.endpoint.clone());
+        let answer = cancellable(cancel, move || req.send(&ep))?;
+        let seconds = answer.seconds.unwrap_or(pcm.len() as f64 / audio::SAMPLE_RATE as f64);
+        let text = answer.segments.into_iter().map(|s| s.text).collect::<Vec<_>>().join(" ");
+        Ok((text, CloudUsage { seconds, cost: answer.cost, requests: 1 }))
+    }
+
     fn request(&self, wav: Vec<u8>) -> Result<CloudRequest> {
         Ok(CloudRequest {
             url: self.endpoint.url("/audio/transcriptions")?,
@@ -565,6 +577,11 @@ fn loudness_envelope(pcm: &[i16]) -> Vec<f32> {
         .collect()
 }
 
+/// Whether any 100 ms of `pcm` is above the silence gate.
+pub(crate) fn has_speech(pcm: &[i16]) -> bool {
+    loudness_envelope(pcm).iter().any(|&db| db > SILENCE_DBFS)
+}
+
 fn has_sound(envelope: &[f32], start_ms: i64, end_ms: i64) -> bool {
     let from = (start_ms / WINDOW_MS).max(0) as usize;
     let to = ((end_ms + WINDOW_MS - 1) / WINDOW_MS) as usize;
@@ -598,7 +615,7 @@ struct Offsets {
 /// appear over quiet room noise, which the silence gate lets through.
 const HALLUCINATIONS: &[&str] = &["untertitel von stephanie geiges", "vielen dank fürs zuschauen", "copyright wdr"];
 
-fn is_hallucination(text: &str) -> bool {
+pub(crate) fn is_hallucination(text: &str) -> bool {
     let t = text.to_lowercase();
     (t.contains("untertitel") && (t.contains("zdf") || t.contains("amara"))) || HALLUCINATIONS.iter().any(|h| t.starts_with(h))
 }

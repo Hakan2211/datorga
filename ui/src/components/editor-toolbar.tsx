@@ -15,6 +15,7 @@ import {
   Underline,
   Undo2,
 } from 'lucide-react'
+import { DictationButton } from '@/components/dictation-button'
 import { cn } from '@/lib/utils'
 
 const ALIGNMENTS = [
@@ -24,8 +25,11 @@ const ALIGNMENTS = [
   ['right', AlignRight],
 ] as const
 
-/** Formatting for both editors; offers only what the PDF/DOCX export can show. */
-export function EditorToolbar({ editor, className }: { editor: Editor; className?: string }) {
+/**
+ * Formatting for both editors; offers only what the PDF/DOCX export can show. With `dictateFor`
+ * (the report id) it also offers voice mode.
+ */
+export function EditorToolbar({ editor, className, dictateFor }: { editor: Editor; className?: string; dictateFor?: string }) {
   const { t } = useTranslation()
   const s = useEditorState({
     editor,
@@ -89,6 +93,7 @@ export function EditorToolbar({ editor, className }: { editor: Editor; className
           <Icon className="size-3.5" />
         </ToolButton>
       ))}
+      {dictateFor && <DictationButton editor={editor} reportId={dictateFor} />}
     </div>
   )
 }

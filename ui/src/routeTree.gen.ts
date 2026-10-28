@@ -20,6 +20,8 @@ import { Route as ReportsReportIdRouteImport } from './routes/reports/$reportId'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
 import { Route as SessionsSessionIdRouteImport } from './routes/sessions/$sessionId'
 import { Route as TemplatesIndexRouteImport } from './routes/templates/index'
+import { Route as ReportsReportIdWerkstattRouteImport } from './routes/reports/$reportId_.werkstatt'
+import { Route as SessionsSessionIdWerkstattRouteImport } from './routes/sessions/$sessionId_.werkstatt'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -76,6 +78,18 @@ const TemplatesIndexRoute = TemplatesIndexRouteImport.update({
   path: '/templates/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ReportsReportIdWerkstattRoute =
+  ReportsReportIdWerkstattRouteImport.update({
+    id: '/reports/$reportId_/werkstatt',
+    path: '/reports/$reportId/werkstatt',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const SessionsSessionIdWerkstattRoute =
+  SessionsSessionIdWerkstattRouteImport.update({
+    id: '/sessions/$sessionId_/werkstatt',
+    path: '/sessions/$sessionId/werkstatt',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -89,6 +103,8 @@ export interface FileRoutesByFullPath {
   '/reports/': typeof ReportsIndexRoute
   '/sessions/': typeof SessionsIndexRoute
   '/templates/': typeof TemplatesIndexRoute
+  '/reports/$reportId/werkstatt': typeof ReportsReportIdWerkstattRoute
+  '/sessions/$sessionId/werkstatt': typeof SessionsSessionIdWerkstattRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -102,6 +118,8 @@ export interface FileRoutesByTo {
   '/reports': typeof ReportsIndexRoute
   '/sessions': typeof SessionsIndexRoute
   '/templates': typeof TemplatesIndexRoute
+  '/reports/$reportId/werkstatt': typeof ReportsReportIdWerkstattRoute
+  '/sessions/$sessionId/werkstatt': typeof SessionsSessionIdWerkstattRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -116,6 +134,8 @@ export interface FileRoutesById {
   '/reports/': typeof ReportsIndexRoute
   '/sessions/': typeof SessionsIndexRoute
   '/templates/': typeof TemplatesIndexRoute
+  '/reports/$reportId_/werkstatt': typeof ReportsReportIdWerkstattRoute
+  '/sessions/$sessionId_/werkstatt': typeof SessionsSessionIdWerkstattRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -131,6 +151,8 @@ export interface FileRouteTypes {
     | '/reports/'
     | '/sessions/'
     | '/templates/'
+    | '/reports/$reportId/werkstatt'
+    | '/sessions/$sessionId/werkstatt'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -144,6 +166,8 @@ export interface FileRouteTypes {
     | '/reports'
     | '/sessions'
     | '/templates'
+    | '/reports/$reportId/werkstatt'
+    | '/sessions/$sessionId/werkstatt'
   id:
     | '__root__'
     | '/'
@@ -157,6 +181,8 @@ export interface FileRouteTypes {
     | '/reports/'
     | '/sessions/'
     | '/templates/'
+    | '/reports/$reportId_/werkstatt'
+    | '/sessions/$sessionId_/werkstatt'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -171,6 +197,8 @@ export interface RootRouteChildren {
   ReportsIndexRoute: typeof ReportsIndexRoute
   SessionsIndexRoute: typeof SessionsIndexRoute
   TemplatesIndexRoute: typeof TemplatesIndexRoute
+  ReportsReportIdWerkstattRoute: typeof ReportsReportIdWerkstattRoute
+  SessionsSessionIdWerkstattRoute: typeof SessionsSessionIdWerkstattRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -252,6 +280,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TemplatesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/reports/$reportId_/werkstatt': {
+      id: '/reports/$reportId_/werkstatt'
+      path: '/reports/$reportId/werkstatt'
+      fullPath: '/reports/$reportId/werkstatt'
+      preLoaderRoute: typeof ReportsReportIdWerkstattRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sessions/$sessionId_/werkstatt': {
+      id: '/sessions/$sessionId_/werkstatt'
+      path: '/sessions/$sessionId/werkstatt'
+      fullPath: '/sessions/$sessionId/werkstatt'
+      preLoaderRoute: typeof SessionsSessionIdWerkstattRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -267,6 +309,8 @@ const rootRouteChildren: RootRouteChildren = {
   ReportsIndexRoute: ReportsIndexRoute,
   SessionsIndexRoute: SessionsIndexRoute,
   TemplatesIndexRoute: TemplatesIndexRoute,
+  ReportsReportIdWerkstattRoute: ReportsReportIdWerkstattRoute,
+  SessionsSessionIdWerkstattRoute: SessionsSessionIdWerkstattRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

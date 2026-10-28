@@ -72,6 +72,11 @@ str_enum!(
     DraftStatus { Proposed => "proposed", Applied => "applied", Rejected => "rejected", Superseded => "superseded" }
 );
 str_enum!(
+    /// What a section draft was written from: the applied Sitzungsnotiz facts (cited per sentence)
+    /// or the therapist's Werkstatt dictation.
+    DraftSource { Facts => "facts", Dictation => "dictation" }
+);
+str_enum!(
     /// How a section draft goes into the section: instead of its text or after it.
     ApplyMode { Replace => "replace", Append => "append" }
 );
@@ -527,6 +532,7 @@ pub struct SectionDraft {
     pub session_ids: Option<Vec<String>>,
     /// The section's existing text went along ("ergänzen").
     pub with_existing: bool,
+    pub source: DraftSource,
     pub sentences: Vec<DraftSentenceView>,
 }
 
@@ -547,6 +553,22 @@ pub struct DraftMeta {
     pub instructed: bool,
     /// `None` = all sessions of the episode.
     pub session_ids: Option<Vec<String>>,
+    pub source: DraftSource,
+}
+
+/// One live dictation, for the audit log (no text).
+#[derive(Debug, Clone, Default)]
+pub struct DictationLog {
+    /// `None` = transcribed on this computer.
+    pub provider: Option<String>,
+    pub model: String,
+    /// Seconds of speech transcribed.
+    pub seconds: f64,
+    pub pieces: usize,
+    pub requests: usize,
+    pub cost: Option<f64>,
+    /// Why the dictation stopped early, if it did (no text).
+    pub error: Option<String>,
 }
 
 pub fn new_id() -> String {

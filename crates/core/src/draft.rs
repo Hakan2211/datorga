@@ -39,7 +39,7 @@ pub fn chat_options() -> ChatOptions {
 }
 
 /// Longest sentence kept.
-const MAX_SENTENCE_CHARS: usize = 500;
+pub(crate) const MAX_SENTENCE_CHARS: usize = 500;
 
 /// Longest instruction the therapist may add to a request.
 pub const MAX_INSTRUCTION_CHARS: usize = 500;
@@ -140,7 +140,7 @@ pub struct Frame {
     pub kind: ApplicationKind,
 }
 
-fn method_name(m: Method) -> &'static str {
+pub(crate) fn method_name(m: Method) -> &'static str {
     match m {
         Method::Vt => "Verhaltenstherapie",
         Method::Tp => "tiefenpsychologisch fundierte Psychotherapie",
@@ -148,7 +148,7 @@ fn method_name(m: Method) -> &'static str {
     }
 }
 
-fn kind_name(k: ApplicationKind) -> &'static str {
+pub(crate) fn kind_name(k: ApplicationKind) -> &'static str {
     match k {
         ApplicationKind::Erstantrag => "Erstantrag",
         ApplicationKind::Umwandlung => "Umwandlungsantrag",
@@ -390,7 +390,7 @@ pub fn prepare(template: &Template, frame: &Frame, req: &Request, patient: &Pati
     Ok(Prepared { system, sections, skipped, untagged, map: p.into_map(), prompt_hash, digest: hex::encode(h.finalize()) })
 }
 
-static TOKEN: LazyLock<Regex> =
+pub(crate) static TOKEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[(PERSON|ORT|ARBEITGEBER|DATUM)_\d+\]").expect("valid regex"));
 // Citation markers some models write into the text as well ("… pro Woche [F1].", "(F2, F3)",
 // "… Fokus. [F1], [F2]"): a run of them, with the separators between them.

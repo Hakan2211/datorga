@@ -138,6 +138,33 @@ export type PrepPreview = Preview & { stats: BriefStats; terms: PseudoTerm[] }
 export const OPENAI_EU_BASE_URL = 'https://eu.api.openai.com/v1'
 /** Redaction preview: the outgoing text, the local token table and where it would go. */
 export type ExtractPreview = Preview & { terms: PseudoTerm[]; provider: ProviderInfo | null; model: string | null }
+
+/** Which engines a live dictation can use right now (the therapist's own voice). */
+export type DictationOverview = {
+  default: SttTarget
+  local_problem: string | null
+  cloud_problem: string | null
+  cloud_label: string
+}
+export type DictationStatus = {
+  id: string
+  report_id: string
+  engine: SttTarget
+  duration_ms: number
+  level: number
+  /** An utterance is in progress. */
+  speaking: boolean
+  /** Pieces cut but not transcribed yet. */
+  pending: number
+  /** The local speech model is loading. */
+  loading: boolean
+  error: string | null
+}
+/** One transcribed piece (`text: null`: nothing was said). */
+export type DictationPiece = { dictation_id: string; report_id: string; seq: number; text: string | null }
+export type DictationDone = { dictation_id: string; report_id: string; error: string | null }
+/** "Entwurf erstellen" in the Werkstatt. */
+export type WorkshopChoice = { instruction: string | null; withExisting: boolean }
 /** What the therapist chose in the draft dialog (`sessionIds: null` = all sessions). */
 export type DraftChoice = {
   sections: string[]
@@ -261,6 +288,23 @@ export const api = {
     invoke<SessionSource>('recording_start', { sessionId, kind, deviceId }),
   recordingStatus: () => invoke<RecordingStatus | null>('recording_status'),
   stopRecording: () => invoke<SessionSource>('recording_stop'),
+  dictationOverview: () => invoke<DictationOverview>('dictation_overview'),
+  /** Live dictation into a report's editor or Werkstatt; pieces arrive as `dictation:piece`. */
+  dictationStart: (reportId: string, engine: SttTarget | null, deviceId: string | null) =>
+    invoke<{ id: string; engine: SttTarget }>('dictation_start', { reportId, engine, deviceId }),
+  dictationStatus: () => invoke<DictationStatus | null>('dictation_status'),
+  /** The utterance in progress is still transcribed unless `discard`. */
+  dictationStop: (discard = false) => invoke<void>('dictation_stop', { discard }),
+  onDictationPiece: (cb: (p: DictationPiece) => void): Promise<UnlistenFn> =>
+    listen<DictationPiece>('dictation:piece', (e) => cb(e.payload)),
+  onDictationDone: (cb: (d: DictationDone) => void): Promise<UnlistenFn> =>
+    listen<DictationDone>('dictation:done', (e) => cb(e.payload)),
+  workshopGet: (reportId: string) => invoke<string>('workshop_get', { reportId }),
+  workshopSet: (reportId: string, body: string) => invoke<void>('workshop_set', { reportId, body }),
+  workshopPreview: (reportId: string, choice: WorkshopChoice) =>
+    invoke<ExtractPreview>('workshop_preview', { reportId, choice }),
+  workshopRun: (reportId: string, choice: WorkshopChoice, digest: string, requestId: string) =>
+    invoke<DraftResult>('workshop_run', { reportId, choice, digest, requestId }),
   /** WAV bytes of `fromMs..toMs`, decrypted in memory; only until the transcript is confirmed. */
   sourceAudio: (sourceId: string, fromMs: number, toMs: number) =>
     invoke<ArrayBuffer>('source_audio_wav', { sourceId, fromMs, toMs }),

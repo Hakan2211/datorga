@@ -8,6 +8,7 @@ pub mod catalog;
 pub mod context;
 pub mod consent;
 pub mod crypto;
+pub mod dictate;
 pub mod domain;
 pub mod draft;
 pub mod extract;
@@ -22,6 +23,7 @@ pub mod store;
 pub mod stt;
 pub mod templates;
 pub mod tts;
+pub mod workshop;
 
 #[cfg(not(any(feature = "sqlcipher", feature = "plain-sqlite")))]
 compile_error!("enable feature `sqlcipher` (production) or `plain-sqlite` (dev only)");

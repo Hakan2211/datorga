@@ -138,6 +138,15 @@
   height: 0;
   pointer-events: none;
 }
+/* Voice mode: the piece still being recognized. */
+.dictation-pending {
+  color: var(--muted-foreground);
+  margin-left: 0.15em;
+  animation: dictation-pulse 1.2s ease-in-out infinite;
+}
+@keyframes dictation-pulse {
+  50% { opacity: 0.35; }
+}
 
 /* Document mode: an A4 sheet set like render/bericht.typ (11 pt Libertinus, justified,
    2.2 cm side margins). Paper stays white in the dark theme, as on print. */

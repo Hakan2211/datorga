@@ -1,6 +1,7 @@
-import { Extension, Node, getHTMLFromFragment, mergeAttributes, type Extensions } from '@tiptap/core'
+import { Extension, Node, getHTMLFromFragment, mergeAttributes, type Editor, type Extensions } from '@tiptap/core'
 import type { Node as PMNode, ResolvedPos, Schema } from '@tiptap/pm/model'
-import { Plugin, TextSelection } from '@tiptap/pm/state'
+import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state'
+import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import StarterKit from '@tiptap/starter-kit'
 import { Placeholder } from '@tiptap/extension-placeholder'
 import { TextAlign } from '@tiptap/extension-text-align'
@@ -28,7 +29,53 @@ export function richExtensions({ document = true, placeholder }: { document?: bo
       alignments: ['left', 'center', 'right', 'justify'],
     }),
     Placeholder.configure({ placeholder, includeChildren: true }),
+    DictationPending,
   ]
+}
+
+// ---------- voice mode: dictated text at the cursor ----------
+
+const dictationKey = new PluginKey<DecorationSet>('dictationPending')
+
+/** A grey "…" at the cursor while a dictated piece is still being recognized (not part of the content). */
+const DictationPending = Extension.create({
+  name: 'dictationPending',
+  addProseMirrorPlugins() {
+    return [
+      new Plugin<DecorationSet>({
+        key: dictationKey,
+        state: {
+          init: () => DecorationSet.empty,
+          apply(tr, set) {
+            const meta = tr.getMeta(dictationKey) as { on: boolean } | undefined
+            if (!meta) return set.map(tr.mapping, tr.doc)
+            if (!meta.on) return DecorationSet.empty
+            const dots = document.createElement('span')
+            dots.className = 'dictation-pending'
+            dots.textContent = '…'
+            dots.setAttribute('data-testid', 'dictation-pending')
+            return DecorationSet.create(tr.doc, [Decoration.widget(tr.selection.head, dots, { side: 1 })])
+          },
+        },
+        props: { decorations: (st) => dictationKey.getState(st) },
+      }),
+    ]
+  },
+})
+
+/** Shows or hides the grey placeholder at the cursor. */
+export function setDictationPending(editor: Editor, on: boolean) {
+  if (editor.isDestroyed) return
+  editor.view.dispatch(editor.state.tr.setMeta(dictationKey, { on }).setMeta('addToHistory', false))
+}
+
+/** Types a dictated piece at the cursor, with a space before it when it follows a word. */
+export function insertDictated(editor: Editor, text: string) {
+  if (editor.isDestroyed || !editor.isEditable) return
+  const { from } = editor.state.selection
+  const before = from > 1 ? editor.state.doc.textBetween(from - 1, from, '\n', '\n') : ''
+  const lead = before && !/\s/.test(before) ? ' ' : ''
+  editor.chain().insertContent({ type: 'text', text: lead + text }).run()
 }
 
 // ---------- document mode: the whole report in one editor ----------

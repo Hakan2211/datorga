@@ -38,6 +38,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V10__session_prep.sql"),
     include_str!("migrations/V11__draft_quality.sql"),
     include_str!("migrations/V12__calendar.sql"),
+    include_str!("migrations/V13__workshop.sql"),
 ];
 
 /// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).
@@ -249,12 +250,46 @@ impl Store {
         audit::append(&self.conn, Entry { actor: ACTOR, action: "transcription.cloud", entity_type: "session_source", entity_id: Some(source_id), meta })
     }
 
+    /// One live dictation (voice mode or Werkstatt) ended. No text: engine, length and pieces.
+    /// A cloud dictation (`dictation.cloud`) counts towards the spend.
+    pub fn log_dictation(&self, report_id: &str, log: &DictationLog) -> Result<()> {
+        let action = if log.provider.is_some() { "dictation.cloud" } else { "dictation.local" };
+        let meta = json!({
+            "provider": log.provider, "model": log.model, "ok": log.error.is_none(), "error": log.error,
+            "seconds": (log.seconds * 10.0).round() / 10.0, "pieces": log.pieces, "requests": log.requests, "cost_usd": log.cost,
+        });
+        audit::append(&self.conn, Entry { actor: ACTOR, action, entity_type: "report", entity_id: Some(report_id), meta })
+    }
+
+    // ---------- Diktat-Werkstatt ----------
+
+    /// The Werkstatt text of a Sitzungsnotiz or Bericht ("" if none yet).
+    pub fn workshop_text(&self, report_id: &str) -> Result<String> {
+        self.report(report_id)?;
+        Ok(self
+            .conn
+            .query_row("SELECT body FROM workshop_text WHERE report_id = ?1", [report_id], |r| r.get(0))
+            .optional()?
+            .unwrap_or_default())
+    }
+
+    /// Saves the Werkstatt text. Not audited, like section edits; refused once the report is signed.
+    pub fn set_workshop_text(&self, report_id: &str, body: &str) -> Result<()> {
+        self.editable_for_drafts(report_id, Some(DraftSource::Dictation))?;
+        self.conn.execute(
+            "INSERT INTO workshop_text (report_id, body, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(report_id) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at",
+            params![report_id, body, now()],
+        )?;
+        Ok(())
+    }
+
     /// What the LLM calls since `since` (RFC 3339 prefix, e.g. "2026-10") cost, from the audit
     /// log, cloud transcription included. Calls without a reported cost (local, Requesty, custom)
     /// count as requests only.
     pub fn llm_spend(&self, since: &str) -> Result<LlmSpend> {
         let mut stmt = self.conn.prepare(
-            "SELECT meta_json FROM audit_event WHERE (action LIKE 'llm.%' OR action IN ('transcription.cloud', 'prep.live')) AND at >= ?1",
+            "SELECT meta_json FROM audit_event WHERE (action LIKE 'llm.%' OR action IN ('transcription.cloud', 'prep.live', 'dictation.cloud')) AND at >= ?1",
         )?;
         let mut spend = LlmSpend::default();
         for meta in stmt.query_map([since], |r| r.get::<_, String>(0))? {
@@ -1479,10 +1514,16 @@ impl Store {
         Ok(facts)
     }
 
-    /// A Bericht that can still take content (not signed).
-    fn editable_bericht(&self, report_id: &str) -> Result<Report> {
+    /// A report that can still take a draft of `source` (`None`: any): fact drafts are for
+    /// Berichte, Werkstatt drafts for Berichte and Sitzungsnotizen; neither once signed.
+    fn editable_for_drafts(&self, report_id: &str, source: Option<DraftSource>) -> Result<Report> {
         let report = self.report(report_id)?;
-        if report.kind != "bericht" {
+        let ok = match report.kind.as_str() {
+            "bericht" => true,
+            "sitzungsnotiz" => source != Some(DraftSource::Facts),
+            _ => false,
+        };
+        if !ok {
             return Err(Error::Invalid("Entwürfe gibt es nur für Berichte".into()));
         }
         if matches!(report.status, ReportStatus::Signed | ReportStatus::Exported) {
@@ -1500,7 +1541,7 @@ impl Store {
         };
         let mut stmt = self.conn.prepare(
             "SELECT id, section_key, status, mode, provider, model, instructed, dropped, created_at, applied_at,
-                    session_ids, with_existing
+                    session_ids, with_existing, source
              FROM section_draft WHERE report_id = ?1 AND status IN ('proposed', 'applied') ORDER BY created_at, rowid",
         )?;
         let mut drafts: Vec<SectionDraft> = stmt
@@ -1518,6 +1559,7 @@ impl Store {
                     applied_at: r.get(9)?,
                     session_ids: r.get::<_, Option<String>>(10)?.and_then(|j| serde_json::from_str(&j).ok()),
                     with_existing: r.get(11)?,
+                    source: parse_col(r, 12)?,
                     sentences: vec![],
                 })
             })?
@@ -1545,11 +1587,15 @@ impl Store {
         drafts: &[crate::draft::SectionResult],
         facts: &[EpisodeFact],
     ) -> Result<Vec<SectionDraft>> {
-        let report = self.editable_bericht(report_id)?;
+        let report = self.editable_for_drafts(report_id, Some(meta.source))?;
         let ts = now();
         let tx = self.conn.unchecked_transaction()?;
         let (mut sentences, mut dropped) = (0, 0);
         let session_ids = meta.session_ids.as_ref().map(serde_json::to_string).transpose()?;
+        let prompt_version = match meta.source {
+            DraftSource::Facts => crate::draft::PROMPT_VERSION,
+            DraftSource::Dictation => crate::workshop::PROMPT_VERSION,
+        };
         for crate::draft::SectionResult { key, parsed, with_existing } in drafts {
             if !report.sections.iter().any(|s| &s.key == key) {
                 return Err(Error::NotFound(format!("section {key}")));
@@ -1561,10 +1607,10 @@ impl Store {
             let id = new_id();
             tx.execute(
                 "INSERT INTO section_draft (id, report_id, section_key, provider, model, prompt_version, prompt_hash, instructed, dropped,
-                                            created_at, session_ids, with_existing)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-                params![id, report_id, key, meta.provider, meta.model, crate::draft::PROMPT_VERSION, meta.prompt_hash,
-                        meta.instructed, parsed.dropped as i64, ts, session_ids, with_existing],
+                                            created_at, session_ids, with_existing, source)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                params![id, report_id, key, meta.provider, meta.model, prompt_version, meta.prompt_hash,
+                        meta.instructed, parsed.dropped as i64, ts, session_ids, with_existing, meta.source.as_str()],
             )?;
             for (seq, sentence) in parsed.sentences.iter().enumerate() {
                 let sid = new_id();
@@ -1584,7 +1630,7 @@ impl Store {
             actor: ACTOR, action: "report.draft", entity_type: "report", entity_id: Some(report_id),
             meta: json!({
                 "provider": meta.provider, "model": meta.model,
-                "prompt_version": crate::draft::PROMPT_VERSION, "prompt_hash": meta.prompt_hash,
+                "prompt_version": prompt_version, "prompt_hash": meta.prompt_hash, "source": meta.source.as_str(),
                 "sections": drafts.iter().map(|d| d.key.as_str()).collect::<Vec<_>>(),
                 "facts": facts.len(), "sentences": sentences, "dropped": dropped, "instructed": meta.instructed,
                 "sessions": meta.session_ids.as_ref().map(Vec::len),
@@ -1596,7 +1642,7 @@ impl Store {
     }
 
     pub fn reject_draft(&self, report_id: &str, draft_id: &str) -> Result<Vec<SectionDraft>> {
-        self.editable_bericht(report_id)?;
+        self.editable_for_drafts(report_id, None)?;
         let n = self.conn.execute(
             "UPDATE section_draft SET status = 'rejected' WHERE id = ?1 AND report_id = ?2 AND status = 'proposed'",
             params![draft_id, report_id],
@@ -1610,7 +1656,7 @@ impl Store {
     /// Puts a proposed draft into its section, instead of the current text or after it. The report
     /// takes the draft's provenance (model, provider, prompt version and hash).
     pub fn apply_draft(&self, report_id: &str, draft_id: &str, mode: ApplyMode) -> Result<Report> {
-        let report = self.editable_bericht(report_id)?;
+        let report = self.editable_for_drafts(report_id, None)?;
         let draft = self
             .section_drafts(report_id)?
             .into_iter()
@@ -2601,7 +2647,7 @@ mod tests {
                 .collect()
         };
         fn meta() -> DraftMeta {
-            DraftMeta { provider: "local".into(), model: "qwen3-8b".into(), prompt_hash: "ph".into(), instructed: false, session_ids: None }
+            DraftMeta { provider: "local".into(), model: "qwen3-8b".into(), prompt_hash: "ph".into(), instructed: false, session_ids: None, source: DraftSource::Facts }
         }
 
         let drafts = store
@@ -2670,6 +2716,54 @@ mod tests {
             let n: i64 = store.conn().query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap();
             assert_eq!(n, 0, "{table} cascades on erasure");
         }
+    }
+
+    #[test]
+    fn werkstatt_drafts_go_to_notes_and_berichte_and_text_is_kept_per_report() {
+        use crate::draft::{DraftSentence, Parsed, SectionResult};
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let ep = store
+            .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Vt, age_group: AgeGroup::Adult, setting: Setting::Einzel })
+            .unwrap();
+        let s = store
+            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: Some(ep.id.clone()), scheduled_at: None, modality: None, planned_minutes: None })
+            .unwrap();
+        let note = store.create_session_note(&s.id).unwrap();
+        let key = note.sections[0].key.clone();
+
+        assert_eq!(store.workshop_text(&note.id).unwrap(), "");
+        store.set_workshop_text(&note.id, "<p>Erster Gedanke.</p>").unwrap();
+        store.set_workshop_text(&note.id, "<p>Zweiter Gedanke.</p>").unwrap();
+        assert_eq!(store.workshop_text(&note.id).unwrap(), "<p>Zweiter Gedanke.</p>");
+
+        let meta = |source| DraftMeta { provider: "openrouter".into(), model: "m".into(), prompt_hash: "ph".into(), instructed: false, session_ids: None, source };
+        let run = vec![SectionResult {
+            key: key.clone(),
+            parsed: Parsed { sentences: vec![DraftSentence { text: "Pat. schläft schlecht.".into(), facts: vec![] }], dropped: 0 },
+            with_existing: false,
+        }];
+        assert!(store.save_drafts(&note.id, &meta(DraftSource::Facts), &run, &[]).is_err(), "fact drafts are for Berichte only");
+        let drafts = store.save_drafts(&note.id, &meta(DraftSource::Dictation), &run, &[]).unwrap();
+        assert_eq!((drafts.len(), drafts[0].source, drafts[0].sentences[0].sources.len()), (1, DraftSource::Dictation, 0));
+        let r = store.apply_draft(&note.id, &drafts[0].id, ApplyMode::Replace).unwrap();
+        assert_eq!(r.sections[0].body, "<p>Pat. schläft schlecht.</p>");
+        let version: Option<String> = store.conn().query_row("SELECT prompt_version FROM report WHERE id = ?1", [&note.id], |r| r.get(0)).unwrap();
+        assert_eq!(version.as_deref(), Some(crate::workshop::PROMPT_VERSION));
+
+        store.log_dictation(&note.id, &DictationLog { provider: Some("openrouter".into()), model: "w".into(), seconds: 12.34, pieces: 3, requests: 3, cost: Some(0.001), error: None }).unwrap();
+        store.log_dictation(&note.id, &DictationLog { provider: None, model: "large-v3-turbo-q5_0".into(), seconds: 5.0, pieces: 1, requests: 1, cost: None, error: None }).unwrap();
+        let spend = store.llm_spend("2000").unwrap();
+        assert_eq!((spend.requests, spend.usd), (1, 0.001), "only the cloud dictation counts");
+        let events = audit::list(store.conn(), 100).unwrap();
+        assert!(events.iter().any(|e| e.action == "dictation.local"));
+        assert!(events.iter().all(|e| !e.meta_json.contains("schläft") && !e.meta_json.contains("Gedanke")), "no text in the audit log");
+
+        store.sign_report(&note.id, "Dr. Test").unwrap();
+        assert!(store.set_workshop_text(&note.id, "<p>x</p>").is_err(), "signed notes are read-only");
+        store.erase_patient(&p.id).unwrap();
+        let n: i64 = store.conn().query_row("SELECT COUNT(*) FROM workshop_text", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0, "the Werkstatt text goes with the patient");
     }
 
     #[test]

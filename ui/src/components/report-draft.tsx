@@ -279,13 +279,16 @@ export function DraftProposal({
       <div className="flex items-center gap-2">
         <Sparkles className="size-4 text-primary" />
         <span className="font-medium">{draft.with_existing ? t('draft.proposalAddition') : t('draft.proposal')}</span>
+        {draft.source === 'dictation' && <span className="text-xs text-muted-foreground">{t('draft.fromDictation')}</span>}
         <span className="font-mono text-xs text-muted-foreground">{draft.model}</span>
       </div>
       {draft.sentences.length === 0 ? (
         <p className="text-muted-foreground">{t('draft.empty')}</p>
       ) : (
         <>
-          <p className="text-[13px] text-muted-foreground">{t('draft.proposalHint')}</p>
+          <p className="text-[13px] text-muted-foreground">
+            {t(draft.source === 'dictation' ? 'draft.proposalHintDictation' : 'draft.proposalHint')}
+          </p>
           <Sentences draft={draft} noteSections={noteSections} />
         </>
       )}

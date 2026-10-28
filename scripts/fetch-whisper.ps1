@@ -23,10 +23,11 @@ $Extract = Join-Path $Tmp 'x'
 if (Test-Path $Extract) { Remove-Item -Recurse -Force $Extract }
 Expand-Archive $Zip -DestinationPath $Extract
 
-# Only the CLI and the libraries it loads (ggml picks the best ggml-cpu-*.dll at runtime).
+# Only the CLI (recordings), the server (live dictation, keeps the model loaded) and the
+# libraries they load (ggml picks the best ggml-cpu-*.dll at runtime).
 New-Item -ItemType Directory -Force $Dest | Out-Null
 Get-ChildItem $Dest -Exclude '.gitkeep' | Remove-Item -Force
-$Wanted = @('whisper-cli.exe', 'whisper.dll', 'ggml.dll', 'ggml-base.dll')
+$Wanted = @('whisper-cli.exe', 'whisper-server.exe', 'whisper.dll', 'ggml.dll', 'ggml-base.dll')
 Get-ChildItem (Join-Path $Extract 'Release') | Where-Object { $Wanted -contains $_.Name -or $_.Name -like 'ggml-cpu-*.dll' } |
     Copy-Item -Destination $Dest
 Set-Content -Path (Join-Path $Dest 'VERSION') -Value $Tag -NoNewline -Encoding ascii

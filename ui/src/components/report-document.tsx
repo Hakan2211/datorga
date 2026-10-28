@@ -46,6 +46,7 @@ export function ReportDocument({
   onChange,
   onActive,
   onEditLocked,
+  dictateFor,
 }: {
   sections: SectionDef[]
   bodies: Record<string, string>
@@ -54,6 +55,8 @@ export function ReportDocument({
   onChange: (key: string, body: string) => void
   onActive: (key: string) => void
   onEditLocked: (key: string) => void
+  /** Report id: offers voice mode (dictation at the cursor). */
+  dictateFor?: string
 }) {
   const { t } = useTranslation()
   const callbacks = useRef({ onChange, onActive })
@@ -124,7 +127,11 @@ export function ReportDocument({
   return (
     <div ref={box} className="min-w-0">
       {!readOnly && editor && (
-        <EditorToolbar editor={editor} className="sticky top-0 z-10 mb-4 justify-center rounded-md border bg-card shadow-xs" />
+        <EditorToolbar
+          editor={editor}
+          dictateFor={dictateFor}
+          className="sticky top-0 z-10 mb-4 justify-center rounded-md border bg-card shadow-xs"
+        />
       )}
       <Locked.Provider value={{ defs, bodies, onEditLocked }}>
         <div className="doc-page mx-auto" style={{ zoom }} data-testid="doc-page">

@@ -15,6 +15,7 @@ import {
   FileSignature,
   FileText,
   LayoutList,
+  Mic,
   Sparkles,
   Plus,
   TextSelect,
@@ -171,7 +172,8 @@ function ReportEditor({ view }: { view: ReportView }) {
   // Bericht drafting from the episode's applied Sitzungsnotiz facts.
   const drafting = !isNote && !readOnly && !!application
   const draftable = useMemo(() => template.sections.filter((s) => s.field === 'prose' && s.ai_allowed), [template.sections])
-  const drafts = useQuery({ ...q.reportDrafts(report.id), enabled: !isNote })
+  // A note has drafts only from its Werkstatt.
+  const drafts = useQuery(q.reportDrafts(report.id))
   const templates = useQuery({ ...q.templates(), enabled: !isNote })
   const noteSections = templates.data?.find((tp) => tp.key === 'sitzungsnotiz')?.sections ?? []
   const [draftKeys, setDraftKeys] = useState<string[] | null>(null)
@@ -292,6 +294,15 @@ function ReportEditor({ view }: { view: ReportView }) {
             <span className="text-xs">· {template.source}</span>
           </span>
         }
+        actions={
+          !readOnly && (
+            <Button asChild variant="outline" size="sm">
+              <Link to="/reports/$reportId/werkstatt" params={{ reportId: report.id }} data-testid="open-workshop">
+                <Mic /> {t('workshop.open')}
+              </Link>
+            </Button>
+          )
+        }
       />
       <Page>
         {flowOn && (
@@ -366,6 +377,7 @@ function ReportEditor({ view }: { view: ReportView }) {
                 onChange={update}
                 onActive={setActiveKey}
                 onEditLocked={editLocked}
+                dictateFor={report.id}
               />
             ) : template.sections.map((s) => {
               const canDraft = drafting && draftable.some((d) => d.key === s.key)
@@ -380,6 +392,7 @@ function ReportEditor({ view }: { view: ReportView }) {
                   active={isNote && !readOnly && s.key === activeKey}
                   onFocus={() => setActiveKey(s.key)}
                   onChange={(b) => update(s.key, b)}
+                  dictateFor={report.id}
                   action={
                     canDraft && (
                       <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => openDraft([s.key])}>
@@ -566,10 +579,13 @@ function SectionEditor({
   action,
   above,
   below,
+  dictateFor,
 }: {
   def: SectionDef
   body: string
   readOnly: boolean
+  /** Report id: voice mode in this section's toolbar. */
+  dictateFor?: string
   active?: boolean
   onFocus?: () => void
   onChange: (body: string) => void
@@ -621,7 +637,7 @@ function SectionEditor({
       )}
       {above}
       {def.field === 'prose' ? (
-        <RichField value={body} onChange={onChange} placeholder={t('report.placeholder')} readOnly={readOnly} />
+        <RichField value={body} onChange={onChange} placeholder={t('report.placeholder')} readOnly={readOnly} dictateFor={dictateFor} />
       ) : (
         <DiagnosesEditor body={body} onChange={onChange} readOnly={readOnly} />
       )}

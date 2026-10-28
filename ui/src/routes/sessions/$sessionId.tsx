@@ -96,6 +96,17 @@ function SessionPage() {
             {patient.chiffre && <StatusPill className="font-mono">{patient.chiffre}</StatusPill>}
           </span>
         }
+        actions={
+          session.status !== 'cancelled' &&
+          session.note_status !== 'signed' &&
+          session.note_status !== 'exported' && (
+            <Button asChild size="sm" variant="outline">
+              <Link to="/sessions/$sessionId/werkstatt" params={{ sessionId: session.id }} data-testid="open-workshop">
+                <Mic /> {t('workshop.open')}
+              </Link>
+            </Button>
+          )
+        }
       />
       <Page className="flex-1">
         {session.status === 'cancelled' && <CancelledBanner sessionId={session.id} reason={session.cancelled_reason} />}

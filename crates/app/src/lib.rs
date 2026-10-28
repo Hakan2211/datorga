@@ -31,6 +31,8 @@ use thera_core::templates::{Context, Template};
 use thera_core::tts::{self, TtsConfig};
 use thera_core::context;
 use thera_core::live::{self, LiveConfig};
+use thera_core::dictate;
+use thera_core::workshop;
 
 const KEYRING_SERVICE: &str = "de.datorga.thera";
 const KEYRING_USER: &str = "master-key";
@@ -106,6 +108,11 @@ struct AppState {
     llama_loading: Mutex<Option<String>>,
     /// Running extractions and drafts by the request id the UI chose, for `llm_cancel`.
     llm_runs: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// The live dictation (voice mode, Werkstatt), if one runs.
+    dictation: Mutex<Option<ActiveDictation>>,
+    /// whisper-server for live dictation, kept loaded between dictations for a while.
+    whisper_server: Mutex<Option<dictate::WhisperServer>>,
+    whisper_last_used: Mutex<Option<std::time::Instant>>,
 }
 
 struct RunningJob {
@@ -617,6 +624,9 @@ fn recording_start(
     let mut slot = state.recording.lock().map_err(|_| CmdError::Other("state poisoned".into()))?;
     if slot.is_some() {
         return Err(CmdError::Other("Es läuft bereits eine Aufnahme".into()));
+    }
+    if lock(&state.dictation)?.is_some() {
+        return Err(CmdError::Other("Bitte zuerst das Diktat beenden".into()));
     }
     let patient_id = state.with(|s| s.session(&session_id))?.patient_id;
     let free = power::free_space(&state.audio_root());
@@ -2034,6 +2044,7 @@ async fn draft_run(app: AppHandle, report_id: String, choice: DraftChoice, diges
             prompt_hash: prepared.prompt_hash.clone(),
             instructed: draft::clean_instruction(choice.instruction.as_deref())?.is_some(),
             session_ids: choice.session_ids.clone(),
+            source: DraftSource::Facts,
         };
         let drafts = state.with(|s| s.save_drafts(&report_id, &meta, &drafts, &facts))?;
         Ok(DraftResult { drafts, sentences, dropped, done, total, cancelled: done < total })
@@ -2049,6 +2060,440 @@ fn report_draft_reject(state: State<'_, AppState>, report_id: String, draft_id: 
 #[tauri::command]
 fn report_draft_apply(state: State<'_, AppState>, report_id: String, draft_id: String, mode: ApplyMode) -> CmdResult<Report> {
     state.with(|s| s.apply_draft(&report_id, &draft_id, mode))
+}
+
+// ---------- live dictation + Diktat-Werkstatt (slice 24) ----------
+
+/// whisper-server stays loaded this long after the last dictation.
+const WHISPER_IDLE: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// The one live dictation that may run at a time (it shares the microphone with recordings).
+struct ActiveDictation {
+    id: String,
+    report_id: String,
+    target: SttTarget,
+    recorder: Recorder,
+    splitter: Arc<Mutex<dictate::Splitter>>,
+    pieces: std::sync::mpsc::Sender<dictate::Piece>,
+    shared: Arc<DictationShared>,
+}
+
+#[derive(Default)]
+struct DictationShared {
+    speaking: AtomicBool,
+    /// Pieces cut but not yet transcribed.
+    pending: std::sync::atomic::AtomicUsize,
+    /// whisper-server is loading the speech model.
+    loading: AtomicBool,
+    cancel: AtomicBool,
+    error: Mutex<Option<String>>,
+}
+
+impl DictationShared {
+    fn fail(&self, msg: String) {
+        if let Ok(mut e) = self.error.lock() {
+            e.get_or_insert(msg);
+        }
+    }
+}
+
+/// Which engines a live dictation can use right now (the therapist's voice only: the cloud is
+/// allowed whenever it's set up, no patient consent is involved).
+#[derive(Serialize)]
+struct DictationOverview {
+    default: SttTarget,
+    local_problem: Option<String>,
+    cloud_problem: Option<String>,
+    cloud_label: String,
+}
+
+fn whisper_server_exe(state: &AppState) -> PathBuf {
+    state.whisper_dir().join("whisper-server.exe")
+}
+
+fn dictation_overview_for(state: &AppState) -> CmdResult<DictationOverview> {
+    let config = state.with(|s| s.stt_config())?;
+    let local_problem = match local_stt(state, "de") {
+        Err(e) => Some(e.to_string()),
+        Ok(_) if !whisper_server_exe(state).exists() => Some("Die Diktat-Erkennung fehlt in dieser Installation".to_string()),
+        Ok(_) => None,
+    };
+    let model = config.model();
+    let cloud_problem = if model.is_none() {
+        Some("Kein Cloud-Sprachmodell eingetragen (Einstellungen → Transkription)".to_string())
+    } else {
+        llm_endpoint(state, config.cloud_provider, &AtomicBool::new(false)).err().map(|e| e.to_string())
+    };
+    Ok(DictationOverview {
+        default: stt::default_target(&config, SourceKind::Dictation, local_problem.is_none(), false),
+        local_problem,
+        cloud_problem,
+        cloud_label: format!("{} · {}", llm::provider(config.cloud_provider).label, model.unwrap_or_default()),
+    })
+}
+
+#[tauri::command]
+fn dictation_overview(state: State<'_, AppState>) -> CmdResult<DictationOverview> {
+    dictation_overview_for(&state)
+}
+
+#[derive(Clone, Serialize)]
+struct DictationStarted {
+    id: String,
+    engine: SttTarget,
+}
+
+/// Starts a live dictation into report `report_id` (the editor's voice mode or its Werkstatt).
+/// Pieces come back as `dictation:piece` events; `dictation:done` follows the last one.
+#[tauri::command]
+fn dictation_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    report_id: String,
+    engine: Option<SttTarget>,
+    device_id: Option<String>,
+) -> CmdResult<DictationStarted> {
+    if lock(&state.recording)?.is_some() {
+        return Err(CmdError::Other("Während einer Aufnahme ist kein Diktat möglich".into()));
+    }
+    let mut slot = lock(&state.dictation)?;
+    if slot.is_some() {
+        return Err(CmdError::Other("Es läuft bereits ein Diktat".into()));
+    }
+    let report = state.with(|s| s.report(&report_id))?;
+    if matches!(report.status, ReportStatus::Signed | ReportStatus::Exported) {
+        return Err(CmdError::Other("Unterschrieben: hier kann nichts mehr diktiert werden".into()));
+    }
+    let overview = dictation_overview_for(&state)?;
+    let config = state.with(|s| s.stt_config())?;
+    let target = stt::choose(&config, SourceKind::Dictation, overview.local_problem.is_none(), false, engine)?;
+    let cloud = match target {
+        SttTarget::Local => {
+            if let Some(p) = overview.local_problem {
+                return Err(CmdError::Other(p));
+            }
+            None
+        }
+        SttTarget::Cloud => {
+            if let Some(p) = overview.cloud_problem {
+                return Err(CmdError::Other(p));
+            }
+            let (endpoint, _) = llm_endpoint(&state, config.cloud_provider, &AtomicBool::new(false))?;
+            let model = config.model().unwrap_or_default();
+            Some((config.cloud_provider, CloudStt { endpoint, model, language: "de".into() }))
+        }
+    };
+
+    let id = new_id();
+    let shared = Arc::new(DictationShared::default());
+    let splitter = Arc::new(Mutex::new(dictate::Splitter::new()));
+    let (tx, rx) = std::sync::mpsc::channel::<dictate::Piece>();
+    let (sink_split, sink_tx, sink_shared) = (splitter.clone(), tx.clone(), shared.clone());
+    let sink = Box::new(move |pcm: &[i16]| {
+        let mut split = sink_split.lock().map_err(|_| "poisoned".to_string())?;
+        for piece in split.push(pcm) {
+            sink_shared.pending.fetch_add(1, Ordering::SeqCst);
+            let _ = sink_tx.send(piece);
+        }
+        sink_shared.speaking.store(split.speaking(), Ordering::Relaxed);
+        Ok(())
+    });
+    // 100 ms buffers: the splitter decides on every level window.
+    let recorder = Recorder::start(device_id.as_deref(), dictate::WINDOW_MS as usize * audio::SAMPLE_RATE as usize / 1000, sink)
+        .map_err(|e| CmdError::Other(e.to_string()))?;
+    let worker = (app.clone(), id.clone(), report_id.clone(), shared.clone());
+    std::thread::spawn(move || {
+        let (app, id, report_id, shared) = worker;
+        dictation_worker(&app, &id, &report_id, cloud, rx, &shared);
+    });
+    *slot = Some(ActiveDictation { id: id.clone(), report_id, target, recorder, splitter, pieces: tx, shared });
+    Ok(DictationStarted { id, engine: target })
+}
+
+#[derive(Clone, Serialize)]
+struct DictationPiece<'a> {
+    dictation_id: &'a str,
+    report_id: &'a str,
+    seq: u32,
+    /// `None`: nothing was said (noise, a cough).
+    text: Option<&'a str>,
+}
+
+#[derive(Clone, Serialize)]
+struct DictationDone<'a> {
+    dictation_id: &'a str,
+    report_id: &'a str,
+    error: Option<String>,
+}
+
+/// Transcribes the pieces of one dictation in order, until the recorder is stopped and the last
+/// piece is done. Logs the dictation (no text) at the end.
+fn dictation_worker(
+    app: &AppHandle,
+    id: &str,
+    report_id: &str,
+    cloud: Option<(ProviderId, CloudStt)>,
+    rx: std::sync::mpsc::Receiver<dictate::Piece>,
+    shared: &DictationShared,
+) {
+    let state = app.state::<AppState>();
+    let mut log = DictationLog { provider: cloud.as_ref().map(|(p, _)| provider_str(*p)), ..Default::default() };
+    // The local model loads while she starts speaking; pieces queue meanwhile.
+    if cloud.is_none() {
+        shared.loading.store(true, Ordering::Relaxed);
+        if let Err(e) = ensure_whisper_server(&state, &shared.cancel) {
+            shared.fail(e.to_string());
+        }
+        shared.loading.store(false, Ordering::Relaxed);
+    }
+    let mut previous: Option<String> = None;
+    for piece in rx {
+        let failed = lock(&shared.error).map(|e| e.is_some()).unwrap_or(true);
+        if !failed && !shared.cancel.load(Ordering::Relaxed) {
+            let result = match &cloud {
+                Some((_, c)) => {
+                    log.model = c.model.clone();
+                    dictate::transcribe_piece(&dictate::LiveEngine::Cloud(c), &piece, None, &shared.cancel)
+                }
+                None => match lock(&state.whisper_server) {
+                    Ok(guard) => match guard.as_ref() {
+                        Some(server) => {
+                            log.model = server.model_id.clone();
+                            dictate::transcribe_piece(&dictate::LiveEngine::Local(server), &piece, previous.as_deref(), &shared.cancel)
+                        }
+                        None => Err(thera_core::Error::Stt("Diktat-Erkennung läuft nicht".into())),
+                    },
+                    Err(_) => Err(thera_core::Error::Stt("state poisoned".into())),
+                },
+            };
+            match result {
+                Ok((text, usage)) => {
+                    log.pieces += 1;
+                    log.seconds += piece.duration_ms() as f64 / 1000.0;
+                    if let Some(u) = usage {
+                        log.requests += u.requests;
+                        if let Some(c) = u.cost {
+                            *log.cost.get_or_insert(0.0) += c;
+                        }
+                    } else {
+                        log.requests += 1;
+                    }
+                    let _ = app.emit("dictation:piece", DictationPiece { dictation_id: id, report_id, seq: piece.seq, text: text.as_deref() });
+                    previous = text.map(|t| t.chars().rev().take(200).collect::<Vec<_>>().into_iter().rev().collect());
+                }
+                Err(thera_core::Error::Cancelled) => {}
+                Err(e) => shared.fail(e.to_string()),
+            }
+        }
+        if lock(&shared.error).map(|e| e.is_some()).unwrap_or(false) {
+            // Unsent pieces are dropped; the UI clears their placeholder.
+            let _ = app.emit("dictation:piece", DictationPiece { dictation_id: id, report_id, seq: piece.seq, text: None });
+        }
+        shared.pending.fetch_sub(1, Ordering::SeqCst);
+        drop(piece);
+    }
+    let error = lock(&shared.error).ok().and_then(|e| e.clone());
+    log.error = error.as_ref().map(|_| "error".to_string());
+    if log.pieces > 0 || log.error.is_some() {
+        let _ = state.with(|s| s.log_dictation(report_id, &log));
+    }
+    let _ = app.emit("dictation:done", DictationDone { dictation_id: id, report_id, error });
+    schedule_whisper_idle(app.clone());
+}
+
+/// Starts whisper-server with the chosen speech model, unless it already runs with it.
+fn ensure_whisper_server(state: &AppState, cancel: &AtomicBool) -> CmdResult<()> {
+    let mut slot = lock(&state.whisper_server)?;
+    let model_id = active_model(state)?;
+    if let Some(server) = slot.as_mut() {
+        if server.model_id == model_id && server.alive() {
+            return Ok(());
+        }
+    }
+    *slot = None;
+    let model = stt::model(&model_id)?;
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get().saturating_sub(1).clamp(1, 8));
+    let mut server = dictate::WhisperServer::spawn(&whisper_server_exe(state), &state.models_dir().join(model.file), &model_id, "de", threads)?;
+    if let Some(job) = &state.job {
+        job.assign(server.child());
+    }
+    server.wait_ready(std::time::Duration::from_secs(120), || cancel.load(Ordering::Relaxed) || state.exiting.load(Ordering::Relaxed))?;
+    *slot = Some(server);
+    Ok(())
+}
+
+/// Stops whisper-server once no dictation used it for [`WHISPER_IDLE`] (frees ~1 GB of RAM).
+fn schedule_whisper_idle(app: AppHandle) {
+    let state = app.state::<AppState>();
+    if let Ok(mut at) = state.whisper_last_used.lock() {
+        *at = Some(std::time::Instant::now());
+    }
+    std::thread::spawn(move || {
+        std::thread::sleep(WHISPER_IDLE);
+        let state = app.state::<AppState>();
+        let idle = state.whisper_last_used.lock().ok().and_then(|at| *at).is_some_and(|at| at.elapsed() >= WHISPER_IDLE);
+        let dictating = state.dictation.lock().map(|d| d.is_some()).unwrap_or(true);
+        if idle && !dictating {
+            if let Ok(mut slot) = state.whisper_server.lock() {
+                *slot = None;
+            }
+        }
+    });
+}
+
+#[derive(Serialize)]
+struct DictationStatus {
+    id: String,
+    report_id: String,
+    engine: SttTarget,
+    duration_ms: u64,
+    level: f32,
+    speaking: bool,
+    pending: usize,
+    loading: bool,
+    error: Option<String>,
+}
+
+/// Polled by the UI (~10 Hz) for the level meter and the "listening / recognizing" state.
+#[tauri::command]
+fn dictation_status(state: State<'_, AppState>) -> CmdResult<Option<DictationStatus>> {
+    let slot = lock(&state.dictation)?;
+    Ok(slot.as_ref().map(|d| DictationStatus {
+        id: d.id.clone(),
+        report_id: d.report_id.clone(),
+        engine: d.target,
+        duration_ms: d.recorder.duration_ms(),
+        level: d.recorder.level(),
+        speaking: d.shared.speaking.load(Ordering::Relaxed),
+        pending: d.shared.pending.load(Ordering::SeqCst),
+        loading: d.shared.loading.load(Ordering::Relaxed),
+        error: d.recorder.error().or_else(|| d.shared.error.lock().ok().and_then(|e| e.clone())),
+    }))
+}
+
+/// Stops the microphone. The utterance in progress is still transcribed; `dictation:done`
+/// follows the last piece. `discard`: drop what isn't transcribed yet.
+#[tauri::command]
+fn dictation_stop(state: State<'_, AppState>, discard: Option<bool>) -> CmdResult<()> {
+    let Some(d) = lock(&state.dictation)?.take() else { return Ok(()) };
+    if discard == Some(true) {
+        d.shared.cancel.store(true, Ordering::Relaxed);
+    }
+    if let Err(e) = d.recorder.stop() {
+        d.shared.fail(e.to_string());
+    }
+    d.shared.speaking.store(false, Ordering::Relaxed);
+    if let Some(piece) = lock(&d.splitter)?.finish() {
+        d.shared.pending.fetch_add(1, Ordering::SeqCst);
+        let _ = d.pieces.send(piece);
+    }
+    // Dropping the last sender ends the worker once the queue is done.
+    Ok(())
+}
+
+#[tauri::command]
+fn workshop_get(state: State<'_, AppState>, report_id: String) -> CmdResult<String> {
+    state.with(|s| s.workshop_text(&report_id))
+}
+
+#[tauri::command]
+fn workshop_set(state: State<'_, AppState>, report_id: String, body: String) -> CmdResult<()> {
+    state.with(|s| s.set_workshop_text(&report_id, &body))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkshopChoice {
+    instruction: Option<String>,
+    /// Send the sections' current text along, so the proposal only adds to it.
+    #[serde(default)]
+    with_existing: bool,
+}
+
+/// Exactly what "Entwurf erstellen" in the Werkstatt would send.
+fn prepare_workshop(s: &Store, report_id: &str, choice: &WorkshopChoice) -> thera_core::Result<(workshop::Prepared, workshop::Audience)> {
+    let view = report_view(s, report_id)?;
+    let audience = if view.report.kind == "sitzungsnotiz" {
+        workshop::Audience::Note
+    } else {
+        let (Some(episode), Some(application)) = (&view.episode, &view.application) else {
+            return Err(thera_core::Error::Invalid("Entwürfe gibt es nur für Berichte zu einem Antrag".into()));
+        };
+        workshop::Audience::Bericht(draft::Frame { method: episode.method, age_group: episode.age_group, kind: application.kind })
+    };
+    let text = draft::plain_text(&s.workshop_text(report_id)?);
+    let existing: Vec<(String, String)> = if choice.with_existing {
+        view.report.sections.iter().map(|sec| (sec.key.clone(), draft::plain_text(&sec.body))).collect()
+    } else {
+        vec![]
+    };
+    let dict = s.pseudo_dictionary(&view.patient.id)?;
+    let req = workshop::Request { text: &text, existing: &existing, instruction: choice.instruction.as_deref() };
+    Ok((workshop::prepare(&view.template, &audience, &req, &view.patient, dict)?, audience))
+}
+
+#[tauri::command]
+fn workshop_preview(state: State<'_, AppState>, report_id: String, choice: WorkshopChoice) -> CmdResult<ExtractPreview> {
+    let (prepared, _) = state.with(|s| prepare_workshop(s, &report_id, &choice))?;
+    let report = state.with(|s| s.report(&report_id))?;
+    let terms = state.with(|s| s.pseudo_terms(&report.patient_id))?;
+    let config = state.with(|s| s.llm_config())?;
+    let provider = config.active.map(llm::provider);
+    let model = config.active.and_then(|id| config.settings(id).model).filter(|m| !m.is_empty());
+    Ok(ExtractPreview { preview: prepared.preview(), terms, provider, model })
+}
+
+/// Sends the previewed Werkstatt request (one streamed request for all sections) and stores a
+/// proposal per section that got text. `digest` must match the preview the therapist saw.
+#[tauri::command]
+async fn workshop_run(app: AppHandle, report_id: String, choice: WorkshopChoice, digest: String, request_id: String) -> CmdResult<DraftResult> {
+    let events = app.clone();
+    blocking(app, move |state| {
+        let run = LlmRun::start(state, &request_id)?;
+        let (provider, model) = active_llm(state)?;
+        let (prepared, audience) = state.with(|s| prepare_workshop(s, &report_id, &choice))?;
+        if prepared.digest != digest {
+            return Err(CmdError::Other("Der Text hat sich seit der Vorschau geändert. Bitte die Vorschau erneut prüfen.".into()));
+        }
+        let progress = |stage, done| {
+            let _ = events.emit("draft-progress", ExtractProgress { report_id: report_id.clone(), stage, done, total: 1 });
+        };
+        let nothing = || {
+            let drafts = state.with(|s| s.section_drafts(&report_id))?;
+            Ok(DraftResult { drafts, sentences: 0, dropped: 0, done: 0, total: 1, cancelled: true })
+        };
+        if provider == ProviderId::Local {
+            progress("loading", 0);
+        }
+        let ep = match llm_endpoint(state, provider, &run.cancel) {
+            Err(_) if run.cancelled() => return nothing(),
+            r => r?.0,
+        };
+        progress("running", 0);
+        let messages = [(llm::Role::System, &prepared.system), (llm::Role::User, &prepared.user)];
+        let Some(completion) = stream_call(state, &events, &run, "llm.workshop", (provider, &model), &ep, &messages, &workshop::chat_options())? else {
+            return nothing();
+        };
+        let results = workshop::parse(&completion.text, &prepared, &audience)?;
+        progress("running", 1);
+        let sentences = results.iter().map(|r| r.parsed.sentences.len()).sum();
+        let dropped = results.iter().map(|r| r.parsed.dropped).sum();
+        if results.is_empty() {
+            let drafts = state.with(|s| s.section_drafts(&report_id))?;
+            return Ok(DraftResult { drafts, sentences: 0, dropped, done: 1, total: 1, cancelled: false });
+        }
+        let meta = DraftMeta {
+            provider: provider_str(provider),
+            model: completion.model,
+            prompt_hash: prepared.prompt_hash.clone(),
+            instructed: draft::clean_instruction(choice.instruction.as_deref())?.is_some(),
+            session_ids: None,
+            source: DraftSource::Dictation,
+        };
+        let drafts = state.with(|s| s.save_drafts(&report_id, &meta, &results, &[]))?;
+        Ok(DraftResult { drafts, sentences, dropped, done: 1, total: 1, cancelled: false })
+    })
+    .await
 }
 
 // ---------- voice prep (slice 26) ----------
@@ -2370,6 +2815,9 @@ pub fn run() {
                 llama_start: Mutex::new(()),
                 llama_loading: Mutex::new(None),
                 llm_runs: Mutex::new(HashMap::new()),
+                dictation: Mutex::new(None),
+                whisper_server: Mutex::new(None),
+                whisper_last_used: Mutex::new(None),
             });
             let handle = app.handle().clone();
             std::thread::spawn(move || stt_worker(handle));
@@ -2399,6 +2847,14 @@ pub fn run() {
             recording_start,
             recording_status,
             recording_stop,
+            dictation_overview,
+            dictation_start,
+            dictation_status,
+            dictation_stop,
+            workshop_get,
+            workshop_set,
+            workshop_preview,
+            workshop_run,
             session_get,
             source_audio_wav,
             transcription_start,

@@ -10,11 +10,14 @@ export function RichField({
   onChange,
   placeholder,
   readOnly,
+  dictateFor,
 }: {
   value: string
   onChange: (html: string) => void
   placeholder?: string
   readOnly?: boolean
+  /** Report id: offers voice mode (dictation into this field). */
+  dictateFor?: string
 }) {
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
@@ -46,7 +49,7 @@ export function RichField({
         readOnly && 'bg-muted/40',
       )}
     >
-      {!readOnly && editor && <EditorToolbar editor={editor} />}
+      {!readOnly && editor && <EditorToolbar editor={editor} dictateFor={dictateFor} />}
       <EditorContent editor={editor} className="px-3 py-2" />
     </div>
   )

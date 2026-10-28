@@ -199,3 +199,13 @@ Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.
 | K5 | **.ics = Chiffre + "Sitzung n" only**, three months from the start of the view, cancelled ones marked `STATUS:CANCELLED`. | A file that leaves the app; names and reasons never go into it. |
 | K6 | **"Fällig"** = sessions of the last 60 days that weren't cancelled and have no signed note; Berichte for an application in draft/review; tomorrow's planned sessions with nothing done yet. | Today's sessions are already on the timeline with their next step. |
 | K7 | **Times are typed (`HH:MM`)**, not picked in quarter hours. | 50-minute rhythms start at 8:50, 9:40, …; the native time input showed AM/PM. |
+
+## 12. Voice mode + Werkstatt decisions (slice 24, 2026-10-28; made while building, for the user to review)
+
+| # | Decision | Why |
+|---|---|---|
+| W1 | **Live dictation is the therapist's voice only** and may use the cloud whenever cloud transcription is set up (Settings choose local/cloud like for dictations). No audio is ever written to disk; pieces are wiped after transcription. | Same rule as slice 17 for dictations; session audio never goes this way. |
+| W2 | **~3.5 s per sentence locally** (encoder context = piece + 512 frames) rather than ~2.3 s. | The faster setting invented text on short or reverberant pieces; wrong words in clinical notes cost more than a second. |
+| W3 | **The Werkstatt text is stored** per note/Bericht (encrypted DB, removed with the patient), not the audio. | She can come back to it; a draft can be made later. |
+| W4 | **Werkstatt proposals go through the same review** as fact drafts (replace/append/reject) and never touch diagnoses; in a Bericht a sentence naming another person is dropped, in a Sitzungsnotiz names are restored. | MDR rule and the Gutachter-Chiffre rule from slice 14; the note stays in the practice. |
+| W5 | **One dictation at a time**, and none while a recording runs. | One microphone; a recording must not lose audio to a dictation. |

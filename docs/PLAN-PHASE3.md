@@ -125,7 +125,7 @@ Each slice below follows the house pattern: core logic plus tests in `crates/cor
   - text alignment, only where `render/richtext.rs` + the DOCX exporter support it (extend both together)
 - Preview: a split view that renders through the existing typst pipeline into bytes (new command `report_preview_pdf(id) -> Vec<u8>`), shown as a blob URL in WebView2's PDF viewer, debounced re-render. What you see is exactly the export.
 
-**24. Voice mode + Diktat-Werkstatt**
+**24. Voice mode + Diktat-Werkstatt** (done 2026-10-28, see HANDOFF "Built (slice 24)". Deviations: no `voice_note` source row (the Werkstatt also exists per Bericht; the `dictation.*` audit entry records it); ~3.5 s per sentence on CPU instead of 1–3 s (shorter encoder context hallucinated); the newest piece shows as a grey "…" until its text arrives, not as interim text.)
 - **Near-live dictation** (therapist voice only):
   - Local: a whisper.cpp `whisper-server` sidecar (same release as whisper-cli, add it to `fetch-whisper.ps1`). It's fed utterance-sized pieces split at silence from the capture crate (VAD on the level meter: about 600 ms of silence ends a piece).
   - Cloud: the same pieces go to `CloudStt` (slice 17), if that's allowed.
