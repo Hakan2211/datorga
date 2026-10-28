@@ -423,6 +423,20 @@ export const de = {
     listenHint: 'Auf eine Zeitmarke klicken spielt ab dieser Stelle.',
     playingAt: 'Ab {{time}}',
     playSegment: 'Ab hier anhören',
+    speakers: {
+      therapist: 'Therapeut/in',
+      patient: 'Patient/in',
+      speaker: 'Sprecher {{n}}',
+      none: 'unklar',
+      change: 'Sprecher dieses Abschnitts ändern',
+      recognized:
+        'Ihre Stimme wurde erkannt. Stimmt die Zuordnung nicht, tauschen Sie die Sprecher oder ändern Sie einzelne Abschnitte.',
+      unrecognized:
+        'Die Sprecher wurden getrennt, aber Ihre Stimme ist noch nicht bekannt. Wer davon sind Sie? thera merkt sich Ihre Stimme für die nächsten Aufnahmen.',
+      isMe: '{{name}} bin ich',
+      swap: 'Sprecher tauschen',
+      learned: 'Zugeordnet',
+    },
   },
   note: {
     title: 'Sitzungsnotiz',
@@ -444,7 +458,7 @@ export const de = {
     insertSelection: 'Markierten Text einfügen',
     selectHint: 'Text in einer Zeile markieren, um nur diesen Teil einzufügen.',
     inserted: 'Eingefügt',
-    role: { therapist: 'Diktat', patient: 'Patient/in', unknown: 'Sitzung' },
+    role: { dictation: 'Diktat', therapist: 'Therapeut/in', patient: 'Patient/in', unknown: 'Sitzung' },
   },
   facts: {
     title: 'KI-Vorschläge aus der Abschrift',
@@ -818,6 +832,21 @@ export const de = {
       import: 'Datei auswählen…',
       delete: 'Entfernen',
       failed: 'Fehlgeschlagen',
+      speakers: {
+        title: 'Sprechertrennung',
+        intro:
+          'Trennt in Sitzungsaufnahmen, wer spricht: Sie oder Ihr Gegenüber. Läuft vollständig auf diesem Computer, nach jeder Transkription.',
+        enabled: 'Sprecher in Sitzungsaufnahmen trennen',
+        learn: 'Meine Stimme aus Diktaten und „… bin ich“ lernen',
+        learnHint:
+          'Dafür speichert thera einen Stimmabdruck (Zahlenwerte, keine Tonaufnahme) verschlüsselt in der Datenbank. Den Abdruck Ihres Gegenübers löscht thera mit der Tonaufnahme, sobald Sie die Abschrift bestätigen.',
+        profile: 'Ihr Stimmprofil',
+        profileNone: 'Noch kein Stimmprofil. Diktieren Sie einmal etwa eine halbe Minute, oder markieren Sie sich in einer Sitzungsabschrift.',
+        profileSome: 'aus {{dictations}} Diktat(en) und {{sessions}} Sitzung(en), {{minutes}} min Sprache',
+        deleteProfile: 'Stimmprofil löschen',
+        deleted: 'Stimmprofil gelöscht',
+        missing: 'Die Sprechertrennung fehlt in dieser Installation.',
+      },
       models: {
         'large-v3-turbo-q5_0': 'Empfohlen: gute Genauigkeit für Deutsch, läuft auf normalen Laptops',
         'large-v3-turbo': 'Höchste Genauigkeit, langsamer, braucht mehr Arbeitsspeicher',

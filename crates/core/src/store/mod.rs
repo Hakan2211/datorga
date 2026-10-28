@@ -18,6 +18,7 @@ use crate::{Error, Result};
 
 mod agent;
 mod calendar;
+mod speakers;
 pub use agent::{TextMode, TextProposal};
 pub use calendar::normalize_ts;
 
@@ -42,6 +43,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V12__calendar.sql"),
     include_str!("migrations/V13__workshop.sql"),
     include_str!("migrations/V14__assistant.sql"),
+    include_str!("migrations/V15__speakers.sql"),
 ];
 
 /// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).
@@ -891,6 +893,24 @@ impl Store {
 
     /// Stores the engine output as a draft transcript and closes the job, in one transaction.
     pub fn finish_transcription(&self, job_id: &str, engine: &str, model: &str, segments: &[stt::Segment]) -> Result<Transcript> {
+        self.finish_transcription_with(job_id, engine, model, segments, None)
+    }
+
+    /// [`Self::finish_transcription`] with the speakers of a session recording (one label per
+    /// segment) and their prints, kept until the transcript is confirmed.
+    pub fn finish_transcription_with(
+        &self,
+        job_id: &str,
+        engine: &str,
+        model: &str,
+        segments: &[stt::Segment],
+        speakers: Option<&crate::diarize::Diarization>,
+    ) -> Result<Transcript> {
+        if let Some(d) = speakers {
+            if d.labels.len() != segments.len() {
+                return Err(Error::Invalid("speaker labels don't match the segments".into()));
+            }
+        }
         let source_id = self.job(job_id)?.source_id.ok_or_else(|| Error::Invalid("job has no source".into()))?;
         let language: String =
             self.conn.query_row("SELECT language FROM session_source WHERE id = ?1", [&source_id], |r| r.get(0))?;
@@ -904,22 +924,33 @@ impl Store {
             return Err(Error::Invalid("Die Abschrift ist bereits bestätigt".into()));
         }
         tx.execute("DELETE FROM transcript WHERE source_id = ?1", [&source_id])?;
+        tx.execute("DELETE FROM source_speaker WHERE source_id = ?1", [&source_id])?;
         let id = new_id();
         let ts = now();
         tx.execute(
-            "INSERT INTO transcript (id, source_id, engine, model, language, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, source_id, engine, model, language, ts],
+            "INSERT INTO transcript (id, source_id, engine, model, language, created_at, diarization) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, source_id, engine, model, language, ts, speakers.map(|d| &d.engine)],
         )?;
         for (i, seg) in segments.iter().enumerate() {
+            let label = speakers.and_then(|d| d.labels[i].as_deref());
             tx.execute(
-                "INSERT INTO transcript_segment (id, transcript_id, idx, start_ms, end_ms, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![new_id(), id, i as i64, seg.start_ms, seg.end_ms, seg.text],
+                "INSERT INTO transcript_segment (id, transcript_id, idx, start_ms, end_ms, text, speaker_label) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![new_id(), id, i as i64, seg.start_ms, seg.end_ms, seg.text, label],
+            )?;
+        }
+        for p in speakers.map_or(&[][..], |d| &d.speakers[..]) {
+            tx.execute(
+                "INSERT INTO source_speaker (source_id, label, embedding, seconds) VALUES (?1, ?2, ?3, ?4)",
+                params![source_id, p.label, speakers::blob(&p.embedding), p.seconds as f64],
             )?;
         }
         tx.execute("UPDATE job SET status = 'done', progress = 100, updated_at = ?2 WHERE id = ?1", params![job_id, ts])?;
         audit::append(&tx, Entry {
             actor: "system", action: "transcript.create", entity_type: "transcript", entity_id: Some(&id),
-            meta: json!({ "source_id": source_id, "engine": engine, "model": model, "segments": segments.len() }),
+            meta: json!({
+                "source_id": source_id, "engine": engine, "model": model, "segments": segments.len(),
+                "speakers": speakers.map(|d| d.speakers.len()), "voice_match": speakers.map(|d| d.matched.is_some()),
+            }),
         })?;
         tx.commit()?;
         self.transcript(&id)
@@ -933,10 +964,21 @@ impl Store {
             .ok_or_else(|| Error::NotFound(format!("transcript {id}")))?;
         let mut stmt = self
             .conn
-            .prepare("SELECT idx, start_ms, end_ms, text, edited FROM transcript_segment WHERE transcript_id = ?1 ORDER BY idx")?;
+            .prepare(
+                "SELECT idx, start_ms, end_ms, text, edited, speaker_label, speaker_edited
+                 FROM transcript_segment WHERE transcript_id = ?1 ORDER BY idx",
+            )?;
         t.segments = stmt
             .query_map([id], |r| {
-                Ok(TranscriptSegment { idx: r.get(0)?, start_ms: r.get(1)?, end_ms: r.get(2)?, text: r.get(3)?, edited: r.get(4)? })
+                Ok(TranscriptSegment {
+                    idx: r.get(0)?,
+                    start_ms: r.get(1)?,
+                    end_ms: r.get(2)?,
+                    text: r.get(3)?,
+                    edited: r.get(4)?,
+                    speaker: r.get(5)?,
+                    speaker_edited: r.get(6)?,
+                })
             })?
             .collect::<std::result::Result<_, _>>()?;
         Ok(t)
@@ -984,6 +1026,8 @@ impl Store {
             actor: ACTOR, action: "transcript.confirm", entity_type: "transcript", entity_id: Some(id),
             meta: json!({ "source_id": t.source_id, "edited": t.segments.iter().filter(|s| s.edited).count() }),
         })?;
+        // Voice prints of this recording's speakers go with the audio (the patient's is biometric).
+        tx.execute("DELETE FROM source_speaker WHERE source_id = ?1", [&t.source_id])?;
         if audio_dir.is_some() {
             tx.execute("UPDATE audio_asset SET deleted_at = ?2, dek = '' WHERE source_id = ?1", params![t.source_id, ts])?;
             audit::append(&tx, Entry {
@@ -1001,7 +1045,7 @@ impl Store {
     /// The pipeline's input for a session: confirmed transcripts only, in recording order.
     pub fn source_segments(&self, session_id: &str) -> Result<Vec<SourceSegment>> {
         let mut stmt = self.conn.prepare(
-            "SELECT src.id, src.kind, seg.start_ms, seg.end_ms, seg.text, seg.id
+            "SELECT src.id, src.kind, seg.start_ms, seg.end_ms, seg.text, seg.id, seg.speaker_label
              FROM transcript_segment seg
              JOIN transcript t ON t.id = seg.transcript_id
              JOIN session_source src ON src.id = t.source_id
@@ -1010,10 +1054,12 @@ impl Store {
         )?;
         let rows = stmt.query_map([session_id], |r| {
             let kind: SourceKind = parse_col(r, 1)?;
+            let label: Option<String> = r.get(6)?;
             Ok(SourceSegment {
                 segment_id: r.get(5)?,
                 source_id: r.get(0)?,
-                role: if kind == SourceKind::Dictation { Speaker::Therapist } else { Speaker::Unknown },
+                kind,
+                role: if kind == SourceKind::Dictation { Speaker::Therapist } else { crate::diarize::role(label.as_deref()) },
                 start_ms: r.get(2)?,
                 end_ms: r.get(3)?,
                 text: r.get(4)?,
@@ -1044,7 +1090,7 @@ impl Store {
             None => template,
         };
         let dictated: Vec<_> =
-            self.source_segments(session_id)?.into_iter().filter(|s| s.role == Speaker::Therapist).collect();
+            self.source_segments(session_id)?.into_iter().filter(|s| s.kind == SourceKind::Dictation).collect();
         let dictation = dictation_html(&dictated);
 
         let tx = self.conn.unchecked_transaction()?;
@@ -1939,7 +1985,7 @@ const SESSION_SELECT: &str = "SELECT s.id, s.patient_id, s.episode_id, s.schedul
 const JOB_SELECT: &str =
     "SELECT id, kind, source_id, status, progress, attempts, last_error, created_at, updated_at, engine FROM job";
 const TRANSCRIPT_SELECT: &str =
-    "SELECT id, source_id, engine, model, language, status, created_at, confirmed_at FROM transcript";
+    "SELECT id, source_id, engine, model, language, status, created_at, confirmed_at, diarization FROM transcript";
 
 fn row_to_job(r: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
     Ok(Job {
@@ -1968,6 +2014,7 @@ fn row_to_transcript(r: &rusqlite::Row<'_>) -> rusqlite::Result<Transcript> {
         status: parse_col(r, 5)?,
         created_at: r.get(6)?,
         confirmed_at: r.get(7)?,
+        diarization: r.get(8)?,
         segments: vec![],
     })
 }
@@ -2370,6 +2417,126 @@ mod tests {
 
     fn seg(start_ms: i64, text: &str) -> stt::Segment {
         stt::Segment { start_ms, end_ms: start_ms + 1000, text: text.into() }
+    }
+
+    fn recorded_session(store: &Store, p: &Patient, s: &Session, dir: &Path) -> SessionSource {
+        store.grant_consent(&p.id, ConsentKind::Recording, None).unwrap();
+        let (src, mut w) = store.start_source(&s.id, SourceKind::SessionAudio, dir).unwrap();
+        w.write(&vec![5i16; 8_000]).unwrap();
+        store.finish_source(&src.id, "stopped", &w).unwrap()
+    }
+
+    fn diarization(labels: &[Option<&str>], speakers: &[(&str, Vec<f32>)]) -> crate::diarize::Diarization {
+        crate::diarize::Diarization {
+            engine: "sherpa-test".into(),
+            labels: labels.iter().map(|l| l.map(str::to_string)).collect(),
+            speakers: speakers
+                .iter()
+                .map(|(l, e)| crate::diarize::LabelledPrint { label: l.to_string(), embedding: e.clone(), seconds: 30.0 })
+                .collect(),
+            matched: None,
+        }
+    }
+
+    fn speakers_of(t: &Transcript) -> Vec<Option<String>> {
+        t.segments.iter().map(|s| s.speaker.clone()).collect()
+    }
+
+    #[test]
+    fn speakers_are_stored_swapped_assigned_and_learned() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let s = session(&store, &p);
+        let src = recorded_session(&store, &p, &s, dir.path());
+        let job = store.enqueue_transcription(&src.id, None).unwrap();
+        store.claim_next_job().unwrap();
+        let segs = [seg(0, "Wie geht es Ihnen?"), seg(1000, "Schlecht."), seg(2000, "Seit wann?")];
+        let d = diarization(
+            &[Some("speaker_1"), Some("speaker_2"), None],
+            &[("speaker_1", vec![1.0, 0.0]), ("speaker_2", vec![0.0, 1.0])],
+        );
+        assert!(store.finish_transcription_with(&job.id, "e", "m", &segs[..2], Some(&d)).is_err(), "one label per segment");
+        let t = store.finish_transcription_with(&job.id, "e", "m", &segs, Some(&d)).unwrap();
+        assert_eq!(t.diarization.as_deref(), Some("sherpa-test"));
+        assert_eq!(speakers_of(&t), vec![Some("speaker_1".into()), Some("speaker_2".into()), None]);
+
+        // "Sprecher 1 bin ich": names both and learns her print.
+        assert!(store.assign_therapist(&t.id, "speaker_7").is_err());
+        let t = store.assign_therapist(&t.id, "speaker_1").unwrap();
+        assert_eq!(speakers_of(&t), vec![Some("therapist".into()), Some("patient".into()), None]);
+        assert_eq!(store.voice_profile("sherpa-test").unwrap().sessions, 1);
+        assert_eq!(store.voice_profile_embedding("sherpa-test").unwrap(), Some(vec![1.0, 0.0]));
+        assert_eq!(store.voice_profile_embedding("other-engine").unwrap(), None, "prints of another engine don't count");
+
+        // Swap moves the prints' labels too: "Patient/in bin ich" then learns the other print.
+        let t = store.swap_speakers(&t.id).unwrap();
+        assert_eq!(speakers_of(&t), vec![Some("patient".into()), Some("therapist".into()), None]);
+        let t = store.assign_therapist(&t.id, "patient").unwrap();
+        assert_eq!(speakers_of(&t), vec![Some("therapist".into()), Some("patient".into()), None]);
+        assert_eq!(store.voice_profile("sherpa-test").unwrap().sessions, 2);
+
+        store.set_segment_speaker(&t.id, 2, "therapist").unwrap();
+        assert!(store.set_segment_speaker(&t.id, 2, "Therapeutin").is_err(), "labels are checked");
+        let t = store.transcript(&t.id).unwrap();
+        assert!(t.segments[2].speaker_edited && !t.segments[1].speaker_edited);
+
+        let prints = |store: &Store| -> i64 {
+            store.conn().query_row("SELECT COUNT(*) FROM source_speaker WHERE source_id = ?1", [&src.id], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(prints(&store), 2);
+        store.confirm_transcript(&t.id).unwrap();
+        assert_eq!(prints(&store), 0, "the patient's voice print goes with the audio");
+        assert!(store.swap_speakers(&t.id).is_err() && store.set_segment_speaker(&t.id, 0, "patient").is_err(), "confirmed is read-only");
+
+        let roles: Vec<(SourceKind, Speaker)> = store.source_segments(&s.id).unwrap().iter().map(|x| (x.kind, x.role)).collect();
+        assert_eq!(
+            roles,
+            vec![
+                (SourceKind::SessionAudio, Speaker::Therapist),
+                (SourceKind::SessionAudio, Speaker::Patient),
+                (SourceKind::SessionAudio, Speaker::Therapist)
+            ]
+        );
+        // The note's dictation prefill takes dictations only, not her words from the session.
+        let note = store.create_session_note(&s.id).unwrap();
+        assert!(note.sections.iter().all(|x| !x.body.contains("Wie geht es")), "{:?}", note.sections);
+
+        let events = audit::list(store.conn(), 100).unwrap();
+        assert_eq!(events.iter().filter(|e| e.action == "voice.enroll").count(), 2);
+        assert!(events.iter().any(|e| e.action == "transcript.speakers" && e.meta_json.contains("swap")));
+        assert_eq!(store.delete_voice_profile().unwrap(), 2);
+        assert_eq!(store.voice_profile("sherpa-test").unwrap().sessions, 0);
+        assert_eq!(audit::verify(store.conn()).unwrap(), None);
+
+        store.erase_patient(&p.id).unwrap();
+    }
+
+    #[test]
+    fn learning_off_keeps_the_profile_unchanged_and_prints_are_capped() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let s = session(&store, &p);
+        let src = recorded_session(&store, &p, &s, dir.path());
+        let job = store.enqueue_transcription(&src.id, None).unwrap();
+        store.claim_next_job().unwrap();
+        let d = diarization(&[Some("speaker_1")], &[("speaker_1", vec![1.0, 0.0])]);
+        let t = store.finish_transcription_with(&job.id, "e", "m", &[seg(0, "Hallo.")], Some(&d)).unwrap();
+        store.set_diarize_config(&crate::diarize::DiarizeConfig { enabled: true, learn: false }).unwrap();
+        store.assign_therapist(&t.id, "speaker_1").unwrap();
+        assert_eq!(store.voice_profile("sherpa-test").unwrap().sessions, 0);
+
+        for i in 0..crate::diarize::MAX_PRINTS + 3 {
+            store.add_voice_print("dictation", "sherpa-test", &[1.0, i as f32], 20.0).unwrap();
+        }
+        assert_eq!(store.voice_profile("sherpa-test").unwrap().dictations, crate::diarize::MAX_PRINTS as i64);
+        assert!(store.add_voice_print("dictation", "sherpa-test", &[f32::NAN], 1.0).is_err());
+        // Erasing the patient removes the recording's prints with the source.
+        store.erase_patient(&p.id).unwrap();
+        let left: i64 = store.conn().query_row("SELECT COUNT(*) FROM source_speaker", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0);
+        assert_eq!(store.voice_profile("sherpa-test").unwrap().dictations, crate::diarize::MAX_PRINTS as i64, "her own prints stay");
     }
 
     #[test]

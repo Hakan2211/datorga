@@ -176,7 +176,7 @@ Each slice below follows the house pattern: core logic plus tests in `crates/cor
 
 ## Phase G: speaker separation (slice 27, can move up)
 
-**27. [OI] Who is speaking: therapist or patient**
+**27. [OI] Who is speaking: therapist or patient** (done 2026-10-28: sherpa-onnx v2.0.1 with pyannote 3.0 + 3D-Speaker ERes2Net, run by the app itself as a `--diarize` process; decisions in PLAN-AMENDMENTS §14, details in HANDOFF)
 - Local diarization of session recordings, as a sidecar or ONNX in Rust (e.g. sherpa-onnx speaker segmentation + embedding models, hash-checked download like whisper). It runs as part of the transcription job and fills the existing `transcript_segment.speaker_label`.
 - Therapist voice profile: an embedding enrolled from her confirmed dictations, stored encrypted in the DB. Segments get labelled "Therapeut/in" / "Patient/in", and an unsure label stays "Sprecher 2".
 - Transcript viewer: speaker chips, "Sprecher tauschen" per recording, and correcting a single segment.

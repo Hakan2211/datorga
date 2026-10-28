@@ -7,7 +7,7 @@ use std::path::Path;
 
 use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
-use thera_core::domain::{AgeGroup, ApplicationKind, Method, Patient, SourceSegment, Speaker};
+use thera_core::domain::{AgeGroup, ApplicationKind, Method, Patient, SourceKind, SourceSegment, Speaker};
 use thera_core::pseudo::{Dictionary, EntityKind};
 use thera_core::templates::{self, Context, Template, SESSION_NOTE_KEY};
 
@@ -92,6 +92,10 @@ struct CaseFile {
     terms: Vec<TermDef>,
     /// Smaller chunks than the app's, to exercise multi-chunk extraction on a short session.
     chunk_chars: Option<usize>,
+    /// A session recording with speakers separated: every segment is session audio and `role`
+    /// says who speaks. Otherwise `therapist` marks a dictation and `unknown` session audio.
+    #[serde(default)]
+    diarized: bool,
     segments: Vec<SegmentDef>,
     facts: Vec<FactDef>,
     /// Regexes that must not appear in any proposed fact (invented or off-limits content).
@@ -253,6 +257,7 @@ fn case(f: CaseFile, all: &[Template]) -> Res<Case> {
         .map(|(i, s)| SourceSegment {
             segment_id: format!("{}-{}", f.id, i + 1),
             source_id: f.id.clone(),
+            kind: if f.diarized || s.role != Speaker::Therapist { SourceKind::SessionAudio } else { SourceKind::Dictation },
             role: s.role,
             start_ms: i as i64 * 8_000,
             end_ms: (i as i64 + 1) * 8_000,

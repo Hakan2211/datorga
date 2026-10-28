@@ -82,7 +82,8 @@ str_enum!(
 );
 str_enum!(JobStatus { Queued => "queued", Running => "running", Done => "done", Failed => "failed", Cancelled => "cancelled" });
 str_enum!(
-    /// Who speaks in a segment. Session recordings stay `unknown` until diarization exists.
+    /// Who speaks in a segment. In a session recording `unknown` when speakers weren't separated
+    /// or not matched to the therapist's voice.
     Speaker { Therapist => "therapist", Patient => "patient", Unknown => "unknown" }
 );
 
@@ -216,6 +217,8 @@ pub struct Transcript {
     pub status: TranscriptStatus,
     pub created_at: String,
     pub confirmed_at: Option<String>,
+    /// The diarization engine whose speaker labels the segments carry; `None`: no speakers.
+    pub diarization: Option<String>,
     pub segments: Vec<TranscriptSegment>,
 }
 
@@ -230,6 +233,21 @@ pub struct TranscriptSegment {
     pub end_ms: i64,
     pub text: String,
     pub edited: bool,
+    /// `therapist`, `patient`, or `speaker_n` when her voice profile didn't decide.
+    pub speaker: Option<String>,
+    /// The therapist set the speaker by hand.
+    pub speaker_edited: bool,
+}
+
+/// The therapist's voice profile (speaker separation, slice 27), without the prints themselves.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct VoiceProfile {
+    #[ts(type = "number")]
+    pub dictations: i64,
+    #[ts(type = "number")]
+    pub sessions: i64,
+    pub seconds: f64,
 }
 
 /// Background work (transcription) that survives an app restart.
@@ -258,6 +276,8 @@ pub struct SourceSegment {
     /// `transcript_segment.id`: what a fact cites.
     pub segment_id: String,
     pub source_id: String,
+    /// A dictation is the therapist alone; in a session recording `role` says who speaks.
+    pub kind: SourceKind,
     pub role: Speaker,
     #[ts(type = "number")]
     pub start_ms: i64,

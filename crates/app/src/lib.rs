@@ -15,6 +15,7 @@ use thera_core::audio::{self, ChunkWriter};
 use thera_core::backup::{self, BackupSummary, Unlocked};
 use thera_core::consent::{self, ConsentText};
 use thera_core::crypto::{self, KeyStore, MasterKey, Unlock};
+use thera_core::diarize;
 use thera_core::domain::*;
 use thera_core::catalog::{self, CloudModel, Tier};
 use thera_core::draft;
@@ -212,6 +213,26 @@ impl AppState {
     }
     fn llama_dir(&self) -> PathBuf {
         self.resource_dir.join("llama")
+    }
+    /// sherpa-onnx and the speaker models (scripts/fetch-sherpa.ps1).
+    fn diarize_dir(&self) -> PathBuf {
+        self.resource_dir.join("diarize")
+    }
+    /// The engine string prints and labels are stored under; `None` when this build lacks it.
+    fn diarize_engine(&self) -> Option<String> {
+        let dir = self.diarize_dir();
+        diarize::Sidecar::ready(&dir).then(|| diarize::Sidecar::version(&dir).unwrap_or_else(|| "sherpa-onnx".into()))
+    }
+    /// This app started again with `--diarize`, in the kill-on-close job.
+    fn diarize_sidecar(&self) -> CmdResult<diarize::Sidecar> {
+        let exe = std::env::current_exe().map_err(|e| CmdError::Other(e.to_string()))?;
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get().saturating_sub(1).clamp(1, 8)) as i32;
+        let on_spawn = self.job.clone().map(|job| -> Arc<dyn Fn(&std::process::Child) + Send + Sync> {
+            Arc::new(move |child| {
+                job.assign(child);
+            })
+        });
+        Ok(diarize::Sidecar { exe, args: vec!["--diarize".into()], dir: self.diarize_dir(), threads, on_spawn })
     }
     /// Debug builds take `THERA_LLAMA_SERVER` (E2E against the fake server).
     fn llama_exe(&self) -> PathBuf {
@@ -823,6 +844,51 @@ fn transcript_confirm(state: State<'_, AppState>, id: String) -> CmdResult<Trans
     state.with(|s| s.confirm_transcript(&id))
 }
 
+#[tauri::command]
+fn transcript_set_speaker(state: State<'_, AppState>, transcript_id: String, idx: i64, label: String) -> CmdResult<()> {
+    state.with(|s| s.set_segment_speaker(&transcript_id, idx, &label))
+}
+
+#[tauri::command]
+fn transcript_swap_speakers(state: State<'_, AppState>, transcript_id: String) -> CmdResult<Transcript> {
+    state.with(|s| s.swap_speakers(&transcript_id))
+}
+
+#[tauri::command]
+fn transcript_assign_therapist(state: State<'_, AppState>, transcript_id: String, label: String) -> CmdResult<Transcript> {
+    state.with(|s| s.assign_therapist(&transcript_id, &label))
+}
+
+#[derive(Serialize)]
+struct DiarizeOverview {
+    /// `None`: sherpa-onnx or the speaker models are missing from this build.
+    engine: Option<String>,
+    config: diarize::DiarizeConfig,
+    /// Her prints for the current engine.
+    profile: VoiceProfile,
+}
+
+#[tauri::command]
+fn diarize_overview(state: State<'_, AppState>) -> CmdResult<DiarizeOverview> {
+    let engine = state.diarize_engine();
+    let config = state.with(|s| s.diarize_config())?;
+    let profile = match &engine {
+        Some(e) => state.with(|s| s.voice_profile(e))?,
+        None => VoiceProfile::default(),
+    };
+    Ok(DiarizeOverview { engine, config, profile })
+}
+
+#[tauri::command]
+fn diarize_config_set(state: State<'_, AppState>, config: diarize::DiarizeConfig) -> CmdResult<()> {
+    state.with(|s| s.set_diarize_config(&config))
+}
+
+#[tauri::command]
+fn voice_profile_delete(state: State<'_, AppState>) -> CmdResult<usize> {
+    state.with(|s| s.delete_voice_profile())
+}
+
 /// Runs queued jobs one at a time, for the life of the app.
 fn stt_worker(app: AppHandle) {
     let state = app.state::<AppState>();
@@ -848,8 +914,9 @@ fn run_job(state: &AppState, job: Job) {
     if let Ok(mut slot) = state.transcribing.lock() {
         *slot = Some(RunningJob { job_id: job.id.clone(), source_id: source_id.clone(), cancel: cancel.clone(), cloud_patient: None });
     }
-    let result = transcribe_job(state, &job, &source_id, &cancel)
-        .and_then(|(engine, model, segments)| state.with(|s| s.finish_transcription(&job.id, &engine, &model, &segments)));
+    let result = transcribe_job(state, &job, &source_id, &cancel).and_then(|(engine, model, segments, speakers)| {
+        state.with(|s| s.finish_transcription_with(&job.id, &engine, &model, &segments, speakers.as_ref()))
+    });
     if let Err(e) = result {
         let (status, msg) = match e {
             CmdError::Core(thera_core::Error::Cancelled) => (JobStatus::Cancelled, None),
@@ -865,9 +932,56 @@ fn run_job(state: &AppState, job: Job) {
     }
 }
 
+type Transcription = (String, String, Vec<stt::Segment>, Option<diarize::Diarization>);
+
+/// Transcribes, then separates the speakers of a session recording (locally, whatever engine
+/// transcribed) or learns her voice from a dictation.
+fn transcribe_job(state: &AppState, job: &Job, source_id: &str, cancel: &AtomicBool) -> CmdResult<Transcription> {
+    let source = state.with(|s| s.source(source_id))?;
+    let engine = state.diarize_engine();
+    let config = state.with(|s| s.diarize_config())?;
+    let diarizing = engine.is_some() && config.enabled && source.kind == SourceKind::SessionAudio;
+    // With speakers to separate, the transcription is the first 80 % of the progress bar.
+    let stt_share = if diarizing { 80 } else { 100 };
+    let (stt_engine, model, segments) = transcribe_speech(state, job, source_id, cancel, stt_share)?;
+    let Some(engine) = engine else { return Ok((stt_engine, model, segments, None)) };
+    let (dir, key) = state.with(|s| s.audio_location(source_id))?;
+    let work = state.stt_tmp().join(format!("{}-speakers", job.id));
+    let sidecar = state.diarize_sidecar()?;
+    if diarizing && !segments.is_empty() {
+        let progress = |p: u8| {
+            let _ = state.with(|s| s.set_job_progress(&job.id, 80 + p / 5));
+        };
+        match diarize::diarize_source(&dir, &key, &sidecar, &work, progress, cancel) {
+            Ok(out) => {
+                let profile = state.with(|s| s.voice_profile_embedding(&engine))?;
+                let d = diarize::label(&segments, &out, profile.as_deref(), &engine);
+                return Ok((stt_engine, model, segments, Some(d)));
+            }
+            Err(thera_core::Error::Cancelled) => return Err(thera_core::Error::Cancelled.into()),
+            // The transcript is still worth having; it just has no speakers.
+            Err(e) => eprintln!("diarization failed: {e}"),
+        }
+    } else if source.kind == SourceKind::Dictation && config.learn {
+        match diarize::embed_source(&dir, &key, &sidecar, &work, cancel) {
+            Ok(Some(print)) if print.seconds >= MIN_PRINT_SECONDS => {
+                state.with(|s| s.add_voice_print("dictation", &engine, &print.embedding, print.seconds as f64))?;
+            }
+            Ok(_) => {}
+            Err(thera_core::Error::Cancelled) => return Err(thera_core::Error::Cancelled.into()),
+            Err(e) => eprintln!("voice print failed: {e}"),
+        }
+    }
+    Ok((stt_engine, model, segments, None))
+}
+
+/// Speech under this length says too little about a voice to join her profile.
+const MIN_PRINT_SECONDS: f32 = 8.0;
+
 /// Transcribes with the engine Settings choose for this kind of recording. Only dictations can
-/// reach the cloud (`stt::choose`, enforced again in `stt::transcribe`).
-fn transcribe_job(state: &AppState, job: &Job, source_id: &str, cancel: &AtomicBool) -> CmdResult<(String, String, Vec<stt::Segment>)> {
+/// reach the cloud (`stt::choose`, enforced again in `stt::transcribe`). Progress goes up to
+/// `share` percent.
+fn transcribe_speech(state: &AppState, job: &Job, source_id: &str, cancel: &AtomicBool, share: u8) -> CmdResult<(String, String, Vec<stt::Segment>)> {
     let (source, (dir, key)) = state.with(|s| Ok((s.source(source_id)?, s.audio_location(source_id)?)))?;
     let patient_id = state.with(|s| s.session(&source.session_id))?.patient_id;
     // Looked up now, not when queued: a consent revoked meanwhile counts.
@@ -876,6 +990,7 @@ fn transcribe_job(state: &AppState, job: &Job, source_id: &str, cancel: &AtomicB
     let local = local_stt(state, &source.language);
     let mut last = None;
     let on_progress = |p: u8| {
+        let p = (p as u32 * share as u32 / 100) as u8;
         if last != Some(p) {
             last = Some(p);
             let _ = state.with(|s| s.set_job_progress(&job.id, p));
@@ -3031,6 +3146,12 @@ pub fn run() {
             transcription_cancel,
             transcript_edit_segment,
             transcript_confirm,
+            transcript_set_speaker,
+            transcript_swap_speakers,
+            transcript_assign_therapist,
+            diarize_overview,
+            diarize_config_set,
+            voice_profile_delete,
             stt_overview,
             stt_model_select,
             stt_config_set,

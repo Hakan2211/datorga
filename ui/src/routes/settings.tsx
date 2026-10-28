@@ -10,6 +10,7 @@ import { RecoveryKitPanel } from '@/components/recovery-kit'
 import { RestoreBackup } from '@/components/backup-restore'
 import { LlmCard } from '@/components/llm-settings'
 import { VoiceCard } from '@/components/voice-settings'
+import { SpeakerCard } from '@/components/speaker-settings'
 import { ModelRow } from '@/components/model-row'
 import { formatDate, SectionCard } from '@/components/bits'
 import { DEFAULT_REMINDER_DAYS } from '@/lib/backup'
@@ -58,6 +59,7 @@ function Settings() {
         </Card>
         <AppearanceCard />
         <SttCard />
+        <SpeakerCard />
         <LlmCard />
         <VoiceCard />
         <BackupCard />

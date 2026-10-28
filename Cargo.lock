@@ -3172,7 +3172,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e9ec52138abedcc58dc17a7c6c0c00a2bdb4f3427c7f63fa97fd0d859155caf"
 dependencies = [
  "gtk-sys",
- "libloading",
+ "libloading 0.7.4",
  "once_cell",
 ]
 
@@ -3199,6 +3199,16 @@ checksum = "b67380fd3b2fbe7527a606e18729d21c6f3951633d0500574c4dc22d2d638b9f"
 dependencies = [
  "cfg-if",
  "winapi",
+]
+
+[[package]]
+name = "libloading"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if",
+ "windows-link",
 ]
 
 [[package]]
@@ -5828,6 +5838,7 @@ dependencies = [
  "tauri-plugin-opener",
  "thera-capture",
  "thera-core",
+ "thera-diarize",
  "thiserror 2.0.21",
  "ureq",
 ]
@@ -5857,6 +5868,7 @@ dependencies = [
  "serde_yaml_ng",
  "sha2 0.10.9",
  "tempfile",
+ "thera-diarize",
  "thiserror 2.0.21",
  "time",
  "ts-rs",
@@ -5869,6 +5881,15 @@ dependencies = [
  "uuid",
  "zeroize",
  "zip",
+]
+
+[[package]]
+name = "thera-diarize"
+version = "0.1.0"
+dependencies = [
+ "libloading 0.8.9",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -25,6 +25,8 @@ import type { SourceKind } from '@/bindings/SourceKind'
 import type { SourceSegment } from '@/bindings/SourceSegment'
 import type { Template } from '@/bindings/Template'
 import type { Transcript } from '@/bindings/Transcript'
+import type { DiarizeConfig } from '@/bindings/DiarizeConfig'
+import type { VoiceProfile } from '@/bindings/VoiceProfile'
 import type { BackupSummary } from '@/bindings/BackupSummary'
 import type { CloudModel } from '@/bindings/CloudModel'
 import type { LlmConfig } from '@/bindings/LlmConfig'
@@ -118,6 +120,13 @@ export type SttOverview = {
   /** Why the cloud can't be used right now, or null. */
   cloud_problem: string | null
   local_ready: boolean
+}
+
+export type DiarizeOverview = {
+  /** null: sherpa-onnx or the speaker models are missing from this build. */
+  engine: string | null
+  config: DiarizeConfig
+  profile: VoiceProfile
 }
 
 export type LlmOverview = { config: LlmConfig; providers: (ProviderInfo & { has_key: boolean })[] }
@@ -332,6 +341,14 @@ export const api = {
   editSegment: (transcriptId: string, idx: number, text: string) =>
     invoke<void>('transcript_edit_segment', { transcriptId, idx, text }),
   confirmTranscript: (id: string) => invoke<Transcript>('transcript_confirm', { id }),
+  setSegmentSpeaker: (transcriptId: string, idx: number, label: string) =>
+    invoke<void>('transcript_set_speaker', { transcriptId, idx, label }),
+  swapSpeakers: (transcriptId: string) => invoke<Transcript>('transcript_swap_speakers', { transcriptId }),
+  assignTherapist: (transcriptId: string, label: string) =>
+    invoke<Transcript>('transcript_assign_therapist', { transcriptId, label }),
+  diarize: () => invoke<DiarizeOverview>('diarize_overview'),
+  setDiarizeConfig: (config: DiarizeConfig) => invoke<void>('diarize_config_set', { config }),
+  deleteVoiceProfile: () => invoke<number>('voice_profile_delete'),
 
   stt: () => invoke<SttOverview>('stt_overview'),
   selectModel: (id: string) => invoke<void>('stt_model_select', { id }),

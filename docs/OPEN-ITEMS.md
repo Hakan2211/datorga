@@ -32,8 +32,7 @@ All planned slices are done (Phase 1: 1–10, Phase 2: 11–15). These are the l
 
 ## Smaller technical items
 
-- Speaker separation for session recordings. Today extraction can't tell the patient from the therapist and gets
-  their gender wrong.
+- ~~Speaker separation for session recordings.~~ Done in slice 27 (still to test with real voices).
 - Audio playback in the transcript viewer.
 - A cancel button for long extractions.
 - Merging duplicate facts across chunks.

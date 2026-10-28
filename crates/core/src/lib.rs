@@ -9,6 +9,7 @@ pub mod catalog;
 pub mod context;
 pub mod consent;
 pub mod crypto;
+pub mod diarize;
 pub mod dictate;
 pub mod domain;
 pub mod draft;

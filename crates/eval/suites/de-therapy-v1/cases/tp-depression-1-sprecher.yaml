@@ -1,0 +1,146 @@
+# Synthetic. tp-depression-1 as a session recording with speakers separated (slice 27): the
+# same segments and facts, each segment labelled therapist (T:) or patient (P:) the way the
+# diarization labels them once her voice profile matched. Tests: the therapist's questions,
+# interpretation (S14) and observation (S19) are not taken as the patient's statements.
+id: tp-depression-1-sprecher
+title: TP Depression, Sitzungsaufnahme mit Sprechertrennung
+diarized: true
+method: TP
+age_group: adult
+patient: { first_name: Markus, last_name: Lehmann, birth_date: "1979-11-02" }
+terms:
+  - { kind: person, text: Jana }
+  - { kind: ort, text: Leipzig }
+segments:
+  - { role: therapist, text: "Wie ist es Ihnen seit dem letzten Mal ergangen?" }
+  - { role: patient, text: "Ehrlich gesagt nicht so gut. Ich komme morgens kaum aus dem Bett, ich wache um vier auf und liege dann wach." }
+  - { role: therapist, text: "Seit wann geht das so mit dem frühen Aufwachen?" }
+  - { role: patient, text: "Seit Jana ausgezogen ist, also seit dem Sommer. Seitdem macht mir eigentlich nichts mehr richtig Freude, nicht mal das Laufen." }
+  - { role: patient, text: "In der Schule merke ich, dass ich mich nicht konzentrieren kann, ich lese die Klassenarbeiten dreimal." }
+  - { role: therapist, text: "Sie unterrichten ja an einer Gesamtschule in Leipzig, richtig?" }
+  - { role: patient, text: "Ja, Deutsch und Geschichte, seit zwölf Jahren." }
+  - { role: therapist, text: "Haben Sie heute eigentlich gut einen Parkplatz gefunden, bei dem Regen?" }
+  - { role: patient, text: "Ging so, ich stand in der Seitenstraße." }
+  - { role: therapist, text: "Sie haben vorhin gesagt, es wäre Ihnen manchmal egal, wenn Sie morgens nicht mehr aufwachen. Können Sie dazu mehr sagen?" }
+  - { role: patient, text: "Das ist so ein Gedanke, der kommt abends. Aber ich würde mir nie etwas antun, schon wegen meiner Tochter nicht. Pläne habe ich keine." }
+  - { role: therapist, text: "Gut. Dann halten wir fest: Wenn die Gedanken stärker werden, rufen Sie den Krisendienst an oder gehen in die Notaufnahme. Ist das für Sie in Ordnung?" }
+  - { role: patient, text: "Ja, das ist in Ordnung." }
+  - { role: therapist, text: "Mir fällt auf, dass Sie sich zurückziehen, wenn Sie enttäuscht werden, so wie Sie es von früher mit Ihrem Vater beschrieben haben." }
+  - { role: patient, text: "Ja, mein Vater hat nie gezeigt, was er fühlt. Wenn ich traurig war, hieß es: Reiß dich zusammen." }
+  - { role: patient, text: "Und mit Jana war es am Ende ähnlich, ich habe einfach nichts mehr gesagt." }
+  - { role: therapist, text: "Nehmen Sie das Sertralin noch, das der Psychiater verschrieben hat?" }
+  - { role: patient, text: "Ja, fünfzig Milligramm, seit August. Ich war ja 2019 auch schon mal sechs Wochen in einer psychosomatischen Klinik." }
+  - { role: therapist, text: "Sie wirken heute sehr erschöpft auf mich." }
+  - { role: patient, text: "Bin ich auch." }
+  - { role: therapist, text: "Nächste Woche schauen wir weiter auf die Beziehung zu Ihrem Vater. Ach, und den Termin am Donnerstag müssen wir auf Freitag verschieben." }
+facts:
+  - id: fruehes-erwachen
+    section: [verlauf, befund]
+    text: Wacht morgens um vier Uhr auf und liegt dann wach.
+    match: ["früh|vier|4 uhr", "wach"]
+    segments: [2]
+    bericht: [symptomatik_befund]
+  - id: antrieb
+    section: [verlauf, befund]
+    text: Kommt morgens kaum aus dem Bett.
+    match: ["bett"]
+    segments: [2]
+    required: false
+    bericht_ok: [symptomatik_befund]
+  - id: trennung
+    section: verlauf
+    text: Beschwerden seit dem Auszug von Jana im Sommer.
+    match: ["ausgezogen|auszug|trennung"]
+    segments: [4]
+    bericht: [lebensgeschichte_modell]
+    bericht_ok: [symptomatik_befund, soziodemographie]
+  - id: freudlos
+    section: [verlauf, befund]
+    text: Seitdem macht ihm nichts mehr richtig Freude, nicht einmal das Laufen.
+    match: ["freude|interesse|lust"]
+    segments: [4]
+    bericht: [symptomatik_befund]
+  - id: konzentration
+    section: [verlauf, befund]
+    text: Konzentrationsprobleme in der Schule, liest Klassenarbeiten dreimal.
+    match: ["konzentr"]
+    segments: [5]
+    bericht: [symptomatik_befund]
+  - id: beruf
+    section: verlauf
+    text: Lehrer für Deutsch und Geschichte an einer Gesamtschule in Leipzig, seit zwölf Jahren.
+    match: ["lehrer|unterricht|gesamtschule|deutsch und geschichte"]
+    segments: [6, 7]
+    bericht: [soziodemographie]
+  - id: tochter
+    section: [verlauf, risiko]
+    text: Hat eine Tochter.
+    match: ["tochter"]
+    segments: [11]
+    required: false
+    bericht_ok: [soziodemographie, symptomatik_befund]
+  - id: todeswunsch
+    section: risiko
+    text: Abends gelegentlich der Gedanke, es wäre ihm egal, morgens nicht mehr aufzuwachen.
+    match: ["egal|nicht mehr aufzuwachen|nicht mehr aufwach|lebensmüd|todeswunsch|todesgedank"]
+    segments: [10, 11]
+    bericht: [symptomatik_befund]
+  - id: distanzierung
+    section: risiko
+    text: Würde sich nie etwas antun (wegen der Tochter), keine Pläne.
+    match: ["plän|antun|absicht|distanz"]
+    segments: [11]
+    bericht_ok: [symptomatik_befund]
+  - id: krisenplan
+    section: [risiko, vereinbarungen]
+    text: "Vereinbart: bei stärkeren Gedanken Krisendienst anrufen oder Notaufnahme."
+    match: ["krisendienst|notaufnahme|notfall"]
+    segments: [12]
+    bericht_ok: [symptomatik_befund, behandlungsplan_prognose]
+  - id: deutung
+    section: interventionen
+    text: "Deutung: Rückzug bei Enttäuschung, wie früher mit dem Vater."
+    match: ["zurückzieh|rückzug|zieht sich zurück", "vater|enttäusch"]
+    segments: [14]
+    bericht_ok: [lebensgeschichte_modell]
+  - id: vater
+    section: verlauf
+    text: "Der Vater hat nie Gefühle gezeigt; bei Traurigkeit hieß es: Reiß dich zusammen."
+    match: ["vater", "gefühl|fühlt|zusammen"]
+    segments: [15]
+    bericht: [lebensgeschichte_modell]
+  - id: muster-jana
+    section: verlauf
+    text: Mit Jana am Ende ähnlich, er hat einfach nichts mehr gesagt.
+    match: ["nichts mehr gesagt|geschwiegen|schweig"]
+    segments: [16]
+    required: false
+    bericht_ok: [lebensgeschichte_modell]
+  - id: sertralin
+    section: [verlauf, befund]
+    text: Nimmt Sertralin 50 mg seit August, vom Psychiater verschrieben.
+    match: ["sertralin"]
+    segments: [17, 18]
+    bericht: [somatik]
+  - id: klinik
+    section: verlauf
+    text: 2019 sechs Wochen in einer psychosomatischen Klinik.
+    match: ["klinik", "2019|sechs wochen|6 wochen"]
+    segments: [18]
+    bericht: [somatik]
+  - id: erschoepft
+    section: befund
+    text: Wirkt sehr erschöpft.
+    match: ["erschöpf"]
+    segments: [19, 20]
+    bericht: [symptomatik_befund]
+  - id: naechste
+    section: vereinbarungen
+    text: Nächste Sitzung weiter an der Beziehung zum Vater.
+    match: ["vater|beziehung"]
+    segments: [21]
+    required: false
+forbid:
+  - '\bF\s?3\d'
+  - 'parkplatz|\bregen\b|seitenstraße'
+  - "depressive episode"

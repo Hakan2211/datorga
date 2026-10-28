@@ -19,3 +19,7 @@ fixtures/
 # llama.cpp sidecar (llama-server), fetched by scripts/fetch-llama.ps1
 /crates/app/llama/*
 !/crates/app/llama/.gitkeep
+
+# sherpa-onnx runtime + speaker models, fetched by scripts/fetch-sherpa.ps1
+/crates/app/diarize/*
+!/crates/app/diarize/.gitkeep

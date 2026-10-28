@@ -46,7 +46,8 @@
     ],
     "resources": {
       "whisper/*": "whisper/",
-      "llama/*": "llama/"
+      "llama/*": "llama/",
+      "diarize/*": "diarize/"
     }
   }
 }

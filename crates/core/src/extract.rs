@@ -21,14 +21,14 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use ts_rs::TS;
 
-use crate::domain::{SourceSegment, Speaker};
+use crate::domain::{SourceKind, SourceSegment, Speaker};
 use crate::llm::{ChatOptions, Effort};
 use crate::pseudo::{DetectionSource, Dictionary, EntityKind, Pseudonymized, Pseudonymizer, TokenEntry, TokenMap};
 use crate::templates::{FieldKind, Template};
 use crate::{Error, Result};
 
 /// Bump on any change to the prompt or the answer format.
-pub const PROMPT_VERSION: &str = "extract-2026.2";
+pub const PROMPT_VERSION: &str = "extract-2026.3";
 
 /// The Bericht template whose sections facts are tagged with (resolved for an Erstantrag).
 pub const TAG_TEMPLATE_KEY: &str = "ptv3-erst-umwandlung";
@@ -176,8 +176,10 @@ pub fn system_prompt(template: &Template, tags: &[&crate::templates::SectionDef]
     format!(
         "Du unterstützt eine Psychotherapeutin bei der Verlaufsdokumentation einer Sitzung.\n\
          Du erhältst die Abschrift der Sitzung als nummerierte Abschnitte ([S1], [S2] …). \
-         Diktate der Therapeutin sind mit \"Diktat\" markiert, Sitzungsaufnahmen mit \"Sitzung\" \
-         (Sprecher dort nicht getrennt).\n\n\
+         Diktate der Therapeutin sind mit \"Diktat\" markiert, Sitzungsaufnahmen mit \"Sitzung\". \
+         In Sitzungsaufnahmen steht vor dem Text, wer spricht: \"T:\" die Therapeutin, \"P:\" Pat.; \
+         ohne Kürzel ist der Sprecher nicht bekannt. Fragen, Deutungen und Beobachtungen der Therapeutin \
+         sind keine Aussagen von Pat.: als Beobachtung (\"wirkt …\") oder Intervention festhalten.\n\n\
          Aufgabe: Ziehe die dokumentationswürdigen Fakten heraus und ordne jeden einem dieser \
          Abschnitte der Sitzungsnotiz zu:\n{sections}\n\
          {tag_task}\
@@ -219,8 +221,13 @@ pub fn chunks(segments: &[SourceSegment], budget: usize) -> Vec<Range<usize>> {
 }
 
 fn line(i: usize, s: &SourceSegment) -> String {
-    let kind = if s.role == Speaker::Therapist { "Diktat" } else { "Sitzung" };
-    format!("[S{}] ({kind}, {}) {}", i + 1, clock(s.start_ms), s.text.trim())
+    let (kind, who) = match (s.kind, s.role) {
+        (SourceKind::Dictation, _) => ("Diktat", ""),
+        (SourceKind::SessionAudio, Speaker::Therapist) => ("Sitzung", "T: "),
+        (SourceKind::SessionAudio, Speaker::Patient) => ("Sitzung", "P: "),
+        (SourceKind::SessionAudio, Speaker::Unknown) => ("Sitzung", ""),
+    };
+    format!("[S{}] ({kind}, {}) {who}{}", i + 1, clock(s.start_ms), s.text.trim())
 }
 
 /// `mm:ss` (or `h:mm:ss`) from the start of the recording.
@@ -521,7 +528,21 @@ mod tests {
     }
 
     fn seg(role: Speaker, start_ms: i64, text: &str) -> SourceSegment {
-        SourceSegment { segment_id: String::new(), source_id: "src".into(), role, start_ms, end_ms: start_ms + 4000, text: text.into() }
+        let kind = if role == Speaker::Therapist { SourceKind::Dictation } else { SourceKind::SessionAudio };
+        SourceSegment { segment_id: String::new(), source_id: "src".into(), kind, role, start_ms, end_ms: start_ms + 4000, text: text.into() }
+    }
+
+    #[test]
+    fn session_lines_name_the_speaker() {
+        let mut s = seg(Speaker::Patient, 62_000, "Ich schlafe schlecht.");
+        assert_eq!(line(0, &s), "[S1] (Sitzung, 01:02) P: Ich schlafe schlecht.");
+        s.role = Speaker::Therapist;
+        assert_eq!(line(1, &s), "[S2] (Sitzung, 01:02) T: Ich schlafe schlecht.");
+        s.role = Speaker::Unknown;
+        assert_eq!(line(2, &s), "[S3] (Sitzung, 01:02) Ich schlafe schlecht.");
+        s.kind = SourceKind::Dictation;
+        s.role = Speaker::Therapist;
+        assert_eq!(line(3, &s), "[S4] (Diktat, 01:02) Ich schlafe schlecht.");
     }
 
     fn dict() -> Dictionary {

@@ -894,7 +894,7 @@ function TranscriptPicker({
                   className="group flex items-start gap-2 rounded px-1.5 py-1 transition-shadow hover:bg-muted/60"
                 >
                   <span className="flex-1">
-                    <span className="mr-1.5 text-[11px] text-muted-foreground">{t(`note.role.${seg.role}`)}</span>
+                    <span className="mr-1.5 text-[11px] text-muted-foreground">{t(`note.role.${seg.kind === 'dictation' ? 'dictation' : seg.role}`)}</span>
                     <span data-segment={i} className={cn(used.has(i) && 'text-muted-foreground')}>
                       {seg.text}
                     </span>

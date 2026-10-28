@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { CheckCircle2, Pause, Play } from 'lucide-react'
+import { ArrowLeftRight, CheckCircle2, ChevronDown, Pause, Play, UserRound } from 'lucide-react'
 import type { Transcript } from '@/bindings/Transcript'
 import type { TranscriptSegment } from '@/bindings/TranscriptSegment'
 import {
@@ -17,13 +17,21 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Textarea } from '@/components/ui/textarea'
 import { api, errorMessage } from '@/lib/api'
+import { speakerLabels, THERAPIST, PATIENT } from '@/lib/speakers'
 import { cn } from '@/lib/utils'
 
 /**
  * Segment list with timestamps. Drafts are editable; confirming deletes the audio. While the audio
  * exists (`playable`), a timestamp plays its segment and playback runs on through the next ones.
+ * A session recording with separated speakers shows who speaks per segment (slice 27).
  */
 export function TranscriptView({ transcript, sessionId, playable = false }: { transcript: Transcript; sessionId: string; playable?: boolean }) {
   const { t } = useTranslation()
@@ -38,10 +46,12 @@ export function TranscriptView({ transcript, sessionId, playable = false }: { tr
     },
     onError: (e) => toast.error(errorMessage(e)),
   })
+  const speakers = transcript.diarization ? speakerLabels(transcript.segments) : []
 
   return (
     <div className="space-y-3 rounded-md border bg-muted/30 p-3">
       {draft && <p className="text-sm text-muted-foreground">{t('transcript.reviewNote')}</p>}
+      {speakers.length > 0 && <SpeakerBar transcript={transcript} sessionId={sessionId} labels={speakers} editable={draft} />}
       {playable && transcript.segments.length > 0 && (
         <div className="flex items-center gap-3 text-sm" data-testid="playback">
           <Button size="sm" variant="outline" onClick={player.toggle} disabled={player.loading}>
@@ -62,7 +72,9 @@ export function TranscriptView({ transcript, sessionId, playable = false }: { tr
             <SegmentRow
               key={s.idx}
               transcriptId={transcript.id}
+              sessionId={sessionId}
               segment={s}
+              speakers={transcript.diarization ? speakers : null}
               editable={draft}
               current={player.at === i}
               onPlay={playable ? () => player.playFrom(i) : undefined}
@@ -170,15 +182,133 @@ function useClipPlayer(sourceId: string, segments: TranscriptSegment[]) {
 
 const CLIP_TAIL_MS = 250
 
+/** Who is who in this recording, and the fixes that apply to all its segments. */
+function SpeakerBar({
+  transcript,
+  sessionId,
+  labels,
+  editable,
+}: {
+  transcript: Transcript
+  sessionId: string
+  labels: string[]
+  editable: boolean
+}) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const done = () => void qc.invalidateQueries({ queryKey: ['session', sessionId] })
+  const swap = useMutation({
+    mutationFn: () => api.swapSpeakers(transcript.id),
+    onSuccess: done,
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+  const assign = useMutation({
+    mutationFn: (label: string) => api.assignTherapist(transcript.id, label),
+    onSuccess: () => {
+      done()
+      void qc.invalidateQueries({ queryKey: ['diarize'] })
+      toast.success(t('transcript.speakers.learned'))
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+  const named = labels.includes(THERAPIST)
+  const unnamed = labels.filter((l) => l !== THERAPIST && l !== PATIENT)
+
+  return (
+    <div className="space-y-2 rounded-md border bg-background p-2.5 text-sm" data-testid="speaker-bar">
+      <p className="flex items-start gap-2 text-muted-foreground">
+        <UserRound className="mt-0.5 size-4 shrink-0" />
+        {named ? t('transcript.speakers.recognized') : t('transcript.speakers.unrecognized')}
+      </p>
+      {editable && (
+        <div className="flex flex-wrap gap-2">
+          {unnamed.map((l) => (
+            <Button key={l} size="sm" variant={named ? 'outline' : 'default'} disabled={assign.isPending} onClick={() => assign.mutate(l)}>
+              {t('transcript.speakers.isMe', { name: speakerName(t, l) })}
+            </Button>
+          ))}
+          {named && (
+            <Button size="sm" variant="outline" disabled={swap.isPending} onClick={() => swap.mutate()}>
+              <ArrowLeftRight /> {t('transcript.speakers.swap')}
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function speakerName(t: (key: string, o?: Record<string, unknown>) => string, label: string): string {
+  if (label === THERAPIST) return t('transcript.speakers.therapist')
+  if (label === PATIENT) return t('transcript.speakers.patient')
+  return t('transcript.speakers.speaker', { n: label.replace('speaker_', '') })
+}
+
+/** The segment's speaker; a draft's chip opens a menu to correct this one segment. */
+function SpeakerChip({
+  transcriptId,
+  sessionId,
+  segment,
+  labels,
+  editable,
+}: {
+  transcriptId: string
+  sessionId: string
+  segment: TranscriptSegment
+  labels: string[]
+  editable: boolean
+}) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const set = useMutation({
+    mutationFn: (label: string) => api.setSegmentSpeaker(transcriptId, segment.idx, label),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['session', sessionId] }),
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+  const label = segment.speaker
+  const style = cn(
+    'inline-flex h-6 max-w-full items-center gap-1 truncate rounded-full px-2 text-xs font-medium',
+    label === THERAPIST && 'bg-primary/10 text-primary',
+    label === PATIENT && 'bg-amber-500/15 text-amber-800 dark:text-amber-300',
+    label !== THERAPIST && label !== PATIENT && 'border border-dashed text-muted-foreground',
+  )
+  const text = label ? speakerName(t, label) : t('transcript.speakers.none')
+  if (!editable) return <span className={style} data-speaker={label ?? ''}>{text}</span>
+  const choices = [THERAPIST, PATIENT, ...labels.filter((l) => l !== THERAPIST && l !== PATIENT)]
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" className={cn(style, 'hover:opacity-80')} data-speaker={label ?? ''} title={t('transcript.speakers.change')}>
+          {text}
+          {segment.speaker_edited && <span aria-hidden>·</span>}
+          <ChevronDown className="size-3 opacity-60" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        {choices.map((l) => (
+          <DropdownMenuItem key={l} disabled={l === label} onSelect={() => set.mutate(l)}>
+            {speakerName(t, l)}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 function SegmentRow({
   transcriptId,
+  sessionId,
   segment,
+  speakers,
   editable,
   current,
   onPlay,
 }: {
   transcriptId: string
+  sessionId: string
   segment: TranscriptSegment
+  /** The recording's speaker labels; null when speakers weren't separated. */
+  speakers: string[] | null
   editable: boolean
   current: boolean
   onPlay?: () => void
@@ -199,7 +329,11 @@ function SegmentRow({
 
   return (
     <li
-      className={cn('grid grid-cols-[4.5rem_1fr] items-start gap-2 rounded-md text-sm', current && 'bg-accent/70')}
+      className={cn(
+        'grid items-start gap-2 rounded-md text-sm',
+        speakers ? 'grid-cols-[4.5rem_7.5rem_1fr]' : 'grid-cols-[4.5rem_1fr]',
+        current && 'bg-accent/70',
+      )}
       data-playing={current || undefined}
     >
       <span className="pt-1.5 font-mono text-xs tabular-nums text-muted-foreground">
@@ -219,6 +353,11 @@ function SegmentRow({
         )}
         {edited && <span className="block font-sans">{t('transcript.edited')}</span>}
       </span>
+      {speakers && (
+        <span className="pt-1">
+          <SpeakerChip transcriptId={transcriptId} sessionId={sessionId} segment={segment} labels={speakers} editable={editable} />
+        </span>
+      )}
       {editable ? (
         <Textarea
           value={text}

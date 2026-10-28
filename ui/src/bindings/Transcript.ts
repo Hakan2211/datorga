@@ -2,4 +2,8 @@
 import type { TranscriptSegment } from "./TranscriptSegment";
 import type { TranscriptStatus } from "./TranscriptStatus";
 
-export type Transcript = { id: string, source_id: string, engine: string, model: string, language: string, status: TranscriptStatus, created_at: string, confirmed_at: string | null, segments: Array<TranscriptSegment>, };
+export type Transcript = { id: string, source_id: string, engine: string, model: string, language: string, status: TranscriptStatus, created_at: string, confirmed_at: string | null, 
+/**
+ * The diarization engine whose speaker labels the segments carry; `None`: no speakers.
+ */
+diarization: string | null, segments: Array<TranscriptSegment>, };
