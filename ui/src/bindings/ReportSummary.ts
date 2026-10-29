@@ -6,4 +6,17 @@ import type { ReportStatus } from "./ReportStatus";
 /**
  * Row in the reports queue (dashboard, /reports). Name is shown locally only, never exported.
  */
-export type ReportSummary = { id: string, patient_id: string, patient_name: string, chiffre: string | null, method: Method | null, kind: ApplicationKind | null, seq: bigint | null, status: ReportStatus, updated_at: string, };
+export type ReportSummary = { id: string, patient_id: string, patient_name: string, chiffre: string | null, method: Method | null, kind: ApplicationKind | null, seq: bigint | null, status: ReportStatus, updated_at: string, 
+/**
+ * Sections with text (or a diagnosis) out of all the Bericht's sections.
+ */
+sections_filled: number, sections_total: number, 
+/**
+ * Open Berichte only, while the case is still in the stage the application leads out of:
+ * sessions left in the approved contingent (≤ 0 = used up) …
+ */
+sessions_left: number | null, 
+/**
+ * … and the planned session that uses up the last one, when the calendar has it.
+ */
+due_by: string | null, };

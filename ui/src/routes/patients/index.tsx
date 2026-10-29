@@ -1,11 +1,11 @@
-import { useState, type ReactNode } from 'react'
+import { useState } from 'react'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { LayoutGrid, Plus, Rows3, Search, Users } from 'lucide-react'
 import type { PatientCard } from '@/bindings/PatientCard'
 import { Page, PageHeader } from '@/components/app-shell'
-import { EmptyState, formatDate } from '@/components/bits'
+import { EmptyState, FilterChip, formatDate } from '@/components/bits'
 import { PatientAvatar } from '@/components/patient-avatar'
 import { PatientFormDialog } from '@/components/patient-form'
 import { Badge } from '@/components/ui/badge'
@@ -18,18 +18,13 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { q } from '@/lib/api'
 import { ageOn, chaptersIn, matches, noFilter, sortCards, type CardFilter, type CardSort } from '@/lib/patients'
-import { cn } from '@/lib/utils'
+import { storedChoice } from '@/lib/utils'
 
 export const Route = createFileRoute('/patients/')({ component: Patients })
 
 type View = 'cards' | 'table'
 const VIEW_KEY = 'thera.patientsView'
 const SORT_KEY = 'thera.patientsSort'
-
-function stored<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
-  const v = localStorage.getItem(key)
-  return allowed.includes(v as T) ? (v as T) : fallback
-}
 
 /** "Do 31.10., 10:00" */
 function shortWhen(iso: string): string {
@@ -44,8 +39,8 @@ function Patients() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
-  const [view, setViewState] = useState<View>(() => stored(VIEW_KEY, ['cards', 'table'], 'cards'))
-  const [sort, setSortState] = useState<CardSort>(() => stored(SORT_KEY, ['name', 'next', 'last'], 'next'))
+  const [view, setViewState] = useState<View>(() => storedChoice(VIEW_KEY, ['cards', 'table'], 'cards'))
+  const [sort, setSortState] = useState<CardSort>(() => storedChoice(SORT_KEY, ['name', 'next', 'last'], 'next'))
   const [filter, setFilter] = useState<CardFilter>(noFilter)
   // One "now" per visit, to the minute: keeps the query key stable across renders.
   const [now] = useState(() => {
@@ -120,29 +115,29 @@ function Patients() {
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-2" role="toolbar" aria-label={t('patients.filterLabel')}>
-              <Chip active={!filtered} onClick={() => setFilter(noFilter)}>
+              <FilterChip active={!filtered} onClick={() => setFilter(noFilter)}>
                 {t('patients.filters.all')}
-              </Chip>
-              <Chip active={filter.ageGroup === 'adult'} onClick={() => toggle('ageGroup', 'adult')}>
+              </FilterChip>
+              <FilterChip active={filter.ageGroup === 'adult'} onClick={() => toggle('ageGroup', 'adult')}>
                 {t('patients.filters.adult')}
-              </Chip>
-              <Chip active={filter.ageGroup === 'kjp'} onClick={() => toggle('ageGroup', 'kjp')}>
+              </FilterChip>
+              <FilterChip active={filter.ageGroup === 'kjp'} onClick={() => toggle('ageGroup', 'kjp')}>
                 {t('patients.filters.kjp')}
-              </Chip>
+              </FilterChip>
               {(['w', 'm', 'd'] as const).map((g) => (
-                <Chip key={g} active={filter.gender === g} onClick={() => toggle('gender', g)}>
+                <FilterChip key={g} active={filter.gender === g} onClick={() => toggle('gender', g)}>
                   {t(`enums.gender.${g}`)}
-                </Chip>
+                </FilterChip>
               ))}
               {chapters.map((c) => (
-                <Chip key={c} active={filter.chapter === c} onClick={() => toggle('chapter', c)}>
+                <FilterChip key={c} active={filter.chapter === c} onClick={() => toggle('chapter', c)}>
                   {t(`icd.${c}`)}
-                </Chip>
+                </FilterChip>
               ))}
               {methods.map((m) => (
-                <Chip key={m} active={filter.method === m} onClick={() => toggle('method', m)}>
+                <FilterChip key={m} active={filter.method === m} onClick={() => toggle('method', m)}>
                   {m}
-                </Chip>
+                </FilterChip>
               ))}
               <div className="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
                 {t('patients.sort')}
@@ -185,22 +180,6 @@ function Patients() {
         )}
       </Page>
     </>
-  )
-}
-
-function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={cn(
-        'h-8 rounded-full border px-3.5 text-sm transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
-        active ? 'border-primary bg-primary text-primary-foreground' : 'bg-card text-foreground hover:bg-accent',
-      )}
-    >
-      {children}
-    </button>
   )
 }
 

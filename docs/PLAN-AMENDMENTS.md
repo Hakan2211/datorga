@@ -288,3 +288,15 @@ Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.
 | A11 | **A finished transcription announces itself** (toast with "Prüfen") and stays on Heute as "Transkript prüfen" until confirmed. Confirming stays a human step (it deletes the audio). | Plan step 2. |
 | A12 | **The timeline numbers sessions in the contingent** ("Sitzung 11/12 · KZT 1", with the current phase's limit) and the ones before the therapy start as "Probatorik n". The Heute card keeps its plain session count. | Closes Z5. |
 | A13 | **Cleanup:** Protokoll and Vorlagen left the sidebar and the Strg+K list; `/audit` stays, linked from Einstellungen → Sicherheit. The raw status column in Sitzungen is gone. | Plan §0. |
+
+## 18. Work queue decisions (slice 32, 2026-10-29; made while building, for the user to review)
+
+| # | Decision | Why |
+|---|---|---|
+| W1 | **Each session waits for one thing at a time**, in this order: "Transkript prüfen" (a recording without a confirmed transcript), "Notiz offen" (took place, no note yet), "Unsigniert" (note started, not signed), "Neu exportieren" (Nachtrag after the export). "Notiz offen" + "Unsigniert" are Heute's "Notiz offen". A past session without a note counts as held, so a no-show she didn't cancel stays open until she cancels it. | Disjoint chips with counts that add up; the order is the order she works in. |
+| W2 | **"Bereit zur Prüfung" = a draft whose sections all have text** (or `in_review`, which nothing sets yet). No extra "Zur Prüfung geben" click. Dragging cards between columns isn't offered: signing and export have their own checks. | With autopilot drafting, "everything written" is the moment she reviews. |
+| W3 | **Deadline on a Bericht card** only while the case is still in the stage the application leads out of (Erstantrag: Probatorik, Umwandlung: KZT 1/2, Fortführung: the first LZT step). It shows "fällig ca. <date>" of the planned session that uses up the contingent, else "noch n Sitzungen", or "Kontingent ausgeschöpft". | The app knows sessions, not the Gutachter's dates; the planned calendar is the best estimate. |
+| W4 | **Groups: Heute / Diese Woche (Mon–Sun) / Später / Älter.** "Später" was added for planned sessions after this week; older ones show newest first, 30 at a time. Default filter is "Alle". | The mockup has no place for next week's sessions. |
+| W5 | **The summary's first point shows in the row** after the todo label (full text on hover), not only on hover. | The mockup shows it inline; it's the quickest reminder of the session. |
+| W6 | **The "bald fällig" banner** on Berichte lists the same cases as Heute's "Antrag vorbereiten" and uses the same one-click action. | One rule, two places. |
+| W7 | **Search** matches name and Chiffre. | Same as the patients page. |

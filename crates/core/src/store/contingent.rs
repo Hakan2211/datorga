@@ -1,6 +1,6 @@
 //! Stage, contingent count and "Antrag vorbereiten" per Behandlungsfall (slice 31).
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde_json::json;
 
 use super::{Store, ACTOR};
@@ -51,6 +51,46 @@ impl Store {
     }
 
     pub fn episode_contingent(&self, episode_id: &str, now: &str) -> Result<Contingent> {
+        let (ep, facts) = self.case_facts(episode_id, now)?;
+        Ok(contingent::compute(episode_id, ep.stage, &facts))
+    }
+
+    /// For an open Bericht: sessions left before the application has to be filed, and the
+    /// planned session that uses up the last of them. `None` once the case left the stage the
+    /// application leads out of (the Erstantrag ends the Probatorik, the Umwandlung KZT, the
+    /// Fortführung the first LZT step).
+    pub(crate) fn application_deadline(
+        &self,
+        episode_id: &str,
+        kind: ApplicationKind,
+        now: &str,
+    ) -> Result<Option<(i64, Option<String>)>> {
+        let (ep, facts) = self.case_facts(episode_id, now)?;
+        let limit = match (kind, ep.stage) {
+            (ApplicationKind::Erstantrag, Stage::Probatorik)
+            | (ApplicationKind::Umwandlung, Stage::Kzt1 | Stage::Kzt2) => contingent::compute(episode_id, ep.stage, &facts).limit,
+            (ApplicationKind::Fortfuehrung, Stage::Lzt) => contingent::lzt_steps(ep.method, ep.age_group, facts.youth)[0],
+            _ => return Ok(None),
+        };
+        let left = i64::from(limit) - i64::from(facts.used);
+        let due_by = if left > 0 {
+            self.conn
+                .query_row(
+                    "SELECT s.scheduled_at FROM session s
+                     WHERE s.episode_id = ?1 AND s.status = 'planned' AND s.scheduled_at > ?2
+                       AND NOT EXISTS (SELECT 1 FROM report n WHERE n.session_id = s.id)
+                     ORDER BY s.scheduled_at LIMIT 1 OFFSET ?3",
+                    params![episode_id, now, left - 1],
+                    |r| r.get(0),
+                )
+                .optional()?
+        } else {
+            None
+        };
+        Ok(Some((left, due_by)))
+    }
+
+    fn case_facts(&self, episode_id: &str, now: &str) -> Result<(Episode, CaseFacts)> {
         let ep = self.episode(episode_id)?;
         let patient = self.patient(&ep.patient_id)?;
         let since = if ep.stage == Stage::Probatorik { None } else { ep.therapy_since.as_deref() };
@@ -71,7 +111,7 @@ impl Store {
             umwandlungen: count("umwandlung")?,
             fortfuehrungen: count("fortfuehrung")?,
         };
-        Ok(contingent::compute(episode_id, ep.stage, &facts))
+        Ok((ep, facts))
     }
 
     /// "Antrag vorbereiten" for every open case whose contingent is nearly used up.
@@ -158,8 +198,26 @@ mod tests {
         assert_eq!(due.len(), 1);
         assert_eq!((due[0].kind, due[0].application_kind), (DueKind::ApplicationDue, Some(ApplicationKind::Umwandlung)));
 
-        store.create_application(&ep.id, ApplicationKind::Umwandlung).unwrap();
+        let app = store.create_application(&ep.id, ApplicationKind::Umwandlung).unwrap();
         assert!(store.applications_due(now).unwrap().is_empty());
+
+        // The Berichte board: 2 sessions left, the second planned one uses up the last.
+        held(&store, &ep, "2026-07-08T09:00:00Z");
+        let report_id = app.report_id.clone().unwrap();
+        let row = |store: &Store| store.list_reports(None, now).unwrap().into_iter().find(|r| r.id == report_id).unwrap();
+        let r = row(&store);
+        assert_eq!((r.sessions_left, r.due_by.as_deref()), (Some(2), Some("2026-07-08T09:00:00Z")));
+        assert!(r.sections_total > 0);
+        assert_eq!(r.sections_filled, 0);
+        let first = store.report(&report_id).unwrap().sections[0].key.clone();
+        store.save_section(&report_id, &first, "<p> </p>").unwrap();
+        assert_eq!(row(&store).sections_filled, 0, "an empty paragraph isn't text");
+        store.save_section(&report_id, &first, "<p>Anlass</p>").unwrap();
+        assert_eq!(row(&store).sections_filled, 1);
+        // Once the case is in LZT the Umwandlung has no deadline any more.
+        store.set_episode_stage(&ep.id, Stage::Lzt, None).unwrap();
+        assert_eq!((row(&store).sessions_left, row(&store).due_by), (None, None));
+        let ep = store.set_episode_stage(&ep.id, Stage::Kzt1, None).unwrap();
 
         // Back to the Probatorik clears the start; a bad date is refused.
         assert!(store.set_episode_stage(&ep.id, Stage::Lzt, Some("01.02.2026")).is_err());

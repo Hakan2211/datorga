@@ -16,6 +16,7 @@ import type { Job } from '@/bindings/Job'
 import type { Patient } from '@/bindings/Patient'
 import type { PatientInput } from '@/bindings/PatientInput'
 import type { PatientCard } from '@/bindings/PatientCard'
+import type { QueueSession } from '@/bindings/QueueSession'
 import type { Diagnosis } from '@/bindings/Diagnosis'
 import type { Report } from '@/bindings/Report'
 import type { ReportStatus } from '@/bindings/ReportStatus'
@@ -314,6 +315,7 @@ export const api = {
 
   // Calendar: `from`/`to` are instants (RFC 3339), task and note dates are local 'YYYY-MM-DD'.
   calendar: (from: string, to: string) => invoke<CalendarSession[]>('calendar_range', { from, to }),
+  sessionQueue: () => invoke<QueueSession[]>('session_queue'),
   exportIcs: (from: string, to: string, path: string) => invoke<number>('calendar_export_ics', { from, to, path }),
   dueItems: (from: string, dayStart: string, until: string) => invoke<DueItem[]>('due_items', { from, dayStart, until }),
   tasks: (from: string, to: string, openBefore: boolean) => invoke<Task[]>('tasks_list', { from, to, openBefore }),
@@ -512,6 +514,7 @@ export const q = {
   sessions: (patientId?: string) =>
     queryOptions({ queryKey: ['sessions', patientId ?? 'all'], queryFn: () => api.sessions(patientId) }),
   // Polled so the colours follow a running recording or transcription elsewhere in the app.
+  sessionQueue: () => queryOptions({ queryKey: ['sessions', 'queue'], queryFn: api.sessionQueue, refetchInterval: 15_000 }),
   calendar: (from: string, to: string) =>
     queryOptions({ queryKey: ['calendar', from, to], queryFn: () => api.calendar(from, to), refetchInterval: 15_000 }),
   dueItems: (from: string, dayStart: string, until: string) =>

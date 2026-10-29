@@ -1401,6 +1401,12 @@ fn calendar_range(state: State<'_, AppState>, from: String, to: String) -> CmdRe
     state.with(|s| s.sessions_between(&from, &to))
 }
 
+/// The Sitzungen work queue: every session with its flow state, avatar and summary head.
+#[tauri::command]
+fn session_queue(state: State<'_, AppState>) -> CmdResult<Vec<QueueSession>> {
+    state.with(|s| s.session_queue())
+}
+
 /// Writes the sessions in `[from, to)` as .ics (Chiffre only) to `path`; returns how many.
 #[tauri::command]
 fn calendar_export_ics(state: State<'_, AppState>, from: String, to: String, path: String) -> CmdResult<usize> {
@@ -1530,7 +1536,7 @@ fn report_view(s: &Store, id: &str) -> thera_core::Result<ReportView> {
 
 #[tauri::command]
 fn reports_list(state: State<'_, AppState>, status: Option<ReportStatus>) -> CmdResult<Vec<ReportSummary>> {
-    state.with(|s| s.list_reports(status))
+    state.with(|s| s.list_reports(status, &thera_core::domain::now()))
 }
 
 #[tauri::command]
@@ -3455,6 +3461,7 @@ pub fn run() {
             session_create,
             session_note_create,
             calendar_range,
+            session_queue,
             calendar_export_ics,
             sessions_create_series,
             session_update,

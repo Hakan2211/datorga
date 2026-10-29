@@ -1,4 +1,4 @@
-import type { ComponentType, ReactNode } from 'react'
+import type { ComponentProps, ComponentType, ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check } from 'lucide-react'
 import type { ReportStatus } from '@/bindings/ReportStatus'
@@ -45,6 +45,45 @@ export function StatusBadge({ status }: { status: ReportStatus }) {
 }
 
 type Icon = ComponentType<{ className?: string }>
+
+/** A filter toggle in a list's chip row; `count` shows how many rows it would leave. */
+export function FilterChip({
+  active,
+  onClick,
+  count,
+  children,
+  ...rest
+}: {
+  active: boolean
+  onClick: () => void
+  count?: number
+  children: ReactNode
+} & Omit<ComponentProps<'button'>, 'onClick' | 'children'>) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        'inline-flex h-8 items-center gap-2 rounded-full border px-3.5 text-sm transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
+        active ? 'border-primary bg-primary text-primary-foreground' : 'bg-card text-foreground hover:bg-accent',
+      )}
+      {...rest}
+    >
+      {children}
+      {count !== undefined && count > 0 && (
+        <span
+          className={cn(
+            'min-w-5 rounded-full px-1.5 text-xs leading-5 font-medium tabular-nums',
+            active ? 'bg-primary-foreground/20' : 'bg-primary text-primary-foreground',
+          )}
+        >
+          {count}
+        </span>
+      )}
+    </button>
+  )
+}
 
 /** A quiet placeholder for an empty list or panel, with at most one next action. */
 export function EmptyState({

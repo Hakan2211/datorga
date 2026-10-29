@@ -699,6 +699,31 @@ pub struct ReportSummary {
     pub seq: Option<i64>,
     pub status: ReportStatus,
     pub updated_at: String,
+    /// Sections with text (or a diagnosis) out of all the Bericht's sections.
+    #[ts(type = "number")]
+    pub sections_filled: i64,
+    #[ts(type = "number")]
+    pub sections_total: i64,
+    /// Open Berichte only, while the case is still in the stage the application leads out of:
+    /// sessions left in the approved contingent (≤ 0 = used up) …
+    #[ts(type = "number | null")]
+    pub sessions_left: Option<i64>,
+    /// … and the planned session that uses up the last one, when the calendar has it.
+    pub due_by: Option<String>,
+}
+
+/// A row in the Sitzungen work queue: the calendar row plus what the list shows besides it.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct QueueSession {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub row: CalendarSession,
+    pub first_name: String,
+    pub last_name: String,
+    pub has_photo: bool,
+    /// The session summary's first key point.
+    pub summary_head: Option<String>,
 }
 
 // ---------- assistant (slice 25) ----------

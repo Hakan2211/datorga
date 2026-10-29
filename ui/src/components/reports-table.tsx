@@ -6,7 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 
 export function ReportsTable({ reports }: { reports: ReportSummary[] }) {
   const { t } = useTranslation()
-  if (reports.length === 0) return <p className="py-6 text-sm text-muted-foreground">{t('common.empty')}</p>
+  if (reports.length === 0) return <p className="py-6 text-sm text-muted-foreground">{t('common.noMatch')}</p>
   return (
     <Table>
       <TableHeader>
@@ -16,6 +16,7 @@ export function ReportsTable({ reports }: { reports: ReportSummary[] }) {
           <TableHead>{t('episodes.method')}</TableHead>
           <TableHead>{t('nav.reports')}</TableHead>
           <TableHead>Status</TableHead>
+          <TableHead>{t('reports.sectionsHead')}</TableHead>
           <TableHead className="text-right">{t('audit.at')}</TableHead>
         </TableRow>
       </TableHeader>
@@ -35,6 +36,9 @@ export function ReportsTable({ reports }: { reports: ReportSummary[] }) {
             </TableCell>
             <TableCell>
               <StatusBadge status={r.status} />
+            </TableCell>
+            <TableCell className="text-muted-foreground tabular-nums">
+              {r.sections_filled}/{r.sections_total}
             </TableCell>
             <TableCell className="text-right text-muted-foreground">{formatDate(r.updated_at, true)}</TableCell>
           </TableRow>

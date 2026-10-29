@@ -1938,11 +1938,11 @@ impl Store {
         Ok(report)
     }
 
-    /// The Berichte queue. Sitzungsnotizen are reached through their session.
-    pub fn list_reports(&self, status: Option<ReportStatus>) -> Result<Vec<ReportSummary>> {
+    /// The Berichte queue, newest change first. Sitzungsnotizen are reached through their session.
+    pub fn list_reports(&self, status: Option<ReportStatus>, now: &str) -> Result<Vec<ReportSummary>> {
         let mut stmt = self.conn.prepare(
             "SELECT r.id, r.patient_id, p.first_name || ' ' || p.last_name, p.chiffre, e.method, a.kind, a.seq,
-                    r.status, r.updated_at
+                    r.status, r.updated_at, r.episode_id
              FROM report r
              JOIN patient p ON p.id = r.patient_id
              LEFT JOIN episode e ON e.id = r.episode_id
@@ -1950,21 +1950,45 @@ impl Store {
              WHERE r.kind = 'bericht' AND (?1 IS NULL OR r.status = ?1)
              ORDER BY r.updated_at DESC",
         )?;
-        let rows = stmt.query_map([status.map(|s| s.as_str())], |r| {
-            let opt = |i: usize| r.get::<_, Option<String>>(i);
-            Ok(ReportSummary {
-                id: r.get(0)?,
-                patient_id: r.get(1)?,
-                patient_name: r.get(2)?,
-                chiffre: r.get(3)?,
-                method: opt(4)?.and_then(|s| s.parse().ok()),
-                kind: opt(5)?.and_then(|s| s.parse().ok()),
-                seq: r.get(6)?,
-                status: parse_col(r, 7)?,
-                updated_at: r.get(8)?,
-            })
-        })?;
-        Ok(rows.collect::<std::result::Result<_, _>>()?)
+        let rows = stmt
+            .query_map([status.map(|s| s.as_str())], |r| {
+                let opt = |i: usize| r.get::<_, Option<String>>(i);
+                Ok((
+                    ReportSummary {
+                        id: r.get(0)?,
+                        patient_id: r.get(1)?,
+                        patient_name: r.get(2)?,
+                        chiffre: r.get(3)?,
+                        method: opt(4)?.and_then(|s| s.parse().ok()),
+                        kind: opt(5)?.and_then(|s| s.parse().ok()),
+                        seq: r.get(6)?,
+                        status: parse_col(r, 7)?,
+                        updated_at: r.get(8)?,
+                        sections_filled: 0,
+                        sections_total: 0,
+                        sessions_left: None,
+                        due_by: None,
+                    },
+                    opt(9)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut bodies = self.conn.prepare("SELECT body FROM report_section WHERE report_id = ?1")?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (mut summary, episode_id) in rows {
+            let sections: Vec<String> = bodies.query_map([&summary.id], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
+            summary.sections_total = sections.len() as i64;
+            summary.sections_filled = sections.iter().filter(|b| section_filled(b)).count() as i64;
+            let open = matches!(summary.status, ReportStatus::Draft | ReportStatus::InReview);
+            if let (true, Some(episode_id), Some(kind)) = (open, episode_id, summary.kind) {
+                if let Some((left, due_by)) = self.application_deadline(&episode_id, kind, now)? {
+                    summary.sessions_left = Some(left);
+                    summary.due_by = due_by;
+                }
+            }
+            out.push(summary);
+        }
+        Ok(out)
     }
 
     pub fn save_section(&self, report_id: &str, key: &str, body: &str) -> Result<()> {
@@ -2078,6 +2102,15 @@ impl Store {
 }
 
 /// Trims, drops empty rows, upper-cases the code and checks the certainty letter.
+/// A section body counts as filled when it has text: TipTap HTML, or a Diagnosen body with a
+/// diagnosis or notes.
+fn section_filled(body: &str) -> bool {
+    match serde_json::from_str::<crate::pii::DiagnosesBody>(body) {
+        Ok(d) => !d.diagnoses.is_empty() || !crate::draft::plain_text(&d.notes).is_empty(),
+        Err(_) => !crate::draft::plain_text(body).is_empty(),
+    }
+}
+
 fn clean_diagnoses(diagnoses: Vec<Diagnosis>) -> Result<Vec<Diagnosis>> {
     let mut out = Vec::with_capacity(diagnoses.len());
     for d in diagnoses {
@@ -2530,7 +2563,7 @@ mod tests {
         let f2 = store.create_application(&ep.id, ApplicationKind::Fortfuehrung).unwrap();
         assert_eq!((f1.seq, f2.seq), (1, 2));
         assert_eq!(store.report(f2.report_id.as_deref().unwrap()).unwrap().sections.len(), 3);
-        let all = store.list_reports(Some(ReportStatus::Draft)).unwrap();
+        let all = store.list_reports(Some(ReportStatus::Draft), &now()).unwrap();
         assert_eq!(all.len(), 4);
         assert!(all.iter().any(|r| r.kind == Some(ApplicationKind::Fortfuehrung) && r.seq == Some(2)));
     }
@@ -3283,7 +3316,7 @@ mod tests {
         let s2 = store.session(&s.id).unwrap();
         assert_eq!((s2.note_id.as_deref(), s2.note_status), (Some(note.id.as_str()), Some(ReportStatus::Draft)));
         assert_eq!(store.list_sessions(Some(&p.id)).unwrap()[0].note_id.as_deref(), Some(note.id.as_str()));
-        assert!(store.list_reports(None).unwrap().is_empty(), "notes stay out of the Berichte queue");
+        assert!(store.list_reports(None, &now()).unwrap().is_empty(), "notes stay out of the Berichte queue");
 
         // Only the required section blocks signing; the name may appear (internal record).
         let t = store.template(&note.template_key).unwrap();

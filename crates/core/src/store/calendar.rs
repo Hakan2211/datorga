@@ -81,6 +81,38 @@ impl Store {
     /// Sessions whose time (planned, else started) lies in `[from, to)`, oldest first.
     pub fn sessions_between(&self, from: &str, to: &str) -> Result<Vec<CalendarSession>> {
         let (from, to) = (normalize_ts(from)?, normalize_ts(to)?);
+        self.calendar_rows(
+            "COALESCE(s.scheduled_at, s.started_at) >= ?1 AND COALESCE(s.scheduled_at, s.started_at) < ?2",
+            params![from, to],
+        )
+    }
+
+    /// Every session for the Sitzungen work queue, oldest first, with avatar and summary head.
+    pub fn session_queue(&self) -> Result<Vec<QueueSession>> {
+        let rows = self.calendar_rows("1 = 1", params![])?;
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, p.first_name, p.last_name, EXISTS (SELECT 1 FROM patient_photo ph WHERE ph.patient_id = p.id),
+                    ss.points_json
+             FROM session s JOIN patient p ON p.id = s.patient_id LEFT JOIN session_summary ss ON ss.session_id = s.id",
+        )?;
+        type Extra = (String, String, bool, Option<String>);
+        let mut extra: std::collections::HashMap<String, Extra> = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))))?
+            .collect::<std::result::Result<_, _>>()?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let (first_name, last_name, has_photo, points) = extra.remove(&row.session.id).unwrap_or_default();
+                let summary_head = points
+                    .and_then(|p| serde_json::from_str::<Vec<crate::summary::SummaryPoint>>(&p).ok())
+                    .and_then(|p| p.into_iter().next())
+                    .map(|p| p.text);
+                QueueSession { row, first_name, last_name, has_photo, summary_head }
+            })
+            .collect())
+    }
+
+    fn calendar_rows(&self, filter: &str, args: impl rusqlite::Params) -> Result<Vec<CalendarSession>> {
         // SESSION_SELECT ends in "FROM session s LEFT JOIN report n …": the calendar columns go
         // after its select list, so splice them in before its FROM.
         let (cols, from_clause) = SESSION_SELECT.split_once("FROM session s").expect("SESSION_SELECT has a FROM");
@@ -88,11 +120,11 @@ impl Store {
         let sql = format!(
             "{cols}, {extra} FROM session s {from_clause}
              JOIN patient p ON p.id = s.patient_id
-             WHERE COALESCE(s.scheduled_at, s.started_at) >= ?1 AND COALESCE(s.scheduled_at, s.started_at) < ?2
+             WHERE {filter}
              ORDER BY COALESCE(s.scheduled_at, s.started_at), s.id"
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params![from, to], |r| {
+        let rows = stmt.query_map(args, |r| {
             Ok(CalendarSession {
                 session: row_to_session(r)?,
                 patient_name: r.get(14)?,
@@ -504,6 +536,30 @@ mod tests {
         assert_eq!((r2.sources_finished, r2.sources_unreviewed, r2.recording), (1, 1, false));
         let r1 = rows.iter().find(|r| r.session.id == s1.id).unwrap();
         assert_eq!((r1.session.status.as_str(), r1.session.cancelled_reason.as_deref()), ("cancelled", Some("krank")));
+    }
+
+    #[test]
+    fn work_queue_lists_every_session_with_summary_head() {
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store, "Beispiel", "B1");
+        let old = at(&store, &p, "2020-01-06T08:00:00Z");
+        let next = at(&store, &p, "2030-01-06T08:00:00Z");
+        let meta = super::super::summary::SummaryMeta {
+            provider: "local".into(),
+            model: "m".into(),
+            prompt_hash: "h".into(),
+            chunks: 1,
+            dropped: 0,
+            note_chars: 0,
+        };
+        let point = |text: &str| crate::summary::SummaryPoint { text: text.into(), segments: vec![], note: vec![] };
+        store.save_summary(&old.id, &meta, &[point("Schlaf besser"), point("Arbeit")]).unwrap();
+
+        let rows = store.session_queue().unwrap();
+        assert_eq!(rows.iter().map(|r| r.row.session.id.as_str()).collect::<Vec<_>>(), [old.id.as_str(), next.id.as_str()]);
+        assert_eq!((rows[0].first_name.as_str(), rows[0].last_name.as_str(), rows[0].has_photo), ("Anna", "Beispiel", false));
+        assert_eq!(rows[0].summary_head.as_deref(), Some("Schlaf besser"));
+        assert_eq!((rows[1].row.number, rows[1].summary_head.as_deref()), (2, None));
     }
 
     #[test]
