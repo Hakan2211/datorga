@@ -204,6 +204,8 @@ pub struct SessionSource {
     #[ts(type = "number | null")]
     pub duration_ms: Option<i64>,
     pub audio_deleted_at: Option<String>,
+    /// People speaking in a session recording, for speaker separation (2–4; 2 by default).
+    pub speakers: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

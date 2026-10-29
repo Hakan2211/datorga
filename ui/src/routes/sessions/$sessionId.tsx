@@ -573,9 +573,13 @@ function SourceRow({ source, patientId }: { source: SourceView; patientId: strin
       {jobActive(job) && job && (
         <div className="flex items-center gap-3">
           <span className="text-muted-foreground">
-            {job.status === 'queued'
-              ? t(running === 'cloud' ? 'transcript.queuedCloud' : 'transcript.queuedLocal')
-              : `${running === 'cloud' ? t('transcript.runningCloud', { label: stt.cloud_label }) : t('transcript.runningLocal')} · ${job.progress} %`}
+            {job.kind === 'diarize'
+              ? job.status === 'queued'
+                ? t('transcript.speakers.queued')
+                : `${t('transcript.speakers.running')} · ${job.progress} %`
+              : job.status === 'queued'
+                ? t(running === 'cloud' ? 'transcript.queuedCloud' : 'transcript.queuedLocal')
+                : `${running === 'cloud' ? t('transcript.runningCloud', { label: stt.cloud_label }) : t('transcript.runningLocal')} · ${job.progress} %`}
           </span>
           <div className="h-2 w-48 overflow-hidden rounded-full bg-muted">
             <div className="h-full bg-primary transition-[width]" style={{ width: `${job.progress}%` }} />
@@ -585,9 +589,9 @@ function SourceRow({ source, patientId }: { source: SourceView; patientId: strin
           </Button>
         </div>
       )}
-      {job?.status === 'failed' && !transcript && (
+      {job?.status === 'failed' && (!transcript || job.kind === 'diarize') && (
         <p className="flex items-center gap-2 text-destructive">
-          <AlertTriangle className="size-4" /> {t('transcript.failed')}: {job.last_error}
+          <AlertTriangle className="size-4" /> {t(job.kind === 'diarize' ? 'transcript.speakers.failed' : 'transcript.failed')}: {job.last_error}
         </p>
       )}
       {job?.status === 'cancelled' && !transcript && <p className="text-muted-foreground">{t('transcript.cancelled')}</p>}
@@ -611,7 +615,13 @@ function SourceRow({ source, patientId }: { source: SourceView; patientId: strin
         </p>
       )}
       {transcript && expanded && (
-        <TranscriptView transcript={transcript} sessionId={source.session_id} playable={!source.audio_deleted_at} />
+        <TranscriptView
+          transcript={transcript}
+          sessionId={source.session_id}
+          playable={!source.audio_deleted_at}
+          separation={source.kind === 'session_audio' && !source.audio_deleted_at ? { speakers: source.speakers } : undefined}
+          busy={jobActive(job)}
+        />
       )}
     </li>
   )

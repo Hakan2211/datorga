@@ -879,6 +879,14 @@ fn diarize_overview(state: State<'_, AppState>) -> CmdResult<DiarizeOverview> {
     Ok(DiarizeOverview { engine, config, profile })
 }
 
+/// "Neu trennen" with `speakers` people; the worker picks the job up like a transcription.
+#[tauri::command]
+fn transcript_rediarize(state: State<'_, AppState>, source_id: String, speakers: u8) -> CmdResult<Job> {
+    let job = state.with(|s| s.enqueue_diarization(&source_id, speakers))?;
+    state.wake_worker();
+    Ok(job)
+}
+
 #[tauri::command]
 fn diarize_config_set(state: State<'_, AppState>, config: diarize::DiarizeConfig) -> CmdResult<()> {
     state.with(|s| s.set_diarize_config(&config))
@@ -914,9 +922,13 @@ fn run_job(state: &AppState, job: Job) {
     if let Ok(mut slot) = state.transcribing.lock() {
         *slot = Some(RunningJob { job_id: job.id.clone(), source_id: source_id.clone(), cancel: cancel.clone(), cloud_patient: None });
     }
-    let result = transcribe_job(state, &job, &source_id, &cancel).and_then(|(engine, model, segments, speakers)| {
-        state.with(|s| s.finish_transcription_with(&job.id, &engine, &model, &segments, speakers.as_ref()))
-    });
+    let result = if job.kind == "diarize" {
+        diarize_job(state, &job, &source_id, &cancel).map(|_| ())
+    } else {
+        transcribe_job(state, &job, &source_id, &cancel).and_then(|(engine, model, segments, speakers)| {
+            state.with(|s| s.finish_transcription_with(&job.id, &engine, &model, &segments, speakers.as_ref())).map(|_| ())
+        })
+    };
     if let Err(e) = result {
         let (status, msg) = match e {
             CmdError::Core(thera_core::Error::Cancelled) => (JobStatus::Cancelled, None),
@@ -952,7 +964,7 @@ fn transcribe_job(state: &AppState, job: &Job, source_id: &str, cancel: &AtomicB
         let progress = |p: u8| {
             let _ = state.with(|s| s.set_job_progress(&job.id, 80 + p / 5));
         };
-        match diarize::diarize_source(&dir, &key, &sidecar, &work, progress, cancel) {
+        match diarize::diarize_source(&dir, &key, source.speakers, &sidecar, &work, progress, cancel) {
             Ok(out) => {
                 let profile = state.with(|s| s.voice_profile_embedding(&engine))?;
                 let d = diarize::label(&segments, &out, profile.as_deref(), &engine);
@@ -973,6 +985,29 @@ fn transcribe_job(state: &AppState, job: &Job, source_id: &str, cancel: &AtomicB
         }
     }
     Ok((stt_engine, model, segments, None))
+}
+
+/// "Neu trennen": separates the speakers of a draft transcript again with the recording's
+/// speaker count. Unlike after a transcription, a failure here fails the job (she asked for it).
+fn diarize_job(state: &AppState, job: &Job, source_id: &str, cancel: &AtomicBool) -> CmdResult<Transcript> {
+    let engine = state.diarize_engine().ok_or_else(|| CmdError::Other("Die Sprechertrennung ist nicht installiert".into()))?;
+    let source = state.with(|s| s.source(source_id))?;
+    let transcript = state.with(|s| s.transcript_for_source(source_id))?.ok_or_else(|| CmdError::Other("Noch keine Abschrift".into()))?;
+    let segments: Vec<stt::Segment> = transcript
+        .segments
+        .iter()
+        .map(|s| stt::Segment { start_ms: s.start_ms, end_ms: s.end_ms, text: String::new() })
+        .collect();
+    let (dir, key) = state.with(|s| s.audio_location(source_id))?;
+    let work = state.stt_tmp().join(format!("{}-speakers", job.id));
+    let sidecar = state.diarize_sidecar()?;
+    let progress = |p: u8| {
+        let _ = state.with(|s| s.set_job_progress(&job.id, p));
+    };
+    let out = diarize::diarize_source(&dir, &key, source.speakers, &sidecar, &work, progress, cancel)?;
+    let profile = state.with(|s| s.voice_profile_embedding(&engine))?;
+    let d = diarize::label(&segments, &out, profile.as_deref(), &engine);
+    state.with(|s| s.finish_diarization(&job.id, &d))
 }
 
 /// Speech under this length says too little about a voice to join her profile.
@@ -3148,6 +3183,7 @@ pub fn run() {
             transcript_confirm,
             transcript_set_speaker,
             transcript_swap_speakers,
+            transcript_rediarize,
             transcript_assign_therapist,
             diarize_overview,
             diarize_config_set,

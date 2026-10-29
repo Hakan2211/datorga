@@ -34,7 +34,7 @@ fn diarizes_labels_with_the_profile_and_removes_plaintext() {
     let key = recording(&audio, 4);
     let work = tmp.path().join("work");
     let mut seen = vec![];
-    let out = diarize::diarize_source(&audio, &key, &sidecar("lib"), &work, |p| seen.push(p), &AtomicBool::new(false)).unwrap();
+    let out = diarize::diarize_source(&audio, &key, 2, &sidecar("lib"), &work, |p| seen.push(p), &AtomicBool::new(false)).unwrap();
     assert_eq!(seen, vec![40, 100]);
     assert!(!work.exists(), "audio and request are deleted");
     assert_eq!(out.turns.len(), 4);
@@ -53,12 +53,30 @@ fn diarizes_labels_with_the_profile_and_removes_plaintext() {
 }
 
 #[test]
+fn three_speakers_name_her_and_number_the_others() {
+    let tmp = tempfile::tempdir().unwrap();
+    let audio = tmp.path().join("audio");
+    let key = recording(&audio, 6);
+    let work = tmp.path().join("work");
+    let out = diarize::diarize_source(&audio, &key, 3, &sidecar("lib"), &work, |_| {}, &AtomicBool::new(false)).unwrap();
+    assert_eq!(out.speakers.len(), 3);
+    let segs: Vec<Segment> = (0..6).map(|s| Segment { start_ms: s * 1000 + 100, end_ms: s * 1000 + 800, text: "x".into() }).collect();
+    // Her voice is speaker 1; with two others nobody is guessed to be the patient.
+    let d = diarize::label(&segs, &out, Some(&[0.0, 1.0, 0.0]), "fake");
+    let labels: Vec<_> = d.labels.iter().map(|l| l.as_deref().unwrap()).collect();
+    assert_eq!(labels, ["speaker_1", "therapist", "speaker_2", "speaker_1", "therapist", "speaker_2"]);
+    for n in [0, 1, 5] {
+        assert!(diarize::diarize_source(&audio, &key, n, &sidecar("lib"), &work, |_| {}, &AtomicBool::new(false)).is_err(), "{n}");
+    }
+}
+
+#[test]
 fn failure_and_cancel_clean_up() {
     let tmp = tempfile::tempdir().unwrap();
     let audio = tmp.path().join("audio");
     let key = recording(&audio, 2);
     let work = tmp.path().join("work");
-    let err = diarize::diarize_source(&audio, &key, &sidecar("fail"), &work, |_| {}, &AtomicBool::new(false)).unwrap_err();
+    let err = diarize::diarize_source(&audio, &key, 2, &sidecar("fail"), &work, |_| {}, &AtomicBool::new(false)).unwrap_err();
     assert!(err.to_string().contains("Modelldateien"), "{err}");
     assert!(!work.exists());
 
@@ -73,7 +91,7 @@ fn failure_and_cancel_clean_up() {
         c.store(true, Ordering::SeqCst);
     });
     let started = std::time::Instant::now();
-    let err = diarize::diarize_source(&audio, &key, &slow, &work, |_| {}, &cancel).unwrap_err();
+    let err = diarize::diarize_source(&audio, &key, 2, &slow, &work, |_| {}, &cancel).unwrap_err();
     t.join().unwrap();
     assert!(matches!(err, Error::Cancelled));
     assert!(started.elapsed().as_secs() < 10);

@@ -343,6 +343,7 @@ export const api = {
   confirmTranscript: (id: string) => invoke<Transcript>('transcript_confirm', { id }),
   setSegmentSpeaker: (transcriptId: string, idx: number, label: string) =>
     invoke<void>('transcript_set_speaker', { transcriptId, idx, label }),
+  rediarize: (sourceId: string, speakers: number) => invoke<Job>('transcript_rediarize', { sourceId, speakers }),
   swapSpeakers: (transcriptId: string) => invoke<Transcript>('transcript_swap_speakers', { transcriptId }),
   assignTherapist: (transcriptId: string, label: string) =>
     invoke<Transcript>('transcript_assign_therapist', { transcriptId, label }),

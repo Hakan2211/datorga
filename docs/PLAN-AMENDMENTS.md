@@ -17,12 +17,12 @@ This plan (1) corrects the master plan where PTV 3 and internal inconsistencies 
 | C3 | Section 5 (ICD-10 diagnoses) and section 3 (medication) are in the report, which conflicts with the MDR boundary. | These are **therapist-entered structured fields** (`diagnosis_list`: ICD-10 code + Sicherheit G/V/Z/A; `medication_list`). The AI never fills them. It may only flag "mentioned in session X, not yet recorded". |
 | C4 | Encryption is in Phase 3, but the pilot uses real patient data from Phase 1. | Move SQLCipher, the keychain master key and audio encryption into **Phase 1**. |
 | C5 | No recovery if the OS keychain is lost, which means total data loss. | At first run, generate a recovery key (printable "Notfall-Kit" PDF). The master key is wrapped by both the keychain and the recovery key. Restore-from-backup also needs it. |
-| C6 | Phase 1 uses "cloud STT via proxy", but the proxy only arrives in Phase 4. | Superseded by **A4**: Phase 1 uses local whisper-rs, so no proxy is needed. Opt-in cloud STT later goes through the proxy. |
+| C6 | Phase 1 uses "cloud STT via proxy", but the proxy only arrives in Phase 4. | Superseded by **A4**: Phase 1 transcribes locally, so no proxy is needed. *(Built as a whisper.cpp sidecar, not whisper-rs; cloud STT came in slice 17 directly through the therapist's own OpenRouter key, only for her own dictations, see HANDOFF.)* |
 | C7 | The audit hash chain conflicts with hard erasure if `meta_json` holds PII. | Rule: audit meta holds IDs, counts and hashes only, never names or text. Erasure then leaves the chain intact. |
 | C8 | The Gutachter receives the report pseudonymized. | Add a **Chiffre** field and a checklist gate: no patient name, address or birth date in the report body (string scan against patient record). The PDF header carries the Chiffre only. *(Verify the exact Chiffre format with the therapist.)* |
 | C9 | Phase 0 exit says €99/mo; the pricing table says €79/€129. | Align on the table. |
 | C10 | The Gutachterverfahren reform (move toward QS procedures) could change or retire PTV 3. | Risk row. Templates are data, so a new form means a new template pack, not a release. |
-| C11 | No test/CI section. | `cargo test` for core (domain, store, pipeline with a mocked provider), Vitest for the UI, and a GitHub Actions matrix (win/mac) once the repo is pushed. |
+| C11 | No test/CI section. | `cargo test` for core (domain, store, pipeline with a mocked provider), Vitest for the UI, and a GitHub Actions matrix (win/mac) once the repo is pushed. *(Status 2026-10-29: tests exist, CI isn't built yet; the user moved it to later.)* |
 
 ### 1b. Merged from the architecture doc (27 Oct, "Therapist Documentation App – Architecture Plan")
 
@@ -31,9 +31,9 @@ This plan (1) corrects the master plan where PTV 3 and internal inconsistencies 
 | A1 | **Consent flag per patient gates input mode.** `consent_recording=true` enables Record; otherwise only "Zusammenfassung diktieren" (3–5 min after the session). | The consent table stays (history/hash), plus a derived `patient.consent_recording` flag the UI reads. |
 | A2 | **Audio is deleted right after the transcript is confirmed** by default (configurable). | Replaces "30 days after sign-off" as the retention default. |
 | A3 | **Local pseudonymizer before every cloud call**: names, places, employers and dates become tokens (`[PERSON_1]`, `[ORT_2]`…), restored in the response. | New `core::pseudo` module and a hard invariant in `LlmProvider`: the cloud impl only accepts a `Pseudonymized<T>` type, so raw text can't compile into a cloud request. Dictionary = patient record + therapist-confirmed entities + rule-based NER (dates, places, capitalized-name heuristics). It's reused for the PTV 3 Chiffre check (C8) and for redacting uploaded old Berichte (§3). |
-| A4 | **Local STT first (whisper-rs, turbo).** | Replaces C6. Dictation is single-speaker, so Phase 1 needs no diarization and no cloud STT. Cloud STT (diarization) is only an opt-in for consented session recordings, since audio can't be pseudonymized. Needs LLVM/clang + CMake on Windows to build. |
+| A4 | **Local STT first (whisper-rs, turbo).** | Replaces C6. Dictation is single-speaker, so Phase 1 needs no diarization and no cloud STT. Cloud STT (diarization) is only an opt-in for consented session recordings, since audio can't be pseudonymized. Needs LLVM/clang + CMake on Windows to build. *(Built as a whisper.cpp sidecar instead of in-process whisper-rs (user decision). Diarization came in slice 27 and always runs locally (§14).)* |
 | A5 | **Local LLM only offered at ≥32 GB RAM** (14–32B); 16 GB is "experimental". | Tightens D6 / §8.2. |
-| A6 | **OpenRouter/Requesty are US intermediaries**: they stay as options with a warning in settings. Default is an EU provider with a DPA and zero retention (e.g. Mistral; verify before shipping). | Fixes "Requesty (EU)" in the master plan's §4.3/§8.3. |
+| A6 | **OpenRouter/Requesty are US intermediaries**: they stay as options with a warning in settings. ~~Default is an EU provider with a DPA and zero retention (e.g. Mistral; verify before shipping).~~ | Fixes "Requesty (EU)" in the master plan's §4.3/§8.3. *(Default superseded by P1 (the therapist's own OpenRouter/Requesty key, ZDR enforced) and M4 (never Mistral).)* |
 | A7 | **TipTap (ProseMirror) inside each section** + **DOCX export** besides PDF. | The editor stays sectioned (D8), but each prose section is a TipTap field (German spellcheck, lists, bold). Citation chips become a TipTap node. DOCX is generated in Rust (`docx-rs`) from the same section model, so she can finish in Word if she wants. |
 | A8 | Modules in the sidebar: Patienten · Sitzungen · Berichte · **Vorlagen** · later Kalender, Rechnungen, chat over her own history (RAG). Each module gets its own folder/crate + migration namespace. | Vorlagen (= templates + style library §3) is a first-class module. |
 | A9 | Other professions wait until one therapist is live. | Unchanged scope freeze. |
@@ -86,6 +86,8 @@ per application: gather confirmed facts across episode + structured fields + sty
 
 ## 6. Build slice to execute now (Phase 1, first increment)
 
+*Historical: this was the first slice's brief. Where it was built differently (migrations runner, `ts-rs`, whisper sidecar), §8 and HANDOFF say so.*
+
 Repo root `D:\Datorga` (git init, `.gitignore` with `fixtures/` and `*.db`).
 
 1. **Workspace:** `Cargo.toml` workspace; `crates/core` (modules: `domain`, `store`, `crypto`, `audit`, `templates`, `docs`); `crates/app` (Tauri 2). Rule enforced: `core` has no tauri dependency.
@@ -122,6 +124,8 @@ The LLM adapter (OpenAI-compatible, EU default, US-intermediary warning) and the
 ---
 
 ## 8. Build status (2026-10-27)
+
+*Historical snapshot after slice 1. The current status and next steps are in `docs/HANDOFF.md`.*
 
 **Slice 1 done** (steps 1–9 of §6), verified end-to-end in the running app via CDP-driven WebView2 test:
 patient (Chiffre auto-suggested) → VT episode → Erstantrag (6 sections, VT hints only) → TipTap editing with autosave →
@@ -188,11 +192,13 @@ After slice 19 (`extract-2026.2` / `draft-2026.3`, tag-filtered drafts, 2026-10-
 
 Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.5 (not measured to save cost). The suite has only 3 Bericht episodes: precision differences of a few points are noise.
 
-## 11. Calendar decisions (slice 22, 2026-10-28; made while building, for the user to review)
+## 11. Calendar decisions (slice 22, 2026-10-28; made while building, reviewed by the user 2026-10-29)
+
+*Approved as is, except K1, which was changed (slice 28).*
 
 | # | Decision | Why |
 |---|---|---|
-| K1 | **A session with a recording or a note keeps its time**: it can't be moved, cancelled or deleted. | The Sitzungsnotiz takes its date from the session; moving it would change documentation after the fact. |
+| K1 | ~~**A session with a recording or a note keeps its time**: it can't be moved, cancelled or deleted.~~ **Changed 2026-10-29 (slice 28):** a session with a recording or a note **can be moved until its note is signed** (and not while a recording runs); it still can't be cancelled or deleted. The unsigned note's date follows the session. The assistant still moves only untouched sessions (A3). | The Sitzungsnotiz takes its date from the session, and a signed note must not change. But before signing, the likely mistake is documenting into the wrong day's session, and "cancel and re-record" isn't a way out. The audit entry records `documented: true` for such a move. |
 | K2 | **Cancel instead of delete.** "Absagen" keeps the session (status `cancelled`, optional reason, shown struck through, excluded from the session numbering). Delete is only for an empty mistake (no recording, note or prep). | Ausfälle stay visible for the record and for billing questions. |
 | K3 | **The cancel reason, task titles and the day note stay out of the audit log**; it records only that something changed. | Free text can name people; the log must survive erasure without PII. |
 | K4 | **Series without RRULE**: N sessions (1–25 in the dialog, ≤ 52 in core), weekly or every two weeks, dates computed in local time. | The plan's "Serie anlegen" helper; DST keeps the wall-clock time. |
@@ -200,7 +206,9 @@ Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.
 | K6 | **"Fällig"** = sessions of the last 60 days that weren't cancelled and have no signed note; Berichte for an application in draft/review; tomorrow's planned sessions with nothing done yet. | Today's sessions are already on the timeline with their next step. |
 | K7 | **Times are typed (`HH:MM`)**, not picked in quarter hours. | 50-minute rhythms start at 8:50, 9:40, …; the native time input showed AM/PM. |
 
-## 12. Voice mode + Werkstatt decisions (slice 24, 2026-10-28; made while building, for the user to review)
+## 12. Voice mode + Werkstatt decisions (slice 24, 2026-10-28; made while building, reviewed by the user 2026-10-29)
+
+*Approved as is.*
 
 | # | Decision | Why |
 |---|---|---|
@@ -210,7 +218,9 @@ Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.
 | W4 | **Werkstatt proposals go through the same review** as fact drafts (replace/append/reject) and never touch diagnoses; in a Bericht a sentence naming another person is dropped, in a Sitzungsnotiz names are restored. | MDR rule and the Gutachter-Chiffre rule from slice 14; the note stays in the practice. |
 | W5 | **One dictation at a time**, and none while a recording runs. | One microphone; a recording must not lose audio to a dictation. |
 
-## 13. Assistant decisions (slice 25, 2026-10-28; made while building, for the user to review)
+## 13. Assistant decisions (slice 25, 2026-10-28; made while building, reviewed by the user 2026-10-29)
+
+*Approved as is. A1 is the one place where something other than placeholders leaves the machine in a cloud request (yearless appointment times); the user approved that explicitly.*
 
 | # | Decision | Why |
 |---|---|---|
@@ -223,14 +233,16 @@ Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.
 | A7 | **Reasoning medium, 4096 tokens, at most 8 requests per question**; tool results capped at 12 000 characters, older ones at 2 000, 40 messages of history. | Cost and latency bound; a question that needs more is better asked narrower. |
 | A8 | **Read-aloud** replaces placeholders with a neutral word ("Person", "Ort") instead of names. | Names never leave the machine as audio-to-be either. |
 
-## 14. Speaker separation decisions (slice 27, 2026-10-28; made while building, for the user to review)
+## 14. Speaker separation decisions (slice 27, 2026-10-28; made while building, reviewed by the user 2026-10-29)
+
+*Approved, except S3, which was changed, and S5, which got a consent addition (slice 28).*
 
 | # | Decision | Why |
 |---|---|---|
 | S1 | **sherpa-onnx v2.0.1** (k2-fsa, Apache-2.0) through its C API, with **pyannote segmentation 3.0** and **3D-Speaker ERes2Net (VoxCeleb)** embeddings, ~50 MB bundled like whisper (`scripts/fetch-sherpa.ps1`, hash-pinned). It always runs locally, also when the speech itself was transcribed in the cloud. | WeSpeaker ResNet34 (the first pick) merged the two voices of the German test audio (cross-speaker similarity 0.75) and of one of sherpa's English samples; ERes2Net separated both (0.19 / 0.22). |
 | S2 | **The app starts itself again with `--diarize`** instead of loading the library in-process or shipping another exe. | sherpa's diarization call can't be interrupted; killing the process is the cancel. Same kill-on-close job object as the other sidecars; nothing extra to bundle. |
-| S3 | **Always two speakers** (therapist and patient). | The common case and the most robust clustering. A session with a parent or partner gets two labels; she corrects single segments. |
+| S3 | ~~**Always two speakers** (therapist and patient).~~ **Changed 2026-10-29 (slice 28):** two by default; for a session with a parent or partner she picks **2, 3 or 4 people** on the draft transcript and clicks "Neu trennen". A `diarize` job then separates the speakers again from the still-existing audio. The text stays as it is, and hand-set labels are reset (they referred to the old speakers). The count is stored per recording (`session_source.speakers`), so a re-transcription uses it too. With more than one other speaker, nobody is guessed to be the patient: the others stay "Sprecher n", and "Sprecher tauschen" is only offered with two speakers. | Two is still the most robust clustering. But KJP sessions often include a parent, and forcing two speakers merges parent and child into one label. No re-transcription is needed, so a correction costs only the separation time. |
 | S4 | **Her voice profile** = mean of her newest 20 voice prints: from every dictation with ≥ 8 s of speech (automatic) and from "… bin ich" in a session. A speaker counts as her at cosine ≥ 0.5 and ≥ 0.15 ahead of the other; otherwise "Sprecher 1/2" and she picks. | No extra enrolment step. Thresholds are set from TTS voices (same voice 0.98, other 0.17); real rooms and microphones will score lower, so they may need tuning with her recordings. |
-| S5 | **Prints are biometric data:** hers stay in the encrypted DB until she deletes the profile (Settings → Sprechertrennung). The patient's print of a recording is deleted when the transcript is confirmed (with the audio) or the patient is erased. "Learn my voice" and the separation itself can be switched off. | Data minimisation (Art. 9 DSGVO): the patient's print is only needed for "… bin ich" while the draft is open. |
+| S5 | **Prints are biometric data:** hers stay in the encrypted DB until she deletes the profile (Settings → Sprechertrennung). The patient's print of a recording is deleted when the transcript is confirmed (with the audio) or the patient is erased. "Learn my voice" and the separation itself can be switched off. **Added 2026-10-29:** the recording consent (`recording-de-2026-10b-entwurf`) now says that a voice print is computed locally only to tell the speakers apart, never leaves the machine and is deleted with the audio, and that other people in the session (parents, partners) must agree too. Consents granted on the earlier text keep their version and hash. | Data minimisation (Art. 9 DSGVO): the patient's print is only needed for "… bin ich" while the draft is open. The consent text is still a draft for the legal review. |
 | S6 | **A failed diarization doesn't fail the transcription**: the transcript just has no speakers. | The text is what matters; speakers are a help. |
 | S7 | **Extraction (`extract-2026.3`) writes `T:` / `P:`** before session segments; unknown speakers get no prefix. `SourceSegment.kind` now marks dictations explicitly: a session segment spoken by her is not a "Diktat" (and doesn't prefill the note). | Plan; fixes attributing her questions and interpretations to the patient. |

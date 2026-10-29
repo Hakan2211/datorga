@@ -107,8 +107,8 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
-    /// Recordings or a note tie a session to its time (the note's date comes from it): it can't be
-    /// moved, cancelled or deleted then.
+    /// Recordings or a note mean the session took place: it can't be cancelled or deleted then
+    /// (and the assistant doesn't move it).
     pub(super) fn session_untouched(&self, id: &str) -> Result<bool> {
         Ok(self.conn.query_row(
             "SELECT NOT EXISTS (SELECT 1 FROM session_source WHERE session_id = ?1)
@@ -126,9 +126,25 @@ impl Store {
         Ok(session)
     }
 
-    /// Reschedule, change the length or the modality of a session that hasn't started.
+    /// A session can still be moved until its note is signed (the note's date comes from the
+    /// session, and a signed note must not change), and not while it is being recorded. A
+    /// recording or an unsigned note doesn't hold it: she may have recorded into the wrong day.
+    pub(super) fn session_movable(&self, id: &str) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT NOT EXISTS (SELECT 1 FROM session_source WHERE session_id = ?1 AND status = 'recording')
+                AND NOT EXISTS (SELECT 1 FROM report WHERE session_id = ?1 AND status IN ('signed', 'exported'))",
+            [id],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Reschedule, change the length or the modality of a session whose note isn't signed yet.
     pub fn update_session(&self, id: &str, update: SessionUpdate) -> Result<Session> {
-        let before = self.require_untouched(id)?;
+        let before = self.session(id)?;
+        if !self.session_movable(id)? {
+            return Err(Error::Invalid("Die Sitzungsnotiz ist unterschrieben (oder die Aufnahme läuft): die Sitzung bleibt, wie sie ist".into()));
+        }
+        let documented = !self.session_untouched(id)?;
         let scheduled_at = normalize_ts(&update.scheduled_at)?;
         check_minutes(update.planned_minutes)?;
         let tx = self.conn.unchecked_transaction()?;
@@ -140,6 +156,7 @@ impl Store {
             actor: ACTOR, action: "session.update", entity_type: "session", entity_id: Some(id),
             meta: json!({
                 "moved": before.scheduled_at.as_deref() != Some(scheduled_at.as_str()),
+                "documented": documented,
                 "planned_minutes": update.planned_minutes,
                 "modality": update.modality,
             }),
@@ -459,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn only_untouched_sessions_move_cancel_or_go_away() {
+    fn documented_sessions_move_until_signed_but_never_cancel_or_go_away() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open_in_memory().unwrap();
         let p = patient(&store, "Beispiel", "B1");
@@ -481,10 +498,20 @@ mod tests {
         assert!(store.reopen_session(&s.id).is_err());
 
         let held = at(&store, &p, "2026-10-30T08:00:00Z");
-        store.create_session_note(&held.id).unwrap();
-        assert!(store.update_session(&held.id, update("2026-10-31T08:00:00Z", None)).is_err(), "the note's date comes from the session");
+        let note = store.create_session_note(&held.id).unwrap();
         assert!(store.cancel_session(&held.id, None).is_err());
         assert!(store.delete_session(&held.id).is_err());
+        // Documented in the wrong session: it moves, and the unsigned note's date with it.
+        let fixed = store.update_session(&held.id, update("2026-10-29T08:00:00Z", None)).unwrap();
+        assert_eq!(fixed.scheduled_at.as_deref(), Some("2026-10-29T08:00:00Z"));
+        store.sign_report(&note.id, "Dr. Test").unwrap();
+        assert!(store.update_session(&held.id, update("2026-10-31T08:00:00Z", None)).is_err(), "a signed note keeps its date");
+
+        let rec = at(&store, &p, "2026-11-01T08:00:00Z");
+        let (src, w) = store.start_source(&rec.id, SourceKind::Dictation, dir.path()).unwrap();
+        assert!(store.update_session(&rec.id, update("2026-11-02T08:00:00Z", None)).is_err(), "not while recording");
+        store.finish_source(&src.id, "stopped", &w).unwrap();
+        store.update_session(&rec.id, update("2026-11-02T08:00:00Z", None)).unwrap();
 
         store.delete_session(&s.id).unwrap();
         assert!(store.session(&s.id).is_err());

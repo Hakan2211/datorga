@@ -37,7 +37,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api, errorMessage, q } from '@/lib/api'
-import { calendarState, isMovable, localDate, nextStep, sessionStart, stateTone, type FlowStep } from '@/lib/calendar'
+import { calendarState, isMovable, isUntouched, localDate, nextStep, sessionStart, stateTone, type FlowStep } from '@/lib/calendar'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/')({ component: Today })
@@ -74,7 +74,7 @@ function Today() {
           ) : (
             <ol className="relative space-y-3 before:absolute before:top-3 before:bottom-3 before:left-[4.78rem] before:w-px before:bg-border">
               {sessions.data?.map((s) => (
-                <TimelineRow key={s.id} s={s} onEdit={() => setDialog({ kind: 'edit', session: s })} />
+                <TimelineRow key={s.id} s={s} onEdit={() => setDialog({ kind: 'edit', session: s, documented: !isUntouched(s) })} />
               ))}
             </ol>
           )}
@@ -152,7 +152,7 @@ function TimelineRow({ s, onEdit }: { s: CalendarSession; onEdit: () => void }) 
             {(isMovable(s) || s.status === 'cancelled') && (
               <DropdownMenuItem onSelect={onEdit}>{s.status === 'cancelled' ? t('common.edit') : t('calendar.reschedule')}</DropdownMenuItem>
             )}
-            {isMovable(s) && (
+            {isMovable(s) && isUntouched(s) && (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem variant="destructive" onSelect={() => cancel.mutate()}>

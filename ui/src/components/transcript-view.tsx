@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { ArrowLeftRight, CheckCircle2, ChevronDown, Pause, Play, UserRound } from 'lucide-react'
+import { ArrowLeftRight, CheckCircle2, ChevronDown, Pause, Play, Users, UserRound } from 'lucide-react'
 import type { Transcript } from '@/bindings/Transcript'
 import type { TranscriptSegment } from '@/bindings/TranscriptSegment'
 import {
@@ -31,9 +31,23 @@ import { cn } from '@/lib/utils'
 /**
  * Segment list with timestamps. Drafts are editable; confirming deletes the audio. While the audio
  * exists (`playable`), a timestamp plays its segment and playback runs on through the next ones.
- * A session recording with separated speakers shows who speaks per segment (slice 27).
+ * A session recording with separated speakers shows who speaks per segment (slice 27). `separation`
+ * is given for a session recording whose audio still exists: she can then separate its speakers
+ * (again) as 2–4 people. `busy`: a job runs on the recording, so it can't be confirmed yet.
  */
-export function TranscriptView({ transcript, sessionId, playable = false }: { transcript: Transcript; sessionId: string; playable?: boolean }) {
+export function TranscriptView({
+  transcript,
+  sessionId,
+  playable = false,
+  separation,
+  busy = false,
+}: {
+  transcript: Transcript
+  sessionId: string
+  playable?: boolean
+  separation?: { speakers: number }
+  busy?: boolean
+}) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const draft = transcript.status === 'draft'
@@ -51,7 +65,15 @@ export function TranscriptView({ transcript, sessionId, playable = false }: { tr
   return (
     <div className="space-y-3 rounded-md border bg-muted/30 p-3">
       {draft && <p className="text-sm text-muted-foreground">{t('transcript.reviewNote')}</p>}
-      {speakers.length > 0 && <SpeakerBar transcript={transcript} sessionId={sessionId} labels={speakers} editable={draft} />}
+      {(speakers.length > 0 || (draft && separation)) && (
+        <SpeakerBar
+          transcript={transcript}
+          sessionId={sessionId}
+          labels={speakers}
+          editable={draft}
+          separation={draft && !busy ? separation : undefined}
+        />
+      )}
       {playable && transcript.segments.length > 0 && (
         <div className="flex items-center gap-3 text-sm" data-testid="playback">
           <Button size="sm" variant="outline" onClick={player.toggle} disabled={player.loading}>
@@ -89,7 +111,7 @@ export function TranscriptView({ transcript, sessionId, playable = false }: { tr
         {draft && (
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button size="sm" className="ml-auto" disabled={confirm.isPending}>
+              <Button size="sm" className="ml-auto" disabled={confirm.isPending || busy}>
                 <CheckCircle2 /> {t('transcript.confirm')}
               </Button>
             </AlertDialogTrigger>
@@ -188,15 +210,24 @@ function SpeakerBar({
   sessionId,
   labels,
   editable,
+  separation,
 }: {
   transcript: Transcript
   sessionId: string
   labels: string[]
   editable: boolean
+  separation?: { speakers: number }
 }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const done = () => void qc.invalidateQueries({ queryKey: ['session', sessionId] })
+  const engine = useQuery({ queryKey: ['diarize'], queryFn: api.diarize, enabled: !!separation }).data?.engine
+  const [count, setCount] = useState(separation?.speakers ?? 2)
+  const separate = useMutation({
+    mutationFn: () => api.rediarize(transcript.source_id, count),
+    onSuccess: done,
+    onError: (e) => toast.error(errorMessage(e)),
+  })
   const swap = useMutation({
     mutationFn: () => api.swapSpeakers(transcript.id),
     onSuccess: done,
@@ -213,13 +244,17 @@ function SpeakerBar({
   })
   const named = labels.includes(THERAPIST)
   const unnamed = labels.filter((l) => l !== THERAPIST && l !== PATIENT)
+  const canSeparate = !!separation && !!engine
+  if (labels.length === 0 && !canSeparate) return null
 
   return (
     <div className="space-y-2 rounded-md border bg-background p-2.5 text-sm" data-testid="speaker-bar">
-      <p className="flex items-start gap-2 text-muted-foreground">
-        <UserRound className="mt-0.5 size-4 shrink-0" />
-        {named ? t('transcript.speakers.recognized') : t('transcript.speakers.unrecognized')}
-      </p>
+      {labels.length > 0 && (
+        <p className="flex items-start gap-2 text-muted-foreground">
+          <UserRound className="mt-0.5 size-4 shrink-0" />
+          {named ? t('transcript.speakers.recognized') : t('transcript.speakers.unrecognized')}
+        </p>
+      )}
       {editable && (
         <div className="flex flex-wrap gap-2">
           {unnamed.map((l) => (
@@ -227,11 +262,44 @@ function SpeakerBar({
               {t('transcript.speakers.isMe', { name: speakerName(t, l) })}
             </Button>
           ))}
-          {named && (
+          {/* Therapist ↔ patient only makes sense with two speakers. */}
+          {named && labels.length === 2 && (
             <Button size="sm" variant="outline" disabled={swap.isPending} onClick={() => swap.mutate()}>
               <ArrowLeftRight /> {t('transcript.speakers.swap')}
             </Button>
           )}
+        </div>
+      )}
+      {canSeparate && (
+        <div className="flex flex-wrap items-center gap-2" data-testid="speaker-count">
+          <Users className="size-4 text-muted-foreground" />
+          <span className="text-muted-foreground">{t('transcript.speakers.count')}</span>
+          <span className="inline-flex rounded-md border p-0.5" role="radiogroup" aria-label={t('transcript.speakers.count')}>
+            {[2, 3, 4].map((n) => (
+              <button
+                key={n}
+                type="button"
+                role="radio"
+                aria-checked={count === n}
+                onClick={() => setCount(n)}
+                className={cn(
+                  'rounded px-2 py-0.5 text-xs tabular-nums',
+                  count === n ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted',
+                )}
+              >
+                {n}
+              </button>
+            ))}
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={separate.isPending || (labels.length > 0 && count === separation.speakers)}
+            onClick={() => separate.mutate()}
+            title={t('transcript.speakers.countHint')}
+          >
+            {labels.length > 0 ? t('transcript.speakers.reseparate') : t('transcript.speakers.separate')}
+          </Button>
         </div>
       )}
     </div>

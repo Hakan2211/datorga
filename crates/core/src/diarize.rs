@@ -2,7 +2,8 @@
 //!
 //! sherpa-onnx (pyannote segmentation + a speaker embedding model) runs locally in a separate
 //! process ([`Sidecar`], the app started again with `--diarize`, see `thera-diarize`). It finds
-//! the turns of two speakers and a voice print (embedding) per speaker. The transcript segments
+//! the turns of the recording's speakers (two by default: therapist and patient; up to four
+//! with a parent or partner) and a voice print (embedding) per speaker. The transcript segments
 //! get the speaker they overlap most ([`label`]); which speaker is the therapist comes from her
 //! voice profile, the mean of prints from her own dictations and from recordings where she
 //! marked herself. Without a match the speakers stay "Sprecher 1/2" and she picks.
@@ -39,8 +40,17 @@ pub const MATCH: f32 = 0.5;
 pub const MARGIN: f32 = 0.15;
 /// Newest prints that make up the profile (older ones are deleted).
 pub const MAX_PRINTS: usize = 20;
-/// Session recordings are taken as two speakers (therapist and patient).
-pub const SPEAKERS: i32 = 2;
+/// People in a session recording: two (therapist and patient) unless she says more.
+pub const DEFAULT_SPEAKERS: u8 = 2;
+/// Most speakers she can choose (a family session); more would rarely cluster well.
+pub const MAX_SPEAKERS: u8 = 4;
+
+pub fn check_speakers(n: u8) -> Result<()> {
+    if !(DEFAULT_SPEAKERS..=MAX_SPEAKERS).contains(&n) {
+        return Err(Error::Invalid(format!("Personen im Gespräch: {DEFAULT_SPEAKERS} bis {MAX_SPEAKERS}")));
+    }
+    Ok(())
+}
 
 /// Setting key holding the [`DiarizeConfig`] JSON.
 pub const CONFIG_SETTING: &str = "diarize_config";
@@ -192,10 +202,19 @@ impl Sidecar {
     }
 }
 
-/// Decrypts a session recording and finds its speakers.
-pub fn diarize_source(audio_dir: &Path, key: &AudioKey, sidecar: &Sidecar, work_dir: &Path, progress: impl FnMut(u8), cancel: &AtomicBool) -> Result<Output> {
+/// Decrypts a session recording and finds its `speakers` speakers.
+pub fn diarize_source(
+    audio_dir: &Path,
+    key: &AudioKey,
+    speakers: u8,
+    sidecar: &Sidecar,
+    work_dir: &Path,
+    progress: impl FnMut(u8),
+    cancel: &AtomicBool,
+) -> Result<Output> {
+    check_speakers(speakers)?;
     let pcm = audio::read_pcm(audio_dir, key)?;
-    sidecar.run(Mode::Diarize { speakers: SPEAKERS }, &pcm, work_dir, progress, cancel)
+    sidecar.run(Mode::Diarize { speakers: speakers.into() }, &pcm, work_dir, progress, cancel)
 }
 
 /// Decrypts a dictation and returns the print of its (single) voice, if there was enough speech.

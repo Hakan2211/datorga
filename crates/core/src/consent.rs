@@ -11,7 +11,7 @@ use crate::domain::ConsentKind;
 
 const RECORDING_DE: &str = include_str!("../../../templates/consent/recording.de.md");
 /// Bump whenever the text changes; old records keep their version + hash.
-const RECORDING_VERSION: &str = "recording-de-2026-10-entwurf";
+const RECORDING_VERSION: &str = "recording-de-2026-10b-entwurf";
 const CLOUD_TRANSCRIPTION_DE: &str = include_str!("../../../templates/consent/cloud_transcription.de.md");
 const CLOUD_TRANSCRIPTION_VERSION: &str = "cloud-transcription-de-2026-10-entwurf";
 

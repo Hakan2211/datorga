@@ -9,4 +9,8 @@ export type SessionSource = { id: string, session_id: string, kind: SourceKind, 
 /**
  * JSON number; ms durations stay far below 2^53.
  */
-duration_ms: number | null, audio_deleted_at: string | null, };
+duration_ms: number | null, audio_deleted_at: string | null, 
+/**
+ * People speaking in a session recording, for speaker separation (2–4; 2 by default).
+ */
+speakers: number, };

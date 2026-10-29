@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CalendarSession } from '@/bindings/CalendarSession'
-import { calendarState, isMovable, layoutDay, monthDays, nextStep, parseTime, seriesDates, snap, viewRange, viewTitle } from './calendar'
+import { calendarState, isMovable, isUntouched, layoutDay, monthDays, nextStep, parseTime, seriesDates, snap, viewRange, viewTitle } from './calendar'
 
 const session = (over: Partial<CalendarSession> = {}): CalendarSession => ({
   id: 's',
@@ -98,10 +98,15 @@ describe('session state', () => {
     expect([calendarState(cancelled), nextStep(cancelled)]).toEqual(['cancelled', null])
   })
 
-  it('moves only sessions nothing is attached to', () => {
+  it('moves sessions until the note is signed, cancels only untouched ones', () => {
     expect(isMovable(session())).toBe(true)
-    expect(isMovable(session({ note_id: 'n' }))).toBe(false)
-    expect(isMovable(session({ sources_finished: 1 }))).toBe(false)
+    expect(isMovable(session({ note_id: 'n', note_status: 'draft' }))).toBe(true)
+    expect(isMovable(session({ status: 'recorded', sources_finished: 1 }))).toBe(true)
+    expect(isMovable(session({ note_id: 'n', note_status: 'signed' }))).toBe(false)
+    expect(isMovable(session({ recording: true }))).toBe(false)
     expect(isMovable(session({ status: 'cancelled' }))).toBe(false)
+    expect(isUntouched(session())).toBe(true)
+    expect(isUntouched(session({ note_id: 'n', note_status: 'draft' }))).toBe(false)
+    expect(isUntouched(session({ sources_finished: 1 }))).toBe(false)
   })
 })

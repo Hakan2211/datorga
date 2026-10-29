@@ -45,6 +45,72 @@ impl Store {
         Ok(t)
     }
 
+    /// "Neu trennen": separates the speakers of a draft's recording again, as `speakers` people
+    /// (also the count a later re-transcription uses). The text stays as it is.
+    pub fn enqueue_diarization(&self, source_id: &str, speakers: u8) -> Result<Job> {
+        diarize::check_speakers(speakers)?;
+        let src = self.source(source_id)?;
+        if src.kind != SourceKind::SessionAudio {
+            return Err(Error::Invalid("Sprecher werden nur in Sitzungsaufnahmen getrennt".into()));
+        }
+        if src.audio_deleted_at.is_some() {
+            return Err(Error::Invalid("Das Audio wurde bereits gelöscht".into()));
+        }
+        let t = self.transcript_for_source(source_id)?.ok_or_else(|| Error::Invalid("Noch keine Abschrift".into()))?;
+        self.draft_for_speakers(&t.id)?;
+        if self.latest_job(source_id)?.is_some_and(|j| matches!(j.status, JobStatus::Queued | JobStatus::Running)) {
+            return Err(Error::Invalid("Für diese Aufnahme läuft schon eine Verarbeitung".into()));
+        }
+        let id = new_id();
+        let ts = now();
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("UPDATE session_source SET speakers = ?2 WHERE id = ?1", params![source_id, speakers])?;
+        tx.execute(
+            "INSERT INTO job (id, kind, source_id, created_at, updated_at) VALUES (?1, 'diarize', ?2, ?3, ?3)",
+            params![id, source_id, ts],
+        )?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "diarization.enqueue", entity_type: "job", entity_id: Some(&id),
+            meta: json!({ "source_id": source_id, "speakers": speakers }),
+        })?;
+        tx.commit()?;
+        self.job(&id)
+    }
+
+    /// Stores a new speaker separation on the draft and closes the job. Labels set by hand are
+    /// replaced too: they referred to the old speakers.
+    pub fn finish_diarization(&self, job_id: &str, d: &diarize::Diarization) -> Result<Transcript> {
+        let source_id = self.job(job_id)?.source_id.ok_or_else(|| Error::Invalid("job has no source".into()))?;
+        let t = self.transcript_for_source(&source_id)?.ok_or_else(|| Error::Invalid("Noch keine Abschrift".into()))?;
+        self.draft_for_speakers(&t.id)?;
+        if d.labels.len() != t.segments.len() {
+            return Err(Error::Invalid("speaker labels don't match the segments".into()));
+        }
+        let ts = now();
+        let tx = self.conn.unchecked_transaction()?;
+        for (seg, label) in t.segments.iter().zip(&d.labels) {
+            tx.execute(
+                "UPDATE transcript_segment SET speaker_label = ?3, speaker_edited = 0 WHERE transcript_id = ?1 AND idx = ?2",
+                params![t.id, seg.idx, label],
+            )?;
+        }
+        tx.execute("DELETE FROM source_speaker WHERE source_id = ?1", [&source_id])?;
+        for p in &d.speakers {
+            tx.execute(
+                "INSERT INTO source_speaker (source_id, label, embedding, seconds) VALUES (?1, ?2, ?3, ?4)",
+                params![source_id, p.label, blob(&p.embedding), p.seconds as f64],
+            )?;
+        }
+        tx.execute("UPDATE transcript SET diarization = ?2 WHERE id = ?1", params![t.id, d.engine])?;
+        tx.execute("UPDATE job SET status = 'done', progress = 100, updated_at = ?2 WHERE id = ?1", params![job_id, ts])?;
+        audit::append(&tx, Entry {
+            actor: "system", action: "transcript.speakers", entity_type: "transcript", entity_id: Some(&t.id),
+            meta: json!({ "action": "rediarize", "speakers": d.speakers.len(), "voice_match": d.matched.is_some() }),
+        })?;
+        tx.commit()?;
+        self.transcript(&t.id)
+    }
+
     /// The therapist corrects the speaker of one segment.
     pub fn set_segment_speaker(&self, transcript_id: &str, idx: i64, label: &str) -> Result<()> {
         if !diarize::is_label(label) {

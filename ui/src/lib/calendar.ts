@@ -213,7 +213,16 @@ export const stateTone: Record<CalendarState, PillTone> = {
   cancelled: 'neutral',
 }
 
-/** Recordings or a note pin a session to its time (the backend refuses to move it then). */
+/** Nothing attached yet (no recording, no note): the only sessions that can be cancelled or deleted. */
+export function isUntouched(s: CalendarSession): boolean {
+  return !s.note_id && s.sources_finished === 0 && !s.recording
+}
+
+/**
+ * Movable until the note is signed (its date comes from the session) and not while recording, so a
+ * session documented on the wrong day can be put right. The backend checks the same.
+ */
 export function isMovable(s: CalendarSession): boolean {
-  return s.status === 'planned' && !s.note_id && s.sources_finished === 0 && !s.recording
+  if (s.status === 'cancelled' || s.recording) return false
+  return s.note_status !== 'signed' && s.note_status !== 'exported'
 }

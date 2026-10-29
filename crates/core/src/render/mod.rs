@@ -535,7 +535,7 @@ mod tests {
         };
         let form = ConsentForm::new(&text, &patient, Some("M. Muster".into()), Some("Praxis Muster".into()), true, "2026-10-27T13:05:00Z");
         assert_eq!(form.title, "Einwilligung in die Tonaufnahme von Therapiesitzungen");
-        assert_eq!(form.paragraphs.len(), 4);
+        assert_eq!(form.paragraphs.len(), 6);
         assert!(form.revoke_text.contains("Tonaufnahme") && form.revoke_text.contains("Anna Beispiel"));
         let cloud = ConsentForm::new(&crate::consent::current(ConsentKind::CloudTranscription), &patient, None, None, false, "2026-10-27T13:05:00Z");
         assert_eq!(cloud.title, "Einwilligung in die Cloud-Transkription von Sitzungsaufnahmen");

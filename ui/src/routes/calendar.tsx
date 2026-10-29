@@ -19,6 +19,7 @@ import {
   atMinute,
   calendarState,
   isMovable,
+  isUntouched,
   layoutDay,
   localDate,
   minuteOfDay,
@@ -142,7 +143,7 @@ function CalendarPage() {
             days={days}
             sessions={sessions}
             onCreate={(at) => setDialog({ kind: 'create', at })}
-            onEdit={(s) => setDialog({ kind: 'edit', session: s })}
+            onEdit={(s) => setDialog({ kind: 'edit', session: s, documented: !isUntouched(s) })}
           />
         )}
         <Legend />

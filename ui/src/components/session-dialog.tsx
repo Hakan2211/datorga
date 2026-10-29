@@ -24,7 +24,12 @@ const SERIES_COUNTS = [1, 2, 4, 6, 8, 10, 12, 15, 20, 25]
 
 export type SessionDialogMode =
   | { kind: 'create'; at?: Date; patientId?: string }
-  | { kind: 'edit'; session: Pick<Session, 'id' | 'scheduled_at' | 'started_at' | 'planned_minutes' | 'modality' | 'status'> }
+  | {
+      kind: 'edit'
+      session: Pick<Session, 'id' | 'scheduled_at' | 'started_at' | 'planned_minutes' | 'modality' | 'status'>
+      /** Has a recording or a note: it can still move, but not be cancelled or deleted. */
+      documented?: boolean
+    }
 
 /** Everything that shows sessions: lists, the session page, the calendar and "Heute". */
 export function invalidateSessions(qc: QueryClient) {
@@ -127,6 +132,7 @@ function SessionForm({ mode, close, openAfterCreate }: { mode: SessionDialogMode
   })
 
   const cancelled = editing?.status === 'cancelled'
+  const documented = mode.kind === 'edit' && !!mode.documented
   const busy = save.isPending || cancel.isPending || reopen.isPending || remove.isPending
 
   if (cancelling) {
@@ -156,7 +162,7 @@ function SessionForm({ mode, close, openAfterCreate }: { mode: SessionDialogMode
     <>
       <DialogHeader>
         <DialogTitle>{editing ? t('calendar.editTitle') : t('calendar.newTitle')}</DialogTitle>
-        <DialogDescription>{editing ? t('calendar.editHint') : t('calendar.newHint')}</DialogDescription>
+        <DialogDescription>{editing ? t(documented ? 'calendar.editDocumentedHint' : 'calendar.editHint') : t('calendar.newHint')}</DialogDescription>
       </DialogHeader>
       <div className="grid gap-4">
         {!editing && (
@@ -282,7 +288,7 @@ function SessionForm({ mode, close, openAfterCreate }: { mode: SessionDialogMode
       </div>
       <DialogFooter className="sm:justify-between">
         <div className="flex gap-1">
-          {editing && !cancelled && (
+          {editing && !cancelled && !documented && (
             <Button variant="ghost" className="text-destructive" onClick={() => setCancelling(true)} disabled={busy} data-testid="session-cancel">
               <XCircle /> {t('calendar.cancelSession')}
             </Button>
@@ -292,7 +298,7 @@ function SessionForm({ mode, close, openAfterCreate }: { mode: SessionDialogMode
               <Undo2 /> {t('calendar.reopen')}
             </Button>
           )}
-          {editing && (
+          {editing && !documented && (
             <Button
               variant="ghost"
               size={confirmDelete ? 'default' : 'icon'}

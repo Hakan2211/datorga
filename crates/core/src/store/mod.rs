@@ -44,6 +44,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V13__workshop.sql"),
     include_str!("migrations/V14__assistant.sql"),
     include_str!("migrations/V15__speakers.sql"),
+    include_str!("migrations/V16__speaker_count.sql"),
 ];
 
 /// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).
@@ -1009,6 +1010,10 @@ impl Store {
     /// The key is wiped in the same transaction, so a chunk file that survives is unreadable.
     pub fn confirm_transcript(&self, id: &str) -> Result<Transcript> {
         let t = self.transcript(id)?;
+        // Confirming deletes the audio a running transcription or speaker separation still reads.
+        if self.latest_job(&t.source_id)?.is_some_and(|j| matches!(j.status, JobStatus::Queued | JobStatus::Running)) {
+            return Err(Error::Invalid("Für diese Aufnahme läuft noch eine Verarbeitung".into()));
+        }
         let audio_dir: Option<String> = self
             .conn
             .query_row("SELECT path FROM audio_asset WHERE source_id = ?1 AND deleted_at IS NULL", [&t.source_id], |r| r.get(0))
@@ -2036,7 +2041,7 @@ fn row_to_patient(r: &rusqlite::Row<'_>) -> rusqlite::Result<Patient> {
 }
 
 const SOURCE_SELECT: &str = "SELECT src.id, src.session_id, src.kind, src.consent_id, src.status, src.started_at,
-    src.ended_at, src.end_reason, a.duration_ms, a.deleted_at, src.language
+    src.ended_at, src.end_reason, a.duration_ms, a.deleted_at, src.language, src.speakers
     FROM session_source src LEFT JOIN audio_asset a ON a.source_id = src.id";
 
 fn row_to_source(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSource> {
@@ -2052,6 +2057,7 @@ fn row_to_source(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSource> {
         duration_ms: r.get(8)?,
         audio_deleted_at: r.get(9)?,
         language: r.get(10)?,
+        speakers: r.get(11)?,
     })
 }
 
@@ -2440,6 +2446,57 @@ mod tests {
 
     fn speakers_of(t: &Transcript) -> Vec<Option<String>> {
         t.segments.iter().map(|s| s.speaker.clone()).collect()
+    }
+
+    #[test]
+    fn speakers_are_separated_again_as_more_people() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let s = session(&store, &p);
+        let src = recorded_session(&store, &p, &s, dir.path());
+        assert_eq!(src.speakers, 2, "two people by default");
+        assert!(store.enqueue_diarization(&src.id, 3).is_err(), "nothing to separate before the transcript");
+        let job = store.enqueue_transcription(&src.id, None).unwrap();
+        store.claim_next_job().unwrap();
+        let segs = [seg(0, "Wie war die Woche?"), seg(1000, "Gut."), seg(2000, "Er hat wieder geschrien.")];
+        let two = diarization(&[Some("speaker_1"), Some("speaker_2"), Some("speaker_2")], &[("speaker_1", vec![1.0, 0.0]), ("speaker_2", vec![0.0, 1.0])]);
+        let t = store.finish_transcription_with(&job.id, "e", "m", &segs, Some(&two)).unwrap();
+        store.set_segment_speaker(&t.id, 1, "patient").unwrap();
+
+        for n in [1, 5] {
+            assert!(store.enqueue_diarization(&src.id, n).is_err(), "{n} people");
+        }
+        let job = store.enqueue_diarization(&src.id, 3).unwrap();
+        assert_eq!((job.kind.as_str(), store.source(&src.id).unwrap().speakers), ("diarize", 3));
+        assert!(store.enqueue_diarization(&src.id, 3).is_err(), "one job at a time");
+        assert!(store.enqueue_transcription(&src.id, None).is_err());
+        assert!(store.confirm_transcript(&t.id).is_err(), "not while the audio is still read");
+        assert_eq!(store.claim_next_job().unwrap().unwrap().id, job.id);
+
+        let three = diarization(
+            &[Some("speaker_1"), Some("speaker_2"), Some("speaker_3")],
+            &[("speaker_1", vec![1.0, 0.0, 0.0]), ("speaker_2", vec![0.0, 1.0, 0.0]), ("speaker_3", vec![0.0, 0.0, 1.0])],
+        );
+        assert!(store.finish_diarization(&job.id, &diarization(&[None], &[])).is_err(), "one label per segment");
+        let after = store.finish_diarization(&job.id, &three).unwrap();
+        assert_eq!(after.id, t.id, "same transcript, text untouched");
+        assert_eq!(after.segments.iter().map(|x| x.text.as_str()).collect::<Vec<_>>(), segs.iter().map(|x| x.text.as_str()).collect::<Vec<_>>());
+        assert_eq!(speakers_of(&after), vec![Some("speaker_1".into()), Some("speaker_2".into()), Some("speaker_3".into())]);
+        assert!(after.segments.iter().all(|x| !x.speaker_edited), "hand-set labels referred to the old speakers");
+        assert_eq!(store.job(&job.id).unwrap().status, JobStatus::Done);
+        let t = store.assign_therapist(&t.id, "speaker_2").unwrap();
+        assert_eq!(speakers_of(&t), vec![Some("speaker_1".into()), Some("therapist".into()), Some("speaker_3".into())], "no patient guessed among two others");
+
+        store.confirm_transcript(&t.id).unwrap();
+        assert!(store.enqueue_diarization(&src.id, 2).is_err(), "confirmed: the audio is gone");
+        let dictation = recorded_dictation(&store, &s, dir.path());
+        assert!(store.enqueue_diarization(&dictation.id, 2).is_err(), "dictations have one speaker");
+        let events = audit::list(store.conn(), 100).unwrap();
+        assert!(events.iter().any(|e| e.action == "diarization.enqueue" && e.meta_json.contains(r#""speakers":3"#)));
+        assert!(events.iter().any(|e| e.action == "transcript.speakers" && e.meta_json.contains("rediarize")));
+        assert!(events.iter().all(|e| !e.meta_json.contains("geschrien")));
+        assert_eq!(audit::verify(store.conn()).unwrap(), None);
     }
 
     #[test]
