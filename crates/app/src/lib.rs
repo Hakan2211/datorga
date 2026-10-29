@@ -26,7 +26,7 @@ use thera_core::models::ModelInfo;
 use thera_core::pii::{self, CheckItem};
 use thera_core::pseudo::EntityKind;
 use thera_core::render;
-use thera_core::store::{SessionSummary, Store, SummaryInput, SummaryMeta, TimelineGroup};
+use thera_core::store::{AutopilotRun, SessionSummary, Store, TimelineGroup};
 use thera_core::summary;
 use thera_core::stt::{self, CloudStt, CloudSttModel, SttConfig, SttEngine, WhisperCli};
 use thera_core::templates::{Context, Template};
@@ -36,6 +36,8 @@ use thera_core::live::{self, LiveConfig};
 use thera_core::dictate;
 use thera_core::workshop;
 use thera_core::agent::{self, Host};
+use thera_core::autopilot;
+use thera_core::contingent::Contingent;
 
 const KEYRING_SERVICE: &str = "de.datorga.thera";
 const KEYRING_USER: &str = "master-key";
@@ -120,7 +122,8 @@ struct AppState {
 
 struct RunningJob {
     job_id: String,
-    source_id: String,
+    /// Whose data the job reads (erasing that patient stops it).
+    patient_id: String,
     cancel: Arc<AtomicBool>,
     /// Set once the job runs in the cloud, with the patient whose consent it relies on.
     cloud_patient: Option<String>,
@@ -590,12 +593,8 @@ fn patient_photo_remove(state: State<'_, AppState>, id: String) -> CmdResult<()>
 #[tauri::command]
 fn patient_erase(state: State<'_, AppState>, id: String) -> CmdResult<()> {
     // A running transcription of this patient is stopped first, which removes its plaintext WAV.
-    let running = lock(&state.transcribing)?.as_ref().map(|r| (r.source_id.clone(), r.cancel.clone()));
-    if let Some((source_id, cancel)) = running {
-        let owner = state.with(|s| Ok(s.session(&s.source(&source_id)?.session_id)?.patient_id))?;
-        if owner == id {
-            cancel.store(true, Ordering::Relaxed);
-        }
+    if let Some(r) = lock(&state.transcribing)?.as_ref().filter(|r| r.patient_id == id) {
+        r.cancel.store(true, Ordering::Relaxed);
     }
     state.with(|s| s.erase_patient(&id))
 }
@@ -754,7 +753,14 @@ fn stop_recording(state: &AppState, reason: &str) -> CmdResult<SessionSource> {
     let flushed = active.recorder.stop();
     let reason = if failed || flushed.is_err() { "device_error" } else { reason };
     let w = active.writer.lock().map_err(|_| CmdError::Other("state poisoned".into()))?;
-    state.with(|s| s.finish_source(&active.source_id, reason, &w))
+    let source = state.with(|s| s.finish_source(&active.source_id, reason, &w))?;
+    drop(w);
+    // Autopilot: the transcription starts by itself with the engine Settings choose. A failure
+    // to queue (nothing recorded) leaves the manual button.
+    if state.with(|s| s.autopilot_enabled())? && source.duration_ms.unwrap_or(0) > 0 && state.with(|s| s.enqueue_transcription(&source.id, None)).is_ok() {
+        state.wake_worker();
+    }
+    Ok(source)
 }
 
 /// Everything the session page needs in one round-trip.
@@ -871,7 +877,13 @@ fn transcript_edit_segment(state: State<'_, AppState>, transcript_id: String, id
 
 #[tauri::command]
 fn transcript_confirm(state: State<'_, AppState>, id: String) -> CmdResult<Transcript> {
-    state.with(|s| s.confirm_transcript(&id))
+    let t = state.with(|s| s.confirm_transcript(&id))?;
+    // Autopilot: note, facts and summary follow without clicks (nothing is applied or signed).
+    let session_id = state.with(|s| Ok(s.source(&t.source_id)?.session_id))?;
+    if state.with(|s| s.enqueue_autopilot(&session_id, AutopilotTrigger::Confirm))?.is_some() {
+        state.wake_worker();
+    }
+    Ok(t)
 }
 
 #[tauri::command]
@@ -941,23 +953,47 @@ fn stt_worker(app: AppHandle) {
         }
         // `with` fails while the store is locked; the next unlock wakes us again.
         while let Ok(Some(job)) = state.with(|s| s.claim_next_job()) {
-            run_job(&state, job);
+            run_job(&app, &state, job);
         }
     }
 }
 
-fn run_job(state: &AppState, job: Job) {
-    let Some(source_id) = job.source_id.clone() else { return };
+/// `transcript-ready`: a transcription finished and waits for her review.
+#[derive(Clone, Serialize)]
+struct TranscriptReady {
+    session_id: String,
+    patient_name: String,
+}
+
+/// `autopilot-changed`: a step of the session's autopilot run moved on.
+#[derive(Clone, Serialize)]
+struct AutopilotChanged<'a> {
+    session_id: &'a str,
+}
+
+fn run_job(app: &AppHandle, state: &AppState, job: Job) {
+    let session_id = match (&job.session_id, &job.source_id) {
+        (Some(id), _) => state.with(|s| Ok(s.session(id)?.id)),
+        (None, Some(src)) => state.with(|s| Ok(s.source(src)?.session_id)),
+        (None, None) => return,
+    };
+    let Ok(session_id) = session_id else { return };
+    let Ok(patient_id) = state.with(|s| Ok(s.session(&session_id)?.patient_id)) else { return };
     let cancel = Arc::new(AtomicBool::new(false));
     if let Ok(mut slot) = state.transcribing.lock() {
-        *slot = Some(RunningJob { job_id: job.id.clone(), source_id: source_id.clone(), cancel: cancel.clone(), cloud_patient: None });
+        *slot = Some(RunningJob { job_id: job.id.clone(), patient_id: patient_id.clone(), cancel: cancel.clone(), cloud_patient: None });
     }
-    let result = if job.kind == "diarize" {
-        diarize_job(state, &job, &source_id, &cancel).map(|_| ())
-    } else {
-        transcribe_job(state, &job, &source_id, &cancel).and_then(|(engine, model, segments, speakers)| {
-            state.with(|s| s.finish_transcription_with(&job.id, &engine, &model, &segments, speakers.as_ref())).map(|_| ())
-        })
+    let result = match (job.kind.as_str(), job.source_id.clone()) {
+        ("autopilot", _) => autopilot_job(app, state, &job, &session_id, cancel.clone()),
+        ("diarize", Some(source_id)) => diarize_job(state, &job, &source_id, &cancel).map(|_| ()),
+        (_, Some(source_id)) => transcribe_job(state, &job, &source_id, &cancel).and_then(|(engine, model, segments, speakers)| {
+            state.with(|s| s.finish_transcription_with(&job.id, &engine, &model, &segments, speakers.as_ref()))?;
+            if let Ok(p) = state.with(|s| s.patient(&patient_id)) {
+                let _ = app.emit("transcript-ready", TranscriptReady { session_id: session_id.clone(), patient_name: format!("{} {}", p.first_name, p.last_name) });
+            }
+            Ok(())
+        }),
+        _ => Ok(()),
     };
     if let Err(e) = result {
         let (status, msg) = match e {
@@ -972,6 +1008,18 @@ fn run_job(state: &AppState, job: Job) {
     if let Ok(mut slot) = state.transcribing.lock() {
         *slot = None;
     }
+    if job.kind == "autopilot" {
+        let _ = app.emit("autopilot-changed", AutopilotChanged { session_id: &session_id });
+    }
+}
+
+/// Note, facts and summary after a confirmed transcript, without a preview each time (the
+/// user's decision); what was sent is stored per step.
+fn autopilot_job(app: &AppHandle, state: &AppState, job: &Job, session_id: &str, cancel: Arc<AtomicBool>) -> CmdResult<()> {
+    let mut host = LlmHost::new(state, app, cancel);
+    host.changed_session = Some(session_id.to_string());
+    autopilot::run(&mut host, job)?;
+    Ok(())
 }
 
 type Transcription = (String, String, Vec<stt::Segment>, Option<diarize::Diarization>);
@@ -1518,7 +1566,14 @@ fn report_sign(state: State<'_, AppState>, id: String, signed_by: String) -> Cmd
         if !blocking.is_empty() {
             return Err(thera_core::Error::Invalid(format!("Checkliste nicht erfüllt: {}", blocking.join("; "))));
         }
-        s.sign_report(&id, signed_by.trim())
+        let signed = s.sign_report(&id, signed_by.trim())?;
+        // Autopilot: a note that changed a lot since its summary gets a fresh one.
+        if let Some(session_id) = &signed.session_id {
+            if s.autopilot_enabled()? && s.summary_refresh_due(session_id)? && s.enqueue_autopilot(session_id, AutopilotTrigger::Signed)?.is_some() {
+                state.wake_worker();
+            }
+        }
+        Ok(signed)
     })
 }
 
@@ -1801,37 +1856,6 @@ fn active_llm(state: &AppState) -> CmdResult<(ProviderId, String)> {
     Ok((id, model))
 }
 
-/// The Bericht template facts are tagged with, resolved for the episode (none without one).
-fn tag_template(s: &Store, episode: Option<&Episode>) -> thera_core::Result<Option<Template>> {
-    let Some(ep) = episode else { return Ok(None) };
-    let t = s.template(extract::TAG_TEMPLATE_KEY)?;
-    let ctx = Context { method: ep.method, age_group: ep.age_group, kind: Some(ApplicationKind::Erstantrag) };
-    Ok(Some(t.resolve(&ctx)))
-}
-
-/// What an extraction needs besides the request: the segments it cites into and the allowed
-/// note sections and Bericht tags.
-struct ExtractionScope {
-    segments: Vec<SourceSegment>,
-    sections: Vec<String>,
-    tags: Vec<String>,
-}
-
-/// Exactly what an extraction for this note would send, built from the current transcript and terms.
-fn prepare_extraction(s: &Store, report_id: &str) -> thera_core::Result<(extract::Prepared, ExtractionScope)> {
-    let view = report_view(s, report_id)?;
-    if view.report.kind != "sitzungsnotiz" {
-        return Err(thera_core::Error::Invalid("Fakten gibt es nur für Sitzungsnotizen".into()));
-    }
-    let dict = s.pseudo_dictionary(&view.patient.id)?;
-    let bericht = tag_template(s, view.episode.as_ref())?;
-    let tag_defs = bericht.as_ref().map(extract::tag_sections).unwrap_or_default();
-    let prepared = extract::prepare(&view.template, &tag_defs, &view.segments, dict, extract::CHUNK_CHARS)?;
-    let sections = extract::target_sections(&view.template).iter().map(|d| d.key.clone()).collect();
-    let tags = tag_defs.iter().map(|d| d.key.clone()).collect();
-    Ok((prepared, ExtractionScope { segments: view.segments, sections, tags }))
-}
-
 #[derive(Serialize)]
 struct ExtractPreview {
     #[serde(flatten)]
@@ -1844,7 +1868,7 @@ struct ExtractPreview {
 /// The redaction preview: the pseudonymized text per request and the token table (local only).
 #[tauri::command]
 fn extract_preview(state: State<'_, AppState>, report_id: String) -> CmdResult<ExtractPreview> {
-    let (prepared, _) = state.with(|s| prepare_extraction(s, &report_id))?;
+    let (prepared, _) = state.with(|s| autopilot::prepare_extraction(s, &report_id))?;
     let report = state.with(|s| s.report(&report_id))?;
     let terms = state.with(|s| s.pseudo_terms(&report.patient_id))?;
     let config = state.with(|s| s.llm_config())?;
@@ -1874,7 +1898,7 @@ fn fact_tag_sections(state: State<'_, AppState>, report_id: String) -> CmdResult
     state.with(|s| {
         let report = s.report(&report_id)?;
         let episode = report.episode_id.as_deref().map(|e| s.episode(e)).transpose()?;
-        Ok(tag_template(s, episode.as_ref())?.map(|t| extract::tag_sections(&t).into_iter().cloned().collect()).unwrap_or_default())
+        Ok(autopilot::tag_template(s, episode.as_ref())?.map(|t| extract::tag_sections(&t).into_iter().cloned().collect()).unwrap_or_default())
     })
 }
 
@@ -1944,6 +1968,78 @@ fn stream_call(
     }
 }
 
+/// The app side of `core::autopilot`: store access, the model (resolved on first use) and the
+/// streamed requests with their audit entry. The manual buttons use it with a progress event.
+struct LlmHost<'a> {
+    state: &'a AppState,
+    events: &'a AppHandle,
+    cancel: Arc<AtomicBool>,
+    /// Manual runs show the streamed text (`llm:delta`) under this id.
+    request_id: Option<String>,
+    llm: Option<(ProviderId, String, Endpoint)>,
+    progress: Option<Box<dyn Fn(usize, usize) + 'a>>,
+    /// Autopilot: announce each step (`autopilot-changed`).
+    changed_session: Option<String>,
+}
+
+impl<'a> LlmHost<'a> {
+    fn new(state: &'a AppState, events: &'a AppHandle, cancel: Arc<AtomicBool>) -> Self {
+        Self { state, events, cancel, request_id: None, llm: None, progress: None, changed_session: None }
+    }
+}
+
+fn core_err(e: CmdError) -> thera_core::Error {
+    match e {
+        CmdError::Core(c) => c,
+        CmdError::Other(m) => thera_core::Error::Invalid(m),
+    }
+}
+
+impl autopilot::Host for LlmHost<'_> {
+    fn store<T>(&mut self, f: impl FnOnce(&Store) -> thera_core::Result<T>) -> thera_core::Result<T> {
+        let r = self.state.with(f).map_err(core_err);
+        if let Some(id) = &self.changed_session {
+            let _ = self.events.emit("autopilot-changed", AutopilotChanged { session_id: id });
+        }
+        r
+    }
+
+    fn ready(&mut self) -> thera_core::Result<Option<(ProviderId, String)>> {
+        if let Some((p, m, _)) = &self.llm {
+            return Ok(Some((*p, m.clone())));
+        }
+        // No provider or model chosen: the AI steps are skipped, not failed.
+        let Ok((provider, model)) = active_llm(self.state) else { return Ok(None) };
+        let (ep, _) = llm_endpoint(self.state, provider, &self.cancel).map_err(core_err)?;
+        self.llm = Some((provider, model.clone(), ep));
+        Ok(Some((provider, model)))
+    }
+
+    fn complete(&mut self, action: &str, messages: &[(llm::Role, &thera_core::pseudo::Pseudonymized<String>)], opts: &llm::ChatOptions) -> thera_core::Result<Option<llm::Completion>> {
+        if self.cancel.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        let (provider, model, ep) = self.llm.as_ref().ok_or_else(|| thera_core::Error::Llm("Kein Modell bereit".into()))?;
+        let result = llm::chat_stream(ep, model, messages, opts, &self.cancel, |text| {
+            if let Some(id) = &self.request_id {
+                let _ = self.events.emit("llm:delta", LlmDelta { request_id: id, text });
+            }
+        });
+        let reason = if matches!(result, Err(thera_core::Error::Cancelled)) { "cancelled" } else { "error" };
+        self.state.with(|s| s.log_llm_call(action, *provider, model, result.as_ref().map_err(|_| reason))).map_err(core_err)?;
+        match result {
+            Err(thera_core::Error::Cancelled) => Ok(None),
+            r => r.map(Some),
+        }
+    }
+
+    fn progress(&mut self, done: usize, total: usize) {
+        if let Some(p) = &self.progress {
+            p(done, total);
+        }
+    }
+}
+
 #[derive(Clone, Serialize)]
 struct ExtractProgress {
     report_id: String,
@@ -1973,7 +2069,7 @@ async fn extract_run(app: AppHandle, report_id: String, digest: String, request_
     blocking(app, move |state| {
         let run = LlmRun::start(state, &request_id)?;
         let (provider, model) = active_llm(state)?;
-        let (prepared, scope) = state.with(|s| prepare_extraction(s, &report_id))?;
+        let (prepared, scope) = state.with(|s| autopilot::prepare_extraction(s, &report_id))?;
         if prepared.digest != digest {
             return Err(CmdError::Other("Der Text hat sich seit der Vorschau geändert. Bitte die Vorschau erneut prüfen.".into()));
         }
@@ -1989,41 +2085,14 @@ async fn extract_run(app: AppHandle, report_id: String, digest: String, request_
             Err(_) if run.cancelled() => return nothing(),
             r => r?.0,
         };
-        let opts = extract::chat_options();
-        let keys: Vec<&str> = scope.sections.iter().map(String::as_str).collect();
-        let tags: Vec<&str> = scope.tags.iter().map(String::as_str).collect();
-        let (mut facts, mut dropped, mut done, mut answered_by) = (Vec::new(), 0, 0, model.clone());
-        for (i, chunk) in prepared.chunks.iter().enumerate() {
-            if run.cancelled() {
-                break;
-            }
-            progress("running", i);
-            let messages = [(llm::Role::System, &prepared.system), (llm::Role::User, &chunk.user)];
-            let Some(completion) = stream_call(state, &events, &run, "llm.extract", (provider, &model), &ep, &messages, &opts)? else {
-                break;
-            };
-            let parsed = extract::parse(&completion.text, &chunk.range, &keys, &tags, &prepared.map)?;
-            facts.extend(parsed.facts);
-            dropped += parsed.dropped;
-            answered_by = completion.model;
-            done += 1;
+        let mut host = LlmHost::new(state, &events, run.cancel.clone());
+        host.request_id = Some(request_id.clone());
+        host.llm = Some((provider, model.clone(), ep));
+        host.progress = Some(Box::new(|done, _| progress("running", done)));
+        match autopilot::extract(&mut host, (provider, &model), &report_id, &prepared, &scope)? {
+            None => nothing(),
+            Some(o) => Ok(ExtractResult { facts: o.facts, dropped: o.dropped, chunks: o.chunks, total, cancelled: o.chunks < o.total }),
         }
-        if done == 0 {
-            return nothing();
-        }
-        progress("running", done);
-        let (facts, merged) = extract::merge(facts);
-        let meta = ExtractionMeta {
-            provider: provider_str(provider),
-            model: answered_by,
-            prompt_hash: prepared.prompt_hash.clone(),
-            chunks: done,
-            dropped,
-            merged,
-            tagged: !scope.tags.is_empty(),
-        };
-        let facts = state.with(|s| s.save_extraction(&report_id, &meta, &facts, &scope.segments))?;
-        Ok(ExtractResult { facts, dropped, chunks: done, total, cancelled: done < total })
     })
     .await
 }
@@ -2040,14 +2109,6 @@ fn note_facts_apply(state: State<'_, AppState>, report_id: String, facts: Vec<Fa
 
 // ---------- session summary (Phase 4, slice 30) ----------
 
-/// Exactly what summarizing this session would send, from its confirmed transcript and note.
-fn prepare_summary(s: &Store, session_id: &str) -> thera_core::Result<(extract::Prepared, SummaryInput)> {
-    let input = s.summary_input(session_id)?;
-    let dict = s.pseudo_dictionary(&input.patient.id)?;
-    let prepared = summary::prepare(&input.patient, &input.segments, &input.note, dict, extract::CHUNK_CHARS)?;
-    Ok((prepared, input))
-}
-
 #[tauri::command]
 fn session_summary(state: State<'_, AppState>, session_id: String) -> CmdResult<Option<SessionSummary>> {
     state.with(|s| s.session_summary(&session_id))
@@ -2056,7 +2117,7 @@ fn session_summary(state: State<'_, AppState>, session_id: String) -> CmdResult<
 /// The redaction preview for a summary, like `extract_preview`.
 #[tauri::command]
 fn summary_preview(state: State<'_, AppState>, session_id: String) -> CmdResult<ExtractPreview> {
-    let (prepared, input) = state.with(|s| prepare_summary(s, &session_id))?;
+    let (prepared, input) = state.with(|s| autopilot::prepare_summary(s, &session_id))?;
     let terms = state.with(|s| s.pseudo_terms(&input.patient.id))?;
     let config = state.with(|s| s.llm_config())?;
     let provider = config.active.map(llm::provider);
@@ -2080,7 +2141,7 @@ async fn summary_run(app: AppHandle, session_id: String, digest: String, request
     blocking(app, move |state| {
         let run = LlmRun::start(state, &request_id)?;
         let (provider, model) = active_llm(state)?;
-        let (prepared, input) = state.with(|s| prepare_summary(s, &session_id))?;
+        let (prepared, input) = state.with(|s| autopilot::prepare_summary(s, &session_id))?;
         if prepared.digest != digest {
             return Err(CmdError::Other("Der Text hat sich seit der Vorschau geändert. Bitte die Vorschau erneut prüfen.".into()));
         }
@@ -2098,31 +2159,14 @@ async fn summary_run(app: AppHandle, session_id: String, digest: String, request
             Err(_) if run.cancelled() => return unchanged(state),
             r => r?.0,
         };
-        let opts = summary::chat_options();
-        let quota = summary::quota(total);
-        let (mut points, mut dropped, mut answered_by) = (Vec::new(), 0, model.clone());
-        for (i, chunk) in prepared.chunks.iter().enumerate() {
-            progress("running", i);
-            let messages = [(llm::Role::System, &prepared.system), (llm::Role::User, &chunk.user)];
-            let Some(completion) = stream_call(state, &events, &run, "llm.summary", (provider, &model), &ep, &messages, &opts)? else {
-                return unchanged(state);
-            };
-            let scope = summary::Scope {
-                range: &chunk.range,
-                notes: if i == 0 { input.note.len() } else { 0 },
-                segments: &input.segments,
-                note: &input.note,
-            };
-            let parsed = summary::parse(&completion.text, &scope, quota, &prepared.map, &input.patient)?;
-            points.extend(parsed.points);
-            dropped += parsed.dropped;
-            answered_by = completion.model;
+        let mut host = LlmHost::new(state, &events, run.cancel.clone());
+        host.request_id = Some(request_id.clone());
+        host.llm = Some((provider, model.clone(), ep));
+        host.progress = Some(Box::new(|done, _| progress("running", done)));
+        match autopilot::summarize(&mut host, (provider, &model), &session_id, &prepared, &input)? {
+            None => unchanged(state),
+            Some(o) => Ok(SummaryResult { summary: Some(o.summary), dropped: o.dropped, cancelled: false }),
         }
-        progress("running", total);
-        let meta = SummaryMeta { provider: provider_str(provider), model: answered_by, prompt_hash: prepared.prompt_hash.clone(), chunks: total, dropped };
-        let stored = summary::to_stored(&points, &input.segments, &input.note);
-        let saved = state.with(|s| s.save_summary(&session_id, &meta, &stored))?;
-        Ok(SummaryResult { summary: Some(saved), dropped, cancelled: false })
     })
     .await
 }
@@ -2135,6 +2179,46 @@ fn summary_edit(state: State<'_, AppState>, session_id: String, points: Vec<summ
 #[tauri::command]
 fn patient_timeline(state: State<'_, AppState>, patient_id: String) -> CmdResult<Vec<TimelineGroup>> {
     state.with(|s| s.patient_timeline(&patient_id, &thera_core::domain::now()))
+}
+
+// ---------- autopilot + contingent (Phase 4, slice 31) ----------
+
+#[tauri::command]
+fn autopilot_get(state: State<'_, AppState>) -> CmdResult<bool> {
+    state.with(|s| s.autopilot_enabled())
+}
+
+#[tauri::command]
+fn autopilot_set(state: State<'_, AppState>, on: bool) -> CmdResult<()> {
+    state.with(|s| s.set_autopilot(on))
+}
+
+#[tauri::command]
+fn autopilot_run(state: State<'_, AppState>, session_id: String) -> CmdResult<Option<AutopilotRun>> {
+    state.with(|s| s.autopilot_run(&session_id))
+}
+
+/// "Was wurde gesendet?" for one step of a run.
+#[tauri::command]
+fn autopilot_sent(state: State<'_, AppState>, job_id: String, step: AutopilotStepKind) -> CmdResult<Option<extract::Preview>> {
+    state.with(|s| s.autopilot_sent(&job_id, step))
+}
+
+#[tauri::command]
+fn autopilot_retry(state: State<'_, AppState>, job_id: String) -> CmdResult<Job> {
+    let job = state.with(|s| s.retry_autopilot(&job_id))?;
+    state.wake_worker();
+    Ok(job)
+}
+
+#[tauri::command]
+fn episode_stage_set(state: State<'_, AppState>, episode_id: String, stage: Stage, therapy_since: Option<String>) -> CmdResult<Episode> {
+    state.with(|s| s.set_episode_stage(&episode_id, stage, therapy_since.as_deref()))
+}
+
+#[tauri::command]
+fn episode_contingent(state: State<'_, AppState>, episode_id: String) -> CmdResult<Contingent> {
+    state.with(|s| s.episode_contingent(&episode_id, &thera_core::domain::now()))
 }
 
 // ---------- Bericht drafting (Phase 2) ----------
@@ -2180,7 +2264,7 @@ fn prepare_draft(s: &Store, report_id: &str, choice: &DraftChoice) -> thera_core
         })
         .collect();
     // Tags name the sections of the Erst-/Umwandlungsbericht; other templates take all facts.
-    let tag_keys: Vec<String> = match (view.template.key == extract::TAG_TEMPLATE_KEY && !choice.all_facts, tag_template(s, Some(episode))?) {
+    let tag_keys: Vec<String> = match (view.template.key == extract::TAG_TEMPLATE_KEY && !choice.all_facts, autopilot::tag_template(s, Some(episode))?) {
         (true, Some(t)) => extract::tag_sections(&t).iter().map(|d| d.key.clone()).collect(),
         _ => vec![],
     };
@@ -3321,6 +3405,13 @@ pub fn run() {
             transcription_cancel,
             transcript_edit_segment,
             transcript_confirm,
+            autopilot_get,
+            autopilot_set,
+            autopilot_run,
+            autopilot_sent,
+            autopilot_retry,
+            episode_stage_set,
+            episode_contingent,
             transcript_set_speaker,
             transcript_swap_speakers,
             transcript_rediarize,

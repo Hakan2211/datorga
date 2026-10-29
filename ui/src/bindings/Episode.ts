@@ -9,4 +9,9 @@ export type Episode = { id: string, patient_id: string, method: Method, age_grou
 /**
  * Working diagnoses, therapist-entered ([`crate::store::Store::set_episode_diagnoses`]).
  */
-diagnoses: Array<Diagnosis>, };
+diagnoses: Array<Diagnosis>, 
+/**
+ * Start of the Richtlinientherapie (after the Probatorik); sessions from then on count
+ * against the contingent ([`crate::store::Store::set_episode_stage`]).
+ */
+therapy_since: string | null, };

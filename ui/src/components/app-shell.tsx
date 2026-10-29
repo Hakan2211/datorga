@@ -5,14 +5,12 @@ import { useTranslation } from 'react-i18next'
 import {
   CalendarDays,
   FileText,
-  Library,
   Lock,
   LockOpen,
   Mic,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
-  ScrollText,
   Search,
   Settings,
   Sparkles,
@@ -24,6 +22,7 @@ import { formatDuration } from '@/lib/capture'
 import { AssistantPanel } from '@/components/assistant'
 import { BackupReminder } from '@/components/backup-reminder'
 import { CommandPalette } from '@/components/command-palette'
+import { useAutopilotEvents } from '@/components/autopilot'
 import { Button } from '@/components/ui/button'
 import { Kbd, KbdGroup } from '@/components/ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -31,7 +30,8 @@ import { cn } from '@/lib/utils'
 
 type Icon = ComponentType<{ className?: string }>
 
-// Module registry: each module contributes a nav entry. Modules of later slices are shown disabled.
+// Module registry: each module contributes a nav entry. Vorlagen stays hidden until the module
+// exists; the Protokoll lives under Einstellungen → Sicherheit (its route stays).
 const modules: { to?: string; label: string; icon: Icon; exact?: boolean }[] = [
   { to: '/', label: 'nav.dashboard', icon: Sun, exact: true },
   { to: '/calendar', label: 'nav.calendar', icon: CalendarDays },
@@ -39,7 +39,6 @@ const modules: { to?: string; label: string; icon: Icon; exact?: boolean }[] = [
   { to: '/sessions', label: 'nav.sessions', icon: Mic },
   { to: '/reports', label: 'nav.reports', icon: FileText },
   { to: '/assistant', label: 'nav.assistant', icon: Sparkles },
-  { to: '/templates', label: 'nav.templates', icon: Library },
 ]
 
 /** Marks the side panel as the assistant's (its title is rendered by the shell). */
@@ -65,6 +64,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const reportId = useMatch({ from: '/reports/$reportId', shouldThrow: false })?.params.reportId
   const openReport = useQuery({ ...q.report(reportId ?? ''), staleTime: Infinity, enabled: !!reportId })
   const inNote = !!reportId && openReport.data?.report.kind === 'sitzungsnotiz'
+  useAutopilotEvents()
 
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSED_KEY) === 'collapsed')
   const toggle = () =>
@@ -148,9 +148,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             )}
           </nav>
           <div className="space-y-0.5 border-t px-3 py-3">
-            <NavLink to="/audit" collapsed={collapsed} icon={<ScrollText className="size-4 shrink-0" />}>
-              {t('nav.audit')}
-            </NavLink>
             <NavLink to="/settings" collapsed={collapsed} icon={<Settings className="size-4 shrink-0" />}>
               {t('nav.settings')}
             </NavLink>

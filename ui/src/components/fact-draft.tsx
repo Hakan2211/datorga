@@ -9,6 +9,7 @@ import type { EntityKind } from "@/bindings/EntityKind";
 import type { FactEdit } from "@/bindings/FactEdit";
 import type { NoteFact } from "@/bindings/NoteFact";
 import type { SectionDef } from "@/bindings/SectionDef";
+import { SentLink } from "@/components/autopilot";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -83,11 +84,14 @@ export function tagLabel(s: SectionDef): string {
 export function FactDraftCard({
   reportId,
   patientId,
+  sessionId,
   sections,
   onApply,
 }: {
   reportId: string;
   patientId: string;
+  /** The note's session: the autopilot may have proposed these facts ("Was wurde gesendet?"). */
+  sessionId: string | null;
   sections: SectionDef[];
   onApply: (edits: FactEdit[]) => Promise<void>;
 }) {
@@ -166,6 +170,8 @@ export function FactDraftCard({
         <CardTitle className="flex items-center gap-2 text-base">
           <Sparkles className="size-4 text-primary" /> {t("facts.title")}
         </CardTitle>
+        <span className="ml-auto" />
+        {sessionId && <SentLink sessionId={sessionId} step="extract" />}
         <Button
           size="sm"
           variant={proposed.length ? "outline" : "default"}

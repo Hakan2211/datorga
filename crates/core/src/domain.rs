@@ -167,6 +167,9 @@ pub struct Episode {
     pub ended_at: Option<String>,
     /// Working diagnoses, therapist-entered ([`crate::store::Store::set_episode_diagnoses`]).
     pub diagnoses: Vec<Diagnosis>,
+    /// Start of the Richtlinientherapie (after the Probatorik); sessions from then on count
+    /// against the contingent ([`crate::store::Store::set_episode_stage`]).
+    pub therapy_since: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -296,6 +299,8 @@ pub struct Job {
     pub engine: Option<SttTarget>,
     pub created_at: String,
     pub updated_at: String,
+    /// Set for a job about a whole session (kind `autopilot`).
+    pub session_id: Option<String>,
 }
 
 /// What every downstream stage consumes, whatever the capture mode (PLAN §6).
@@ -387,8 +392,26 @@ pub struct TaskInput {
 }
 
 str_enum!(
+    /// One step of the autopilot after a confirmed transcript (slice 31), in run order.
+    AutopilotStepKind { Note => "note", Extract => "extract", Summary => "summary" }
+);
+str_enum!(
+    AutopilotStepStatus { Pending => "pending", Running => "running", Done => "done", Skipped => "skipped", Failed => "failed" }
+);
+str_enum!(
+    /// What queued an autopilot run: a confirmed transcript (all steps) or a signed note that
+    /// changed a lot since its summary (summary only).
+    AutopilotTrigger { Confirm => "confirm", Signed => "signed" }
+);
+str_enum!(
     /// Derived "Fällig" items on the Heute page.
-    DueKind { NoteOpen => "note_open", PrepMissing => "prep_missing", ReportDraft => "report_draft" }
+    DueKind {
+        NoteOpen => "note_open",
+        PrepMissing => "prep_missing",
+        ReportDraft => "report_draft",
+        TranscriptReview => "transcript_review",
+        ApplicationDue => "application_due",
+    }
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -405,6 +428,8 @@ pub struct DueItem {
     pub application_kind: Option<ApplicationKind>,
     #[ts(type = "number | null")]
     pub seq: Option<i64>,
+    /// `application_due`: the Behandlungsfall and where its contingent stands.
+    pub contingent: Option<crate::contingent::Contingent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

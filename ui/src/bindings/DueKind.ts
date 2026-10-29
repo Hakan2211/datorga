@@ -3,4 +3,4 @@
 /**
  * Derived "Fällig" items on the Heute page.
  */
-export type DueKind = "note_open" | "prep_missing" | "report_draft";
+export type DueKind = "note_open" | "prep_missing" | "report_draft" | "transcript_review" | "application_due";

@@ -26,6 +26,10 @@ import type { SessionSource } from '@/bindings/SessionSource'
 import type { SessionSummary } from '@/bindings/SessionSummary'
 import type { SummaryPoint } from '@/bindings/SummaryPoint'
 import type { TimelineGroup } from '@/bindings/TimelineGroup'
+import type { AutopilotRun } from '@/bindings/AutopilotRun'
+import type { AutopilotStepKind } from '@/bindings/AutopilotStepKind'
+import type { Contingent } from '@/bindings/Contingent'
+import type { Stage } from '@/bindings/Stage'
 import type { SourceKind } from '@/bindings/SourceKind'
 import type { SourceSegment } from '@/bindings/SourceSegment'
 import type { Template } from '@/bindings/Template'
@@ -406,6 +410,20 @@ export const api = {
     invoke<SummaryResult>('summary_run', { sessionId, digest, requestId }),
   summaryEdit: (sessionId: string, points: SummaryPoint[]) => invoke<SessionSummary>('summary_edit', { sessionId, points }),
   patientTimeline: (patientId: string) => invoke<TimelineGroup[]>('patient_timeline', { patientId }),
+
+  autopilotEnabled: () => invoke<boolean>('autopilot_get'),
+  setAutopilot: (on: boolean) => invoke<void>('autopilot_set', { on }),
+  autopilotRun: (sessionId: string) => invoke<AutopilotRun | null>('autopilot_run', { sessionId }),
+  /** "Was wurde gesendet?": the pseudonymized requests of one autopilot step and the local token table. */
+  autopilotSent: (jobId: string, step: AutopilotStepKind) => invoke<Preview | null>('autopilot_sent', { jobId, step }),
+  retryAutopilot: (jobId: string) => invoke<Job>('autopilot_retry', { jobId }),
+  onTranscriptReady: (cb: (e: { session_id: string; patient_name: string }) => void): Promise<UnlistenFn> =>
+    listen<{ session_id: string; patient_name: string }>('transcript-ready', (e) => cb(e.payload)),
+  onAutopilotChanged: (cb: (sessionId: string) => void): Promise<UnlistenFn> =>
+    listen<{ session_id: string }>('autopilot-changed', (e) => cb(e.payload.session_id)),
+  setEpisodeStage: (episodeId: string, stage: Stage, therapySince: string | null) =>
+    invoke<Episode>('episode_stage_set', { episodeId, stage, therapySince }),
+  contingent: (episodeId: string) => invoke<Contingent>('episode_contingent', { episodeId }),
   rejectFacts: (reportId: string, ids: string[]) => invoke<NoteFact[]>('note_facts_reject', { reportId, ids }),
   applyFacts: (reportId: string, facts: FactEdit[]) => invoke<Report>('note_facts_apply', { reportId, facts }),
   factTagSections: (reportId: string) => invoke<SectionDef[]>('fact_tag_sections', { reportId }),
@@ -525,6 +543,15 @@ export const q = {
   sessionSummary: (sessionId: string) =>
     queryOptions({ queryKey: ['sessionSummary', sessionId], queryFn: () => api.sessionSummary(sessionId) }),
   timeline: (patientId: string) => queryOptions({ queryKey: ['timeline', patientId], queryFn: () => api.patientTimeline(patientId) }),
+  autopilot: () => queryOptions({ queryKey: ['setting', 'autopilot'], queryFn: api.autopilotEnabled }),
+  // Polled while the run is queued or running (the backend also announces each step).
+  autopilotRun: (sessionId: string) =>
+    queryOptions({
+      queryKey: ['autopilot', sessionId],
+      queryFn: () => api.autopilotRun(sessionId),
+      refetchInterval: (query) => (jobActive(query.state.data?.job) ? 1500 : false),
+    }),
+  contingent: (episodeId: string) => queryOptions({ queryKey: ['contingent', episodeId], queryFn: () => api.contingent(episodeId) }),
   factTagSections: (reportId: string) =>
     queryOptions({ queryKey: ['factTagSections', reportId], queryFn: () => api.factTagSections(reportId), staleTime: Infinity }),
   draftSources: (reportId: string) =>

@@ -33,7 +33,6 @@ function Sessions() {
                   <TableRow>
                     <TableHead>{t('sessions.date')}</TableHead>
                     <TableHead>{t('patients.title')}</TableHead>
-                    <TableHead>Status</TableHead>
                     <TableHead>{t('sessions.note')}</TableHead>
                     <TableHead />
                   </TableRow>
@@ -47,7 +46,6 @@ function Sessions() {
                           {name(s.patient_id)}
                         </Link>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{t(`sessions.status.${s.status}`, s.status)}</TableCell>
                       <TableCell>
                         {s.note_status ? (
                           <>

@@ -647,6 +647,18 @@ impl ToolCtx<'_> {
                     i.application_kind.map(crate::draft::kind_name).unwrap_or("Bericht"),
                     i.report_id.as_deref().unwrap_or("")
                 ),
+                DueKind::TranscriptReview => format!("Transkript prüfen: {} (patient_id {}), Sitzung {when}, session_id {}", i.patient_name, i.patient_id, i.session_id.as_deref().unwrap_or("")),
+                DueKind::ApplicationDue => {
+                    let c = i.contingent.as_ref();
+                    format!(
+                        "{} vorbereiten: {} (patient_id {}), {} von {} Sitzungen",
+                        i.application_kind.map(crate::draft::kind_name).unwrap_or("Antrag"),
+                        i.patient_name,
+                        i.patient_id,
+                        c.map_or(0, |c| c.used),
+                        c.map_or(0, |c| c.limit)
+                    )
+                }
             };
             t.push_str(&format!("- {line}\n"));
         }

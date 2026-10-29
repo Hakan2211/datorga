@@ -17,11 +17,14 @@ use crate::templates::{self, Template};
 use crate::{Error, Result};
 
 mod agent;
+mod autopilot;
 mod calendar;
+mod contingent;
 mod speakers;
 mod summary;
 mod timeline;
 pub use agent::{TextMode, TextProposal};
+pub use autopilot::{AutopilotRun, AutopilotStep};
 pub use calendar::normalize_ts;
 pub use summary::{SessionSummary, SummaryInput, SummaryMeta, SummaryPointView};
 pub use timeline::{TimelineGroup, TimelineItem};
@@ -51,6 +54,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V16__speaker_count.sql"),
     include_str!("migrations/V17__patient_profile.sql"),
     include_str!("migrations/V18__session_summary.sql"),
+    include_str!("migrations/V19__autopilot.sql"),
 ];
 
 /// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).
@@ -954,13 +958,14 @@ impl Store {
         if !matches!(status, JobStatus::Failed | JobStatus::Cancelled) {
             return Err(Error::Invalid(format!("fail_job with status {}", status.as_str())));
         }
+        let action = if self.job(id)?.kind == "autopilot" { "autopilot.end" } else { "transcription.end" };
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
             "UPDATE job SET status = ?2, last_error = ?3, updated_at = ?4 WHERE id = ?1",
             params![id, status.as_str(), error, now()],
         )?;
         audit::append(&tx, Entry {
-            actor: "system", action: "transcription.end", entity_type: "job", entity_id: Some(id),
+            actor: "system", action, entity_type: "job", entity_id: Some(id),
             meta: json!({ "status": status.as_str() }),
         })?;
         tx.commit()?;
@@ -978,6 +983,7 @@ impl Store {
 
     /// After a restart: work that was running is queued again.
     pub fn requeue_running_jobs(&self) -> Result<usize> {
+        self.conn.execute("UPDATE autopilot_step SET status = 'pending' WHERE status = 'running'", [])?;
         Ok(self.conn.execute("UPDATE job SET status = 'queued', progress = 0, updated_at = ?1 WHERE status = 'running'", [now()])?)
     }
 
@@ -2107,19 +2113,19 @@ const PATIENT_SELECT: &str = "SELECT id, external_ref, first_name, last_name, bi
 const CONSENT_SELECT: &str = "SELECT id, patient_id, kind, scope, text_version, text_hash, granted_at, revoked_at,
     note FROM consent";
 const EPISODE_SELECT: &str =
-    "SELECT id, patient_id, method, age_group, setting, stage, started_at, ended_at, diagnoses_json FROM episode";
+    "SELECT id, patient_id, method, age_group, setting, stage, started_at, ended_at, diagnoses_json, therapy_since FROM episode";
 const SESSION_SELECT: &str = "SELECT s.id, s.patient_id, s.episode_id, s.scheduled_at, s.started_at, s.ended_at,
     s.duration_s, s.modality, s.status, n.id, n.status,
     n.status = 'exported' AND (SELECT count(*) FROM report_addendum x WHERE x.report_id = n.id) > COALESCE(n.exported_addenda, 0),
     s.planned_minutes, s.cancelled_reason
     FROM session s LEFT JOIN report n ON n.session_id = s.id AND n.kind = 'sitzungsnotiz'";
 
-const JOB_SELECT: &str =
-    "SELECT id, kind, source_id, status, progress, attempts, last_error, created_at, updated_at, engine FROM job";
+pub(super) const JOB_SELECT: &str =
+    "SELECT id, kind, source_id, status, progress, attempts, last_error, created_at, updated_at, engine, session_id FROM job";
 const TRANSCRIPT_SELECT: &str =
     "SELECT id, source_id, engine, model, language, status, created_at, confirmed_at, diarization FROM transcript";
 
-fn row_to_job(r: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
+pub(super) fn row_to_job(r: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
     Ok(Job {
         id: r.get(0)?,
         kind: r.get(1)?,
@@ -2133,6 +2139,7 @@ fn row_to_job(r: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
         })?,
         created_at: r.get(7)?,
         updated_at: r.get(8)?,
+        session_id: r.get(10)?,
     })
 }
 
@@ -2227,6 +2234,7 @@ fn row_to_episode(r: &rusqlite::Row<'_>) -> rusqlite::Result<Episode> {
         started_at: r.get(6)?,
         ended_at: r.get(7)?,
         diagnoses: serde_json::from_str(&r.get::<_, String>(8)?).unwrap_or_default(),
+        therapy_since: r.get(9)?,
     })
 }
 
@@ -3422,7 +3430,7 @@ mod tests {
     }
 
     fn summary_meta() -> SummaryMeta {
-        SummaryMeta { provider: "local".into(), model: "m".into(), prompt_hash: "h".into(), chunks: 1, dropped: 0 }
+        SummaryMeta { provider: "local".into(), model: "m".into(), prompt_hash: "h".into(), chunks: 1, dropped: 0, note_chars: 0 }
     }
 
     fn point(text: &str, segments: Vec<String>, note: &[&str]) -> crate::summary::SummaryPoint {

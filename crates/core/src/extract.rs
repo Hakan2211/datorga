@@ -94,7 +94,7 @@ pub struct Parsed {
 }
 
 /// The redaction preview: the outgoing text and which original each token stands for.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct Preview {
     pub messages: Vec<String>,

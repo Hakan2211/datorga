@@ -13,7 +13,9 @@ import {
   FileSignature,
   FileText,
   Laptop,
+  Loader2,
   Mic,
+  MoreHorizontal,
   MicOff,
   NotebookPen,
   Square,
@@ -43,6 +45,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { TranscriptView } from '@/components/transcript-view'
 import { PrepCard } from '@/components/voice-prep'
 import { SummaryCard } from '@/components/session-summary'
+import { AutopilotCard } from '@/components/autopilot'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { api, errorMessage, jobActive, q, type RecordingStatus, type SessionView, type SourceView } from '@/lib/api'
 import { SESSION_FLOW, flowStates, type FlowStep } from '@/lib/calendar'
 import { formatDuration, useCaptureDevice } from '@/lib/capture'
@@ -52,8 +62,8 @@ export const Route = createFileRoute('/sessions/$sessionId')({ component: Sessio
 
 const FLOW = SESSION_FLOW
 
-/** Where a session stands, from its recordings, transcripts and note. */
-function sessionFlow(view: SessionView, recording: RecordingStatus | null | undefined, hasPrep: boolean) {
+/** Where a session stands, from its recordings, transcripts and note. `autopilot`: a run is queued or running. */
+function sessionFlow(view: SessionView, recording: RecordingStatus | null | undefined, hasPrep: boolean, autopilot: boolean) {
   const { session, sources } = view
   const finished = sources.filter((s) => s.status !== 'recording')
   const reviewed = (s: SourceView) => s.transcript?.status === 'confirmed' || !!s.audio_deleted_at
@@ -69,7 +79,12 @@ function sessionFlow(view: SessionView, recording: RecordingStatus | null | unde
     recordingHere: recording?.session_id === session.id,
   })
   const current = FLOW.find((k) => states[k] === 'current')
-  return { states, current, unreviewed, finished: finished.length }
+  // Work the app does by itself right now: the stepper and the action bar say so instead of a button.
+  const auto: Partial<Record<FlowStep, boolean>> = {
+    review: sources.some((s) => jobActive(s.job)),
+    note: autopilot,
+  }
+  return { states, current, unreviewed, finished: finished.length, auto }
 }
 
 /** A summary needs a confirmed transcript or a note to read. */
@@ -83,10 +98,11 @@ function SessionPage() {
   const view = useQuery(q.session(sessionId))
   const recording = useQuery(q.recording())
   const prep = useQuery(q.prep(sessionId))
+  const autopilot = useQuery(q.autopilotRun(sessionId))
   const [viewing, setViewing] = useState<FlowStep | null>(null)
   if (!view.data) return null
   const { session, patient } = view.data
-  const flow = sessionFlow(view.data, recording.data, !!prep.data)
+  const flow = sessionFlow(view.data, recording.data, !!prep.data, jobActive(autopilot.data?.job))
   // Without a choice the page follows the work; once everything is done it rests on "Abschließen".
   const shown = viewing ?? flow.current ?? 'finish'
 
@@ -117,7 +133,17 @@ function SessionPage() {
       <Page className="flex-1">
         {session.status === 'cancelled' && <CancelledBanner sessionId={session.id} reason={session.cancelled_reason} />}
         <Stepper
-          steps={FLOW.map((k) => ({ key: k, label: t(`flow.session.${k}`), state: flow.states[k] }))}
+          steps={FLOW.map((k) => ({
+            key: k,
+            label: flow.auto[k] ? (
+              <span className="flex items-center gap-1.5" data-testid={`auto-${k}`}>
+                {t(`flow.session.${k}`)} <Loader2 className="size-3.5 animate-spin text-primary" />
+              </span>
+            ) : (
+              t(`flow.session.${k}`)
+            ),
+            state: flow.states[k],
+          }))}
           viewing={shown}
           onSelect={setViewing}
           className="mx-auto max-w-4xl"
@@ -126,7 +152,8 @@ function SessionPage() {
           {shown === 'prepare' && <PrepCard sessionId={session.id} primary={false} />}
           {shown === 'capture' && <CapturePanel view={view.data} primary={flow.finished === 0} />}
           {shown === 'review' && <ReviewStep view={view.data} onCapture={() => setViewing('capture')} />}
-          {shown === 'note' && <NoteCard view={view.data} unreviewed={flow.unreviewed} />}
+          {shown === 'note' && <AutopilotCard sessionId={session.id} noteId={session.note_id} />}
+          {shown === 'note' && <NoteCard view={view.data} unreviewed={flow.unreviewed} auto={!!flow.auto.note} />}
           {shown === 'finish' && <FinishStep view={view.data} />}
           {(shown === 'note' || shown === 'finish') && session.status !== 'cancelled' && (
             <SummaryCard sessionId={session.id} patientId={patient.id} ready={summaryReady(view.data)} />
@@ -183,6 +210,18 @@ function FlowBar({
     action = go('capture', t('flow.session.toCapture'))
   } else if (shown === 'capture' && !recordingHere && flow.finished > 0) {
     action = go('review', t('flow.session.toReview'))
+  } else if (shown === 'review' && flow.auto.review) {
+    info = (
+      <span className="flex items-center gap-2">
+        <Loader2 className="size-4 animate-spin text-primary" /> {t('flow.session.transcribingAuto')}
+      </span>
+    )
+  } else if (shown === 'note' && flow.auto.note) {
+    info = (
+      <span className="flex items-center gap-2">
+        <Loader2 className="size-4 animate-spin text-primary" /> {t('flow.session.autopilotRunning')}
+      </span>
+    )
   } else if (shown === 'review') {
     if (flow.unreviewed > 0) {
       info = t('flow.session.unreviewed', { count: flow.unreviewed })
@@ -223,7 +262,7 @@ function ReviewStep({ view, onCapture }: { view: SessionView; onCapture: () => v
   )
 }
 
-function NoteCard({ view, unreviewed }: { view: SessionView; unreviewed: number }) {
+function NoteCard({ view, unreviewed, auto }: { view: SessionView; unreviewed: number; auto: boolean }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const navigate = useNavigate()
@@ -255,6 +294,10 @@ function NoteCard({ view, unreviewed }: { view: SessionView; unreviewed: number 
             <Link to="/reports/$reportId" params={{ reportId: session.note_id }}>
               <ClipboardList /> {t(signed ? 'note.open' : 'flow.session.writeNote')}
             </Link>
+          </Button>
+        ) : auto ? (
+          <Button size="sm" variant="outline" disabled>
+            <Loader2 className="animate-spin" /> {t('autopilot.running')}
           </Button>
         ) : (
           <Button size="sm" onClick={() => create.mutate()} disabled={create.isPending}>
@@ -493,9 +536,8 @@ function SourceRow({ source, patientId }: { source: SourceView; patientId: strin
   const { t } = useTranslation()
   const qc = useQueryClient()
   const { job, transcript, stt } = source
-  // Preselected from Settings; the therapist can switch per recording.
-  const [picked, setPicked] = useState<SttTarget | null>(null)
-  const target = picked ?? stt.default
+  // The engine comes from Settings; the ⋯ menu overrides it for this recording.
+  const target = stt.default
   const problem = target === 'local' ? stt.local_problem : stt.cloud_problem
   const running = job?.engine ?? stt.default
   const cloudDone = transcript?.engine.startsWith('cloud:')
@@ -504,7 +546,7 @@ function SourceRow({ source, patientId }: { source: SourceView; patientId: strin
   const expanded = open ?? transcript?.status === 'draft'
   const refresh = () => void qc.invalidateQueries({ queryKey: ['session', source.session_id] })
   const start = useMutation({
-    mutationFn: () => api.startTranscription(source.id, target),
+    mutationFn: (engine: SttTarget | null) => api.startTranscription(source.id, engine),
     onSuccess: refresh,
     onError: (e) => toast.error(errorMessage(e)),
   })
@@ -549,32 +591,27 @@ function SourceRow({ source, patientId }: { source: SourceView; patientId: strin
           )}
           {canTranscribe && (
             <>
-              <span
-                className="inline-flex rounded-md border p-0.5"
-                role="radiogroup"
-                aria-label={t('transcript.targetLabel')}
-                data-testid="stt-target"
-              >
-                {TARGETS.map((tg) => (
-                  <button
-                    key={tg}
-                    type="button"
-                    role="radio"
-                    aria-checked={target === tg}
-                    onClick={() => setPicked(tg)}
-                    title={(tg === 'local' ? stt.local_problem : stt.cloud_problem) ?? undefined}
-                    className={cn(
-                      'inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs',
-                      target === tg ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted',
-                    )}
-                  >
-                    {tg === 'local' ? <Laptop className="size-3.5" /> : <Cloud className="size-3.5" />} {t(`transcript.target.${tg}`)}
-                  </button>
-                ))}
-              </span>
-              <Button size="sm" onClick={() => start.mutate()} disabled={start.isPending || !!problem}>
-                {transcript || job ? t('transcript.retry') : t('transcript.start')}
+              <Button size="sm" onClick={() => start.mutate(null)} disabled={start.isPending || !!problem} data-testid="stt-start">
+                {target === 'local' ? <Laptop /> : <Cloud />} {transcript || job ? t('transcript.retry') : t('transcript.start')}
               </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="icon" variant="ghost" className="size-8" aria-label={t('transcript.other')} data-testid="stt-target">
+                    <MoreHorizontal />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>{t('transcript.targetLabel')}</DropdownMenuLabel>
+                  {TARGETS.map((tg) => {
+                    const why = tg === 'local' ? stt.local_problem : stt.cloud_problem
+                    return (
+                      <DropdownMenuItem key={tg} disabled={!!why || start.isPending} onSelect={() => start.mutate(tg)} title={why ?? undefined}>
+                        {tg === 'local' ? <Laptop /> : <Cloud />} {t(`transcript.runWith.${tg}`)}
+                      </DropdownMenuItem>
+                    )
+                  })}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </>
           )}
         </span>

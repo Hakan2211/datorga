@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { open } from '@tauri-apps/plugin-dialog'
-import { AlertTriangle, DatabaseBackup, FolderOpen, KeyRound, Lock, LockOpen, Monitor, Moon, Palette, Sun } from 'lucide-react'
+import { AlertTriangle, DatabaseBackup, FolderOpen, KeyRound, Lock, LockOpen, Monitor, Moon, Palette, ScrollText, Sun, Workflow } from 'lucide-react'
 import { Page, PageHeader } from '@/components/app-shell'
 import { RecoveryKitPanel } from '@/components/recovery-kit'
 import { RestoreBackup } from '@/components/backup-restore'
@@ -31,6 +31,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { setTheme, THEMES, useTheme, type Theme } from '@/lib/theme'
@@ -58,6 +59,7 @@ function Settings() {
           </CardContent>
         </Card>
         <AppearanceCard />
+        <AutopilotCard />
         <SttCard />
         <SpeakerCard />
         <LlmCard />
@@ -80,10 +82,45 @@ function Settings() {
               )}
             </p>
             <RecoveryKeySection />
+            <div className="flex items-center justify-between gap-4 border-t pt-4">
+              <p className="text-muted-foreground">{t('settings.auditHint')}</p>
+              <Button asChild size="sm" variant="outline">
+                <Link to="/audit" data-testid="open-audit">
+                  <ScrollText /> {t('settings.auditOpen')}
+                </Link>
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </Page>
     </>
+  )
+}
+
+/** On by default (user decision); off = every step after the session is a button again. */
+function AutopilotCard() {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const on = useQuery(q.autopilot())
+  const set = useMutation({
+    mutationFn: (v: boolean) => api.setAutopilot(v),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: q.autopilot().queryKey }),
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+  return (
+    <SectionCard icon={Workflow} title={t('autopilot.settingTitle')} className="max-w-2xl" contentClassName="space-y-3 text-sm">
+      <div className="flex items-center gap-3">
+        <Switch
+          id="autopilot"
+          checked={on.data ?? true}
+          onCheckedChange={(v) => set.mutate(v)}
+          disabled={on.isLoading || set.isPending}
+          data-testid="autopilot-switch"
+        />
+        <Label htmlFor="autopilot">{t('autopilot.settingLabel')}</Label>
+      </div>
+      <p className="text-[13px] text-muted-foreground">{t('autopilot.settingHint')}</p>
+    </SectionCard>
   )
 }
 

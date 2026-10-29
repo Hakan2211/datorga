@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { CalendarX2, FileText, History, Pencil, ShieldCheck } from 'lucide-react'
 import type { TimelineGroup } from '@/bindings/TimelineGroup'
 import type { TimelineItem } from '@/bindings/TimelineItem'
+import type { Contingent } from '@/bindings/Contingent'
 import { EmptyState, StatusBadge, StatusPill, formatDate } from '@/components/bits'
 import { SummaryPoints, SummaryStatus } from '@/components/session-summary'
 import { Button } from '@/components/ui/button'
@@ -82,7 +83,7 @@ function Group({ group, patientId, filter }: { group: TimelineGroup; patientId: 
       ) : (
         <ol className="relative ml-[7.5rem] border-l-2 border-primary/25">
           {items.map((item, i) => (
-            <Node key={i} item={item} patientId={patientId} />
+            <Node key={i} item={item} patientId={patientId} contingent={group.contingent} />
           ))}
         </ol>
       )}
@@ -90,7 +91,7 @@ function Group({ group, patientId, filter }: { group: TimelineGroup; patientId: 
   )
 }
 
-function Node({ item, patientId }: { item: TimelineItem; patientId: string }) {
+function Node({ item, patientId, contingent }: { item: TimelineItem; patientId: string; contingent: Contingent | null }) {
   const cancelled = item.type === 'session' && item.session.status === 'cancelled'
   return (
     <li className="relative pb-5 pl-6 last:pb-0" data-testid={`timeline-${item.type}`}>
@@ -103,7 +104,7 @@ function Node({ item, patientId }: { item: TimelineItem; patientId: string }) {
           item.type === 'session' ? (cancelled ? 'bg-muted-foreground/40' : 'bg-primary') : 'bg-sand-foreground/50',
         )}
       />
-      {item.type === 'session' && <SessionNode item={item} patientId={patientId} />}
+      {item.type === 'session' && <SessionNode item={item} patientId={patientId} contingent={contingent} />}
       {item.type === 'application' && <ApplicationNode item={item} />}
       {item.type === 'consent' && <ConsentNode item={item} />}
     </li>
@@ -114,10 +115,25 @@ function Line({ icon, children }: { icon?: ReactNode; children: ReactNode }) {
   return <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">{icon}{children}</div>
 }
 
-function SessionNode({ item, patientId }: { item: Extract<TimelineItem, { type: 'session' }>; patientId: string }) {
+function SessionNode({
+  item,
+  patientId,
+  contingent,
+}: {
+  item: Extract<TimelineItem, { type: 'session' }>
+  patientId: string
+  contingent: Contingent | null
+}) {
   const { t } = useTranslation()
   const [editing, setEditing] = useState(false)
-  const { session, number, summary } = item
+  const { session, number, summary, probatorik } = item
+  // "Sitzung 9/12 · KZT 1" once the therapy started; the sessions before are the Probatorik.
+  const counted = contingent && contingent.stage !== 'probatorik'
+  const label = probatorik
+    ? t('timeline.probatorik', { n: number })
+    : counted
+      ? t('timeline.sessionOf', { n: number, limit: contingent.limit, stage: t(`enums.stage.${contingent.stage}`) })
+      : t('timeline.session', { n: number })
   if (session.status === 'cancelled') {
     return (
       <Line icon={<CalendarX2 className="size-4 text-muted-foreground" />}>
@@ -131,7 +147,7 @@ function SessionNode({ item, patientId }: { item: Extract<TimelineItem, { type: 
     <div className="space-y-2">
       <Line>
         <Link to="/sessions/$sessionId" params={{ sessionId: session.id }} className="font-medium hover:underline">
-          {timeOf(session.scheduled_at ?? session.started_at)} · {t('timeline.session', { n: number })}
+          {timeOf(session.scheduled_at ?? session.started_at)} · {label}
         </Link>
         {session.note_status ? (
           <StatusPill tone={session.note_status === 'signed' || session.note_status === 'exported' ? 'success' : 'warning'}>

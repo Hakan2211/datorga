@@ -8,8 +8,10 @@ import type { SessionSummary } from "./SessionSummary";
 export type TimelineItem = { "type": "session", at: string, session: Session, 
 /**
  * Position among the case's held (not cancelled) sessions, 1-based; `None` when cancelled.
+ * Once the therapy started (`episode.therapy_since`), sessions from then on are numbered
+ * in the contingent and the ones before as Probatorik.
  */
-number: number | null, summary: SessionSummary | null, } | { "type": "application", at: string, application: Application, report_status: ReportStatus | null, signed_at: string | null, exported_at: string | null, } | { "type": "consent", at: string, kind: ConsentKind, 
+number: number | null, probatorik: boolean, summary: SessionSummary | null, } | { "type": "application", at: string, application: Application, report_status: ReportStatus | null, signed_at: string | null, exported_at: string | null, } | { "type": "consent", at: string, kind: ConsentKind, 
 /**
  * `false`: the consent was revoked at `at`.
  */

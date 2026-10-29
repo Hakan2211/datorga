@@ -50,6 +50,8 @@ pub struct SummaryMeta {
     pub prompt_hash: String,
     pub chunks: usize,
     pub dropped: usize,
+    /// Note text characters the run read ([`crate::autopilot::note_chars`]).
+    pub note_chars: usize,
 }
 
 impl Store {
@@ -109,11 +111,11 @@ impl Store {
         let tx = self.conn.unchecked_transaction()?;
         let ts = now();
         tx.execute(
-            "INSERT INTO session_summary (session_id, points_json, status, provider, model, prompt_version, prompt_hash, created_at, updated_at)
-             VALUES (?1, ?2, 'draft', ?3, ?4, ?5, ?6, ?7, ?7)
+            "INSERT INTO session_summary (session_id, points_json, status, provider, model, prompt_version, prompt_hash, created_at, updated_at, note_chars)
+             VALUES (?1, ?2, 'draft', ?3, ?4, ?5, ?6, ?7, ?7, ?8)
              ON CONFLICT(session_id) DO UPDATE SET points_json = ?2, status = 'draft', provider = ?3, model = ?4,
-               prompt_version = ?5, prompt_hash = ?6, created_at = ?7, updated_at = ?7",
-            params![session_id, serde_json::to_string(points)?, meta.provider, meta.model, summary::PROMPT_VERSION, meta.prompt_hash, ts],
+               prompt_version = ?5, prompt_hash = ?6, created_at = ?7, updated_at = ?7, note_chars = ?8",
+            params![session_id, serde_json::to_string(points)?, meta.provider, meta.model, summary::PROMPT_VERSION, meta.prompt_hash, ts, meta.note_chars as i64],
         )?;
         audit::append(&tx, Entry {
             actor: ACTOR, action: "summary.create", entity_type: "session", entity_id: Some(session_id),

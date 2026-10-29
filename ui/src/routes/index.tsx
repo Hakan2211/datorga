@@ -9,6 +9,8 @@ import {
   CalendarPlus,
   ChevronRight,
   ClipboardList,
+  FileCheck2,
+  FilePlus2,
   FileText,
   ListTodo,
   MoreHorizontal,
@@ -24,6 +26,7 @@ import type { DueItem } from '@/bindings/DueItem'
 import { Page, PageHeader } from '@/components/app-shell'
 import { EmptyState, SectionCard, StatusPill } from '@/components/bits'
 import { SessionDialog, invalidateSessions, type SessionDialogMode } from '@/components/session-dialog'
+import { usePrepareApplication } from '@/components/autopilot'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -237,6 +240,8 @@ function DueCard({ today }: { today: Date }) {
   // Today's sessions are on the timeline with their own "Vorbereiten" already.
   const items = (due.data ?? []).filter((i) => !(i.kind === 'prep_missing' && i.at && isToday(new Date(i.at))))
   const groups: { kind: DueItem['kind']; icon: typeof PenLine; items: DueItem[] }[] = [
+    { kind: 'transcript_review', icon: FileCheck2, items: items.filter((i) => i.kind === 'transcript_review') },
+    { kind: 'application_due', icon: FilePlus2, items: items.filter((i) => i.kind === 'application_due') },
     { kind: 'note_open', icon: PenLine, items: items.filter((i) => i.kind === 'note_open') },
     { kind: 'report_draft', icon: FileText, items: items.filter((i) => i.kind === 'report_draft') },
     { kind: 'prep_missing', icon: ClipboardList, items: items.filter((i) => i.kind === 'prep_missing') },
@@ -256,8 +261,8 @@ function DueCard({ today }: { today: Date }) {
             </div>
             <ul className="space-y-0.5 pl-9">
               {g.items.slice(0, DUE_SHOWN).map((i) => (
-                <li key={`${i.kind}-${i.session_id ?? i.report_id}`}>
-                  <DueLink item={i} />
+                <li key={`${i.kind}-${i.session_id ?? i.report_id ?? i.contingent?.episode_id}`}>
+                  {i.kind === 'application_due' ? <ApplicationDueRow item={i} /> : <DueLink item={i} />}
                 </li>
               ))}
               {g.items.length > DUE_SHOWN && (
@@ -267,6 +272,33 @@ function DueCard({ today }: { today: Date }) {
           </div>
         ))}
     </SectionCard>
+  )
+}
+
+/** The contingent is nearly used up: one click creates the application and its Bericht. */
+function ApplicationDueRow({ item }: { item: DueItem }) {
+  const { t } = useTranslation()
+  const prepare = usePrepareApplication()
+  const c = item.contingent
+  if (!c || !item.application_kind) return null
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 py-0.5 text-sm" data-testid="application-due">
+      <Link to="/patients/$patientId" params={{ patientId: item.patient_id }} className="font-mono text-xs hover:underline">
+        {item.chiffre ?? item.patient_name}
+      </Link>
+      <span className="min-w-40 flex-1 text-muted-foreground">
+        {t('today.applicationDue', { kind: t(`enums.kind.${item.application_kind}`), used: c.used, limit: c.limit })}
+      </span>
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-7"
+        disabled={prepare.isPending}
+        onClick={() => prepare.mutate({ episodeId: c.episode_id, kind: item.application_kind! })}
+      >
+        {t('today.prepareApplication')}
+      </Button>
+    </div>
   )
 }
 

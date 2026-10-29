@@ -17,7 +17,10 @@ pub enum TimelineItem {
         at: String,
         session: Session,
         /// Position among the case's held (not cancelled) sessions, 1-based; `None` when cancelled.
+        /// Once the therapy started (`episode.therapy_since`), sessions from then on are numbered
+        /// in the contingent and the ones before as Probatorik.
         number: Option<usize>,
+        probatorik: bool,
         summary: Option<SessionSummary>,
     },
     Application {
@@ -48,6 +51,8 @@ impl TimelineItem {
 #[ts(export)]
 pub struct TimelineGroup {
     pub episode: Option<Episode>,
+    /// Where the case's contingent stands (slice 31).
+    pub contingent: Option<crate::contingent::Contingent>,
     /// Held sessions in this group.
     pub sessions: usize,
     pub items: Vec<TimelineItem>,
@@ -59,9 +64,11 @@ impl Store {
         self.patient(patient_id)?;
         let mut episodes = self.list_episodes(patient_id)?;
         episodes.sort_by(|a, b| b.started_at.cmp(&a.started_at));
-        let mut groups: Vec<TimelineGroup> =
-            episodes.iter().cloned().map(|e| TimelineGroup { episode: Some(e), sessions: 0, items: Vec::new() }).collect();
-        groups.push(TimelineGroup { episode: None, sessions: 0, items: Vec::new() });
+        let mut groups: Vec<TimelineGroup> = episodes
+            .iter()
+            .map(|e| Ok(TimelineGroup { episode: Some(e.clone()), contingent: Some(self.episode_contingent(&e.id, now)?), sessions: 0, items: Vec::new() }))
+            .collect::<Result<_>>()?;
+        groups.push(TimelineGroup { episode: None, contingent: None, sessions: 0, items: Vec::new() });
         let none = groups.len() - 1;
         let group_of = |episode_id: Option<&str>| episode_id.and_then(|id| episodes.iter().position(|e| e.id == id)).unwrap_or(none);
         // A consent belongs to the case running at the time (the newest one started before it).
@@ -82,18 +89,32 @@ impl Store {
             })
             .collect();
         sessions.sort_by(|a, b| a.0.cmp(&b.0));
-        let mut counts = vec![0usize; groups.len()];
+        // Counted per group: (all held, Probatorik, in the contingent).
+        let mut counts = vec![(0usize, 0usize, 0usize); groups.len()];
         for (at, s) in sessions {
             let g = group_of(s.episode_id.as_deref());
+            let since = groups[g].episode.as_ref().filter(|e| e.stage != Stage::Probatorik).and_then(|e| e.therapy_since.clone());
+            let probatorik = since.as_deref().is_some_and(|d| at.as_str() < d);
             let number = (s.status != "cancelled").then(|| {
-                counts[g] += 1;
-                counts[g]
+                let c = &mut counts[g];
+                c.0 += 1;
+                match (&since, probatorik) {
+                    (None, _) => c.0,
+                    (Some(_), true) => {
+                        c.1 += 1;
+                        c.1
+                    }
+                    (Some(_), false) => {
+                        c.2 += 1;
+                        c.2
+                    }
+                }
             });
             let summary = if number.is_some() { self.session_summary(&s.id)? } else { None };
-            groups[g].items.push(TimelineItem::Session { at, session: s, number, summary });
+            groups[g].items.push(TimelineItem::Session { at, session: s, number, probatorik, summary });
         }
-        for (g, n) in counts.into_iter().enumerate() {
-            groups[g].sessions = n;
+        for (g, c) in counts.into_iter().enumerate() {
+            groups[g].sessions = c.0;
         }
 
         for (g, e) in episodes.iter().enumerate() {

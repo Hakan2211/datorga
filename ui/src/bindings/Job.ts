@@ -9,4 +9,8 @@ export type Job = { id: string, kind: string, source_id: string | null, status: 
 /**
  * Engine chosen when queued (`None` = what Settings say when it runs).
  */
-engine: SttTarget | null, created_at: string, updated_at: string, };
+engine: SttTarget | null, created_at: string, updated_at: string, 
+/**
+ * Set for a job about a whole session (kind `autopilot`).
+ */
+session_id: string | null, };

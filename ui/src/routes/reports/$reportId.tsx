@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient, type UseMutationResult } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -28,6 +28,7 @@ import type { SourceSegment } from '@/bindings/SourceSegment'
 import { Addenda } from '@/components/addenda'
 import { FactDraftCard } from '@/components/fact-draft'
 import { DraftDialog, DraftProposal, DraftSources, ReportDraftCard } from '@/components/report-draft'
+import { AutoDraft } from '@/components/autopilot'
 import { Page, PageHeader } from '@/components/app-shell'
 import { DiagnosisRows } from '@/components/diagnoses'
 import { StatusBadge, Stepper, StickyActionBar, formatDate, stepStates } from '@/components/bits'
@@ -47,7 +48,11 @@ import { api, errorMessage, q, type ReportView } from '@/lib/api'
 import { appendParagraph, estimatePages, isBlank, parseDiagnoses, sectionText } from '@/lib/report'
 import { cn } from '@/lib/utils'
 
-export const Route = createFileRoute('/reports/$reportId')({ component: ReportEditorPage })
+export const Route = createFileRoute('/reports/$reportId')({
+  component: ReportEditorPage,
+  // `autodraft`: opened from "Antrag anlegen" with autopilot on; drafts all AI sections once.
+  validateSearch: (s: Record<string, unknown>): { autodraft?: boolean } => (s.autodraft === true || s.autodraft === 'true' ? { autodraft: true } : {}),
+})
 
 function ReportEditorPage() {
   const { reportId } = Route.useParams()
@@ -175,6 +180,12 @@ function ReportEditor({ view }: { view: ReportView }) {
   const templates = useQuery({ ...q.templates(), enabled: !isNote })
   const noteSections = templates.data?.find((tp) => tp.key === 'sitzungsnotiz')?.sections ?? []
   const [draftKeys, setDraftKeys] = useState<string[] | null>(null)
+  const autodraft = Route.useSearch().autodraft === true
+  const navigate = useNavigate()
+  const endAutodraft = useCallback(
+    () => void navigate({ to: '/reports/$reportId', params: { reportId: report.id }, search: {}, replace: true }),
+    [navigate, report.id],
+  )
   // The draft may send the sections' current text along: save pending edits first.
   const openDraft = (keys: string[]) => {
     flush()
@@ -342,8 +353,16 @@ function ReportEditor({ view }: { view: ReportView }) {
               <FactDraftCard
                 reportId={report.id}
                 patientId={patient.id}
+                sessionId={report.session_id}
                 sections={template.sections.filter((s) => s.field === 'prose' && s.ai_allowed)}
                 onApply={applyFacts}
+              />
+            )}
+            {drafting && autodraft && (
+              <AutoDraft
+                reportId={report.id}
+                keys={draftable.filter((s) => isBlank(bodies[s.key] ?? '')).map((s) => s.key)}
+                onDone={endAutodraft}
               />
             )}
             {drafting && (

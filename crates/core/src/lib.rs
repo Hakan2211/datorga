@@ -2,12 +2,14 @@
 
 pub mod agent;
 pub mod audio;
+pub mod autopilot;
 pub mod backup;
 pub mod audit;
 pub mod calendar;
 pub mod catalog;
 pub mod context;
 pub mod consent;
+pub mod contingent;
 pub mod crypto;
 pub mod diarize;
 pub mod dictate;

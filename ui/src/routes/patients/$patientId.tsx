@@ -3,13 +3,14 @@ import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { FilePlus2, History, LayoutGrid, Pencil, Plus, Stethoscope, Trash2 } from 'lucide-react'
+import { FilePlus2, Gauge, History, LayoutGrid, Pencil, Plus, Stethoscope, Trash2 } from 'lucide-react'
 import type { Diagnosis } from '@/bindings/Diagnosis'
 import type { AgeGroup } from '@/bindings/AgeGroup'
 import type { ApplicationKind } from '@/bindings/ApplicationKind'
 import type { Episode } from '@/bindings/Episode'
 import type { Method } from '@/bindings/Method'
 import type { Setting } from '@/bindings/Setting'
+import type { Stage } from '@/bindings/Stage'
 import { Page, PageHeader } from '@/components/app-shell'
 import { ExportOutdatedBadge, StatusBadge, formatDate } from '@/components/bits'
 import { ConsentCard } from '@/components/consent-card'
@@ -18,6 +19,7 @@ import { PatientAvatar } from '@/components/patient-avatar'
 import { PatientFormDialog } from '@/components/patient-form'
 import { PatientTimeline } from '@/components/patient-timeline'
 import { SessionDialog, type SessionDialogMode } from '@/components/session-dialog'
+import { usePrepareApplication } from '@/components/autopilot'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -33,6 +35,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -173,6 +176,7 @@ function EpisodeCard({ episode }: { episode: Episode }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        <EpisodeStage episode={episode} />
         <EpisodeDiagnoses episode={episode} />
         {apps.data?.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t('common.empty')}</p>
@@ -198,6 +202,121 @@ function EpisodeCard({ episode }: { episode: Episode }) {
         )}
       </CardContent>
     </Card>
+  )
+}
+
+const STAGES: Stage[] = ['probatorik', 'kzt1', 'kzt2', 'lzt']
+
+/** Phase and contingent: "10 von 12 Sitzungen · KZT 1", the next application when it falls due. */
+function EpisodeStage({ episode }: { episode: Episode }) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const contingent = useQuery(q.contingent(episode.id))
+  const prepare = usePrepareApplication()
+  const [open, setOpen] = useState(false)
+  const [stage, setStage] = useState<Stage>(episode.stage)
+  const [since, setSince] = useState(episode.therapy_since ?? '')
+  const save = useMutation({
+    mutationFn: () => api.setEpisodeStage(episode.id, stage, stage === 'probatorik' ? null : since || null),
+    onSuccess: () => {
+      for (const key of [['episodes', episode.patient_id], ['contingent', episode.id], ['timeline', episode.patient_id], ['calendar']]) {
+        void qc.invalidateQueries({ queryKey: key })
+      }
+      toast.success(t('common.saved'))
+      setOpen(false)
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+  const c = contingent.data
+  const pct = c ? Math.min(100, (c.used / Math.max(1, c.limit)) * 100) : 0
+
+  return (
+    <div className="flex items-start justify-between gap-4 rounded-md bg-muted/50 px-3 py-2.5" data-testid="episode-stage">
+      <div className="flex min-w-0 flex-1 items-start gap-2.5 text-sm">
+        <Gauge className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <p>
+            <span className="font-medium">{t(`enums.stage.${episode.stage}`)}</span>
+            {c && (
+              <span className="ml-2 text-muted-foreground" data-testid="contingent">
+                {episode.stage === 'probatorik'
+                  ? t('episodes.probatorik', { used: c.used, limit: c.limit })
+                  : t('episodes.contingent', { used: c.used, limit: c.limit })}
+                {episode.stage === 'lzt' && c.max > c.limit && ` · ${t('episodes.maxHint', { max: c.max })}`}
+              </span>
+            )}
+          </p>
+          {c && episode.stage !== 'probatorik' && (
+            <div className="h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-border">
+              <div className={c.due ? 'h-full bg-warning' : 'h-full bg-primary'} style={{ width: `${pct}%` }} />
+            </div>
+          )}
+          {c?.due && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7"
+              disabled={prepare.isPending}
+              onClick={() => prepare.mutate({ episodeId: episode.id, kind: c.due! })}
+              data-testid="contingent-due"
+            >
+              <FilePlus2 /> {t('episodes.due', { kind: t(`enums.kind.${c.due}`) })}
+            </Button>
+          )}
+        </div>
+      </div>
+      <Dialog
+        open={open}
+        onOpenChange={(o) => {
+          if (o) {
+            setStage(episode.stage)
+            setSince(episode.therapy_since ?? '')
+          }
+          setOpen(o)
+        }}
+      >
+        <DialogTrigger asChild>
+          <Button size="sm" variant="ghost" data-testid="episode-stage-edit">
+            <Pencil /> {t('episodes.stageEdit')}
+          </Button>
+        </DialogTrigger>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('episodes.stage')}</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">{t('episodes.stageHint')}</p>
+          <div className="space-y-1.5">
+            <Label>{t('episodes.stage')}</Label>
+            <Select value={stage} onValueChange={(v) => setStage(v as Stage)}>
+              <SelectTrigger className="w-60">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {STAGES.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {t(`enums.stage.${s}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {stage !== 'probatorik' && (
+            <div className="space-y-1.5">
+              <Label htmlFor="therapy-since">{t('episodes.therapySince')}</Label>
+              <Input id="therapy-since" type="date" value={since} onChange={(e) => setSince(e.target.value)} className="w-48" />
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button onClick={() => save.mutate()} disabled={save.isPending}>
+              {t('common.save')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   )
 }
 

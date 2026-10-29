@@ -350,7 +350,9 @@ impl Store {
     /// "Fällig" on the Heute page, derived (nothing is stored):
     /// - sessions in `[from, day_start)` that weren't cancelled and have no signed note,
     /// - planned sessions in `[day_start, until)` with nothing done yet (no prep, recording or note),
-    /// - Berichte for an application still in draft or review.
+    /// - Berichte for an application still in draft or review,
+    /// - draft transcripts nothing is working on any more ("Transkript prüfen"),
+    /// - open cases whose contingent is nearly used up ("Antrag vorbereiten").
     pub fn due_items(&self, from: &str, day_start: &str, until: &str) -> Result<Vec<DueItem>> {
         let (from, day_start, until) = (normalize_ts(from)?, normalize_ts(day_start)?, normalize_ts(until)?);
         let mut items = Vec::new();
@@ -379,6 +381,7 @@ impl Store {
                 kind: super::parse_col(r, 6)?,
                 application_kind: None,
                 seq: None,
+                contingent: None,
             })
         })?;
         for row in rows {
@@ -401,11 +404,39 @@ impl Store {
                 at: r.get(4)?,
                 application_kind: Some(super::parse_col(r, 5)?),
                 seq: r.get(6)?,
+                contingent: None,
             })
         })?;
         for row in rows {
             items.push(row?);
         }
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT p.id, p.first_name || ' ' || p.last_name, p.chiffre, s.id, n.id, COALESCE(s.scheduled_at, s.started_at)
+             FROM transcript t JOIN session_source src ON src.id = t.source_id JOIN session s ON s.id = src.session_id
+             JOIN patient p ON p.id = s.patient_id
+             LEFT JOIN report n ON n.session_id = s.id AND n.kind = 'sitzungsnotiz'
+             WHERE t.status = 'draft' AND s.status != 'cancelled'
+               AND NOT EXISTS (SELECT 1 FROM job j WHERE j.source_id = src.id AND j.status IN ('queued', 'running'))
+             ORDER BY COALESCE(s.scheduled_at, s.started_at)",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(DueItem {
+                kind: DueKind::TranscriptReview,
+                patient_id: r.get(0)?,
+                patient_name: r.get(1)?,
+                chiffre: r.get(2)?,
+                session_id: r.get(3)?,
+                report_id: r.get(4)?,
+                at: r.get(5)?,
+                application_kind: None,
+                seq: None,
+                contingent: None,
+            })
+        })?;
+        for row in rows {
+            items.push(row?);
+        }
+        items.extend(self.applications_due(&now())?);
         Ok(items)
     }
 }
