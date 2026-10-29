@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { api, errorMessage, q } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { HELP } from '@/lib/help'
 
 /** Refreshes everything that shows a session's key points. */
 function useSetSummary(sessionId: string, patientId: string) {
@@ -168,6 +169,7 @@ export function SummaryCard({ sessionId, patientId, ready }: { sessionId: string
 
   return (
     <SectionCard
+      help={HELP.note}
       icon={Sparkles}
       title={
         <span className="flex items-center gap-3">

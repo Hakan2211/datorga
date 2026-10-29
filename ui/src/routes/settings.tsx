@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { open } from '@tauri-apps/plugin-dialog'
-import { AlertTriangle, DatabaseBackup, FolderOpen, KeyRound, Lock, LockOpen, Monitor, Moon, Palette, ScrollText, Sun, Workflow } from 'lucide-react'
+import { AlertTriangle, CircleHelp, Compass, DatabaseBackup, FolderOpen, KeyRound, Lock, LockOpen, Monitor, Moon, Palette, ScrollText, Sun, Workflow } from 'lucide-react'
 import { Page, PageHeader } from '@/components/app-shell'
 import { RecoveryKitPanel } from '@/components/recovery-kit'
 import { RestoreBackup } from '@/components/backup-restore'
@@ -13,6 +13,9 @@ import { VoiceCard } from '@/components/voice-settings'
 import { CostsCard } from '@/components/costs-card'
 import { SpeakerCard } from '@/components/speaker-settings'
 import { ModelRow } from '@/components/model-row'
+import { DemoEnterButton } from '@/components/demo'
+import { HelpLink } from '@/components/help-link'
+import { useTour } from '@/components/tour'
 import { formatDate, SectionCard } from '@/components/bits'
 import { DEFAULT_REMINDER_DAYS } from '@/lib/backup'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -39,6 +42,7 @@ import { setTheme, THEMES, useTheme, type Theme } from '@/lib/theme'
 import { api, errorMessage, q, type LastBackup, type SttOverview } from '@/lib/api'
 import type { SttConfig } from '@/bindings/SttConfig'
 import type { SttMode } from '@/bindings/SttMode'
+import { HELP } from '@/lib/help'
 
 export const Route = createFileRoute('/settings')({ component: Settings })
 
@@ -69,9 +73,12 @@ function Settings() {
           <CostsCard />
         </div>
         <BackupCard />
+        <HelpCard />
         <Card className="max-w-2xl">
           <CardHeader>
-            <CardTitle className="text-base">{t('settings.security')}</CardTitle>
+            <CardTitle className="flex items-center gap-2 text-base">
+              {t('settings.security')} <HelpLink slug={HELP.privacy} />
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-5 text-sm">
             <p className="flex items-center gap-2">
@@ -101,6 +108,25 @@ function Settings() {
   )
 }
 
+function HelpCard() {
+  const { t } = useTranslation()
+  const tour = useTour()
+  return (
+    <SectionCard icon={CircleHelp} title={t('help.settingsTitle')} className="max-w-2xl" contentClassName="space-y-3 text-sm">
+      <p className="text-muted-foreground">{t('help.settingsBody')}</p>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" onClick={tour.start} data-testid="settings-tour-start">
+          <Compass /> {t('tour.start')}
+        </Button>
+        <DemoEnterButton />
+        <Button variant="ghost" asChild>
+          <Link to="/hilfe">{t('help.open')}</Link>
+        </Button>
+      </div>
+    </SectionCard>
+  )
+}
+
 /** On by default (user decision); off = every step after the session is a button again. */
 function AutopilotCard() {
   const { t } = useTranslation()
@@ -112,7 +138,14 @@ function AutopilotCard() {
     onError: (e) => toast.error(errorMessage(e)),
   })
   return (
-    <SectionCard icon={Workflow} title={t('autopilot.settingTitle')} className="max-w-2xl" contentClassName="space-y-3 text-sm">
+    <SectionCard
+      icon={Workflow}
+      title={t('autopilot.settingTitle')}
+      help={HELP.autopilot}
+      tour="autopilot"
+      className="max-w-2xl"
+      contentClassName="space-y-3 text-sm"
+    >
       <div className="flex items-center gap-3">
         <Switch
           id="autopilot"
@@ -190,7 +223,7 @@ function BackupCard() {
     <Card className="max-w-2xl">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <DatabaseBackup className="size-4" /> {t('backup.title')}
+          <DatabaseBackup className="size-4" /> {t('backup.title')} <HelpLink slug={HELP.backup} />
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4 text-sm">

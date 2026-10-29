@@ -4,6 +4,8 @@ import { Check } from 'lucide-react'
 import type { ReportStatus } from '@/bindings/ReportStatus'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { HelpLink } from '@/components/help-link'
+import type { HelpSlug } from '@/lib/help'
 import { cn } from '@/lib/utils'
 
 /** Tones from the mockups: Geplant = sand, Notiz offen = warning, Signiert = success. */
@@ -119,6 +121,8 @@ export function SectionCard({
   title,
   description,
   actions,
+  help,
+  tour,
   className,
   contentClassName,
   children,
@@ -127,16 +131,21 @@ export function SectionCard({
   title: ReactNode
   description?: ReactNode
   actions?: ReactNode
+  /** Hilfe article behind the "?" next to the title. */
+  help?: HelpSlug
+  /** `data-tour` anchor for the Rundgang. */
+  tour?: string
   className?: string
   contentClassName?: string
   children: ReactNode
 }) {
   return (
-    <Card className={cn('gap-4', className)}>
+    <Card className={cn('gap-4', className)} data-tour={tour}>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base font-semibold">
           {Icon && <Icon className="size-4 text-muted-foreground" />}
           {title}
+          {help && <HelpLink slug={help} />}
         </CardTitle>
         {description && <CardDescription>{description}</CardDescription>}
         {actions && <CardAction className="flex items-center gap-2">{actions}</CardAction>}

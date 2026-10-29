@@ -26,6 +26,8 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogT
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api, errorMessage, q } from '@/lib/api'
+import { HelpLink } from '@/components/help-link'
+import { HELP } from '@/lib/help'
 
 /** One kind of consent for one patient: current state, grant/revoke, history. */
 export function ConsentCard({ patientId, kind = 'recording' }: { patientId: string; kind?: ConsentKind }) {
@@ -64,6 +66,7 @@ export function ConsentCard({ patientId, kind = 'recording' }: { patientId: stri
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <CardTitle className="flex items-center gap-3 text-base">
           {k('title')}
+          <HelpLink slug={HELP.privacy} className="-ml-1.5" />
           {active ? (
             <Badge variant="secondary" className="bg-success/15 font-normal text-success">
               <On /> {t('consent.active')}

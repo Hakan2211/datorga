@@ -11,6 +11,7 @@ pub mod context;
 pub mod consent;
 pub mod contingent;
 pub mod crypto;
+pub mod demo;
 pub mod diarize;
 pub mod dictate;
 pub mod domain;

@@ -11,6 +11,8 @@ export function getRouter() {
     context: { queryClient },
     defaultPreload: 'intent',
     scrollRestoration: true,
+    // Pages scroll inside the shell's <main>, not the window.
+    scrollToTopSelectors: ['main[data-scroll-restoration-id]'],
   })
 }
 

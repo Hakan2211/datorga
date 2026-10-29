@@ -38,6 +38,8 @@ import { Label } from "@/components/ui/label";
 import { ModelPicker } from "@/components/model-picker";
 import { ModelRow } from "@/components/model-row";
 import { KeyGuideButton } from "@/components/key-guide";
+import { HelpLink } from "@/components/help-link";
+import { HELP } from "@/lib/help";
 import { api, errorMessage, q, type LlmOverview } from "@/lib/api";
 
 const OFF = "off";
@@ -55,9 +57,11 @@ export function LlmCard() {
   const active = data?.config.active ?? null;
 
   return (
-    <Card className="max-w-2xl">
+    <Card className="max-w-2xl" data-tour="llm-settings">
       <CardHeader>
-        <CardTitle className="text-base">{t("settings.llm.title")}</CardTitle>
+        <CardTitle className="flex items-center gap-2 text-base">
+          {t("settings.llm.title")} <HelpLink slug={HELP.ai} />
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
         <p className="flex gap-2 text-muted-foreground">

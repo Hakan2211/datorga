@@ -88,6 +88,8 @@ export type InitResult = {
   recovery_key: string | null
   recovery_confirmed: boolean
   encrypted: boolean
+  /** This window shows the Demo-Praxis (fictional data in its own folder). */
+  demo: boolean
 }
 
 export type BackupHeaderView = { created_at: string; app_version: string; keychain_matches: boolean }
@@ -284,6 +286,9 @@ export const api = {
     invoke<void>('recovery_kit_export', { recoveryKey, rotated, path }),
   rotateRecoveryKey: () => invoke<Rotated>('recovery_key_rotate'),
   setup: () => invoke<InitResult>('app_setup'),
+  /** Restarts the app in the Demo-Praxis (fresh fictional data in its own folder) or back. */
+  demoEnter: () => invoke<void>('demo_enter'),
+  demoLeave: () => invoke<void>('demo_leave'),
   createBackup: () => invoke<BackupDone>('backup_create'),
   inspectBackup: (path: string) => invoke<BackupHeaderView>('backup_inspect', { path }),
   restoreBackup: (path: string, recoveryKey: string | null) =>

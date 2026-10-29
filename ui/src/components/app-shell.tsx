@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import {
   CalendarDays,
+  CircleHelp,
   FileText,
   Lock,
   LockOpen,
@@ -23,6 +24,8 @@ import { AssistantPanel } from '@/components/assistant'
 import { BackupReminder } from '@/components/backup-reminder'
 import { BalanceReminder } from '@/components/balance-reminder'
 import { CommandPalette } from '@/components/command-palette'
+import { DemoBanner } from '@/components/demo'
+import { TourProvider } from '@/components/tour'
 import { useAutopilotEvents } from '@/components/autopilot'
 import { Button } from '@/components/ui/button'
 import { Kbd, KbdGroup } from '@/components/ui/kbd'
@@ -92,134 +95,142 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <PanelContext.Provider value={panelApi}>
-      <div className="flex h-screen overflow-hidden">
-        <aside
-          data-collapsed={collapsed}
-          className={cn(
-            'flex shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground transition-[width] duration-150',
-            collapsed ? 'w-[4.25rem]' : 'w-60',
-          )}
-        >
-          <div className={cn('flex items-center pt-4 pb-3', collapsed ? 'justify-center px-2' : 'justify-between pr-2 pl-5')}>
-            {!collapsed && (
-              <div className="min-w-0">
-                <div className="font-serif text-xl leading-tight text-primary">{t('app.name')}</div>
-                <div className="truncate text-xs text-muted-foreground">{t('app.tagline')}</div>
-              </div>
+      <TourProvider>
+        <div className="flex h-screen overflow-hidden">
+          <aside
+            data-collapsed={collapsed}
+            className={cn(
+              'flex shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground transition-[width] duration-150',
+              collapsed ? 'w-[4.25rem]' : 'w-60',
             )}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-8 text-muted-foreground"
-              onClick={toggle}
-              aria-label={t(collapsed ? 'shell.expand' : 'shell.collapse')}
-              title={t(collapsed ? 'shell.expand' : 'shell.collapse')}
-            >
-              {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
-            </Button>
-          </div>
-          <nav className="flex-1 space-y-0.5 px-3 pt-2">
-            {modules.map((m) =>
-              m.to ? (
-                <NavLink
-                  key={m.label}
-                  to={m.to}
-                  exact={m.exact}
-                  collapsed={collapsed}
-                  active={inNote ? m.to === '/sessions' : undefined}
-                  icon={<m.icon className="size-4 shrink-0" />}
-                >
-                  {t(m.label)}
-                </NavLink>
-              ) : (
-                <NavTip key={m.label} show={collapsed} label={`${t(m.label)} · ${t('shell.soon')}`}>
-                  <div
-                    aria-disabled
-                    className={cn(
-                      'flex items-center gap-2.5 rounded-md py-2 text-sm text-muted-foreground/55',
-                      collapsed ? 'justify-center px-0' : 'px-3',
-                    )}
-                    title={collapsed ? undefined : t('shell.soon')}
-                  >
-                    <m.icon className="size-4 shrink-0" />
-                    {!collapsed && t(m.label)}
-                  </div>
-                </NavTip>
-              ),
-            )}
-          </nav>
-          <div className="space-y-0.5 border-t px-3 py-3">
-            <NavLink to="/settings" collapsed={collapsed} icon={<Settings className="size-4 shrink-0" />}>
-              {t('nav.settings')}
-            </NavLink>
-            <NavTip show={collapsed} label={encrypted ? t('privacy.encrypted') : t('privacy.notEncrypted')}>
-              <div
-                className={cn(
-                  'mt-2 flex items-center gap-2 rounded-md py-2 text-xs',
-                  collapsed ? 'justify-center' : 'px-3',
-                  encrypted ? 'text-success' : 'bg-warning/15 text-foreground',
-                )}
-              >
-                {encrypted ? <Lock className="size-3.5" /> : <LockOpen className="size-3.5" />}
-                {!collapsed && (encrypted ? t('privacy.encrypted') : t('privacy.notEncrypted'))}
-              </div>
-            </NavTip>
-          </div>
-        </aside>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <header className="flex h-14 shrink-0 items-center gap-3 border-b px-6">
-            <button
-              type="button"
-              onClick={() => setPalette(true)}
-              data-testid="palette-open"
-              className="flex h-9 w-80 items-center gap-2 rounded-md border bg-card px-3 text-sm text-muted-foreground shadow-xs transition-colors hover:bg-foreground/5"
-            >
-              <Search className="size-4" />
-              <span className="flex-1 text-left">{t('shell.search')}</span>
-              <KbdGroup>
-                <Kbd>Strg</Kbd>
-                <Kbd>K</Kbd>
-              </KbdGroup>
-            </button>
-            <div className="ml-auto flex items-center gap-2">
-              <RecordingPill ready={init.data?.status === 'ready'} />
+          >
+            <div className={cn('flex items-center pt-4 pb-3', collapsed ? 'justify-center px-2' : 'justify-between pr-2 pl-5')}>
+              {!collapsed && (
+                <div className="min-w-0">
+                  <div className="font-serif text-xl leading-tight text-primary">{t('app.name')}</div>
+                  <div className="truncate text-xs text-muted-foreground">{t('app.tagline')}</div>
+                </div>
+              )}
               <Button
-                variant={panel?.title === ASSISTANT_PANEL ? 'secondary' : 'ghost'}
-                size="sm"
-                onClick={() => (panel?.title === ASSISTANT_PANEL ? hide() : setPanel({ title: ASSISTANT_PANEL, content: <AssistantPanel /> }))}
-                data-testid="assistant-toggle"
+                variant="ghost"
+                size="icon"
+                className="size-8 text-muted-foreground"
+                onClick={toggle}
+                aria-label={t(collapsed ? 'shell.expand' : 'shell.collapse')}
+                title={t(collapsed ? 'shell.expand' : 'shell.collapse')}
               >
-                <Sparkles /> {t('nav.assistant')}
+                {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
               </Button>
             </div>
-          </header>
-          <div className="flex min-h-0 flex-1">
-            <main className="min-w-0 flex-1 overflow-y-auto">
-              <BackupReminder />
-              <BalanceReminder />
-              {children}
-            </main>
-            {panel && (
-              <aside className="flex w-[26rem] shrink-0 flex-col border-l bg-card" data-testid="side-panel">
-                <div className="flex h-12 items-center justify-between border-b pr-2 pl-4 text-sm font-medium">
-                  {panel.title === ASSISTANT_PANEL ? (
-                    <span className="flex items-center gap-2">
-                      <Sparkles className="size-4 text-primary" /> {t('assistant.title')}
-                    </span>
-                  ) : (
-                    panel.title
+            <nav className="flex-1 space-y-0.5 px-3 pt-2">
+              {modules.map((m) =>
+                m.to ? (
+                  <NavLink
+                    key={m.label}
+                    tour={m.label.replace('.', '-')}
+                    to={m.to}
+                    exact={m.exact}
+                    collapsed={collapsed}
+                    active={inNote ? m.to === '/sessions' : undefined}
+                    icon={<m.icon className="size-4 shrink-0" />}
+                  >
+                    {t(m.label)}
+                  </NavLink>
+                ) : (
+                  <NavTip key={m.label} show={collapsed} label={`${t(m.label)} · ${t('shell.soon')}`}>
+                    <div
+                      aria-disabled
+                      className={cn(
+                        'flex items-center gap-2.5 rounded-md py-2 text-sm text-muted-foreground/55',
+                        collapsed ? 'justify-center px-0' : 'px-3',
+                      )}
+                      title={collapsed ? undefined : t('shell.soon')}
+                    >
+                      <m.icon className="size-4 shrink-0" />
+                      {!collapsed && t(m.label)}
+                    </div>
+                  </NavTip>
+                ),
+              )}
+            </nav>
+            <div className="space-y-0.5 border-t px-3 py-3">
+              <NavLink to="/hilfe" tour="nav-help" collapsed={collapsed} icon={<CircleHelp className="size-4 shrink-0" />}>
+                {t('nav.help')}
+              </NavLink>
+              <NavLink to="/settings" tour="nav-settings" collapsed={collapsed} icon={<Settings className="size-4 shrink-0" />}>
+                {t('nav.settings')}
+              </NavLink>
+              <NavTip show={collapsed} label={encrypted ? t('privacy.encrypted') : t('privacy.notEncrypted')}>
+                <div
+                  className={cn(
+                    'mt-2 flex items-center gap-2 rounded-md py-2 text-xs',
+                    collapsed ? 'justify-center' : 'px-3',
+                    encrypted ? 'text-success' : 'bg-warning/15 text-foreground',
                   )}
-                  <Button variant="ghost" size="icon" className="size-8" onClick={hide} aria-label={t('shell.closePanel')}>
-                    <PanelRightClose />
-                  </Button>
+                >
+                  {encrypted ? <Lock className="size-3.5" /> : <LockOpen className="size-3.5" />}
+                  {!collapsed && (encrypted ? t('privacy.encrypted') : t('privacy.notEncrypted'))}
                 </div>
-                <div className="min-h-0 flex-1 overflow-y-auto">{panel.content}</div>
-              </aside>
-            )}
+              </NavTip>
+            </div>
+          </aside>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <header className="flex h-14 shrink-0 items-center gap-3 border-b px-6">
+              <button
+                type="button"
+                onClick={() => setPalette(true)}
+                data-testid="palette-open"
+                className="flex h-9 w-80 items-center gap-2 rounded-md border bg-card px-3 text-sm text-muted-foreground shadow-xs transition-colors hover:bg-foreground/5"
+              >
+                <Search className="size-4" />
+                <span className="flex-1 text-left">{t('shell.search')}</span>
+                <KbdGroup>
+                  <Kbd>Strg</Kbd>
+                  <Kbd>K</Kbd>
+                </KbdGroup>
+              </button>
+              <div className="ml-auto flex items-center gap-2">
+                <RecordingPill ready={init.data?.status === 'ready'} />
+                <Button
+                  variant={panel?.title === ASSISTANT_PANEL ? 'secondary' : 'ghost'}
+                  size="sm"
+                  onClick={() => (panel?.title === ASSISTANT_PANEL ? hide() : setPanel({ title: ASSISTANT_PANEL, content: <AssistantPanel /> }))}
+                  data-testid="assistant-toggle"
+                >
+                  <Sparkles /> {t('nav.assistant')}
+                </Button>
+              </div>
+            </header>
+            <div className="flex min-h-0 flex-1">
+              {/* The router's scroll restoration resets and restores this container per page. */}
+              <main className="min-w-0 flex-1 overflow-y-auto" data-scroll-restoration-id="main">
+                <DemoBanner />
+                <BackupReminder />
+                <BalanceReminder />
+                {children}
+              </main>
+              {panel && (
+                <aside className="flex w-[26rem] shrink-0 flex-col border-l bg-card" data-testid="side-panel">
+                  <div className="flex h-12 items-center justify-between border-b pr-2 pl-4 text-sm font-medium">
+                    {panel.title === ASSISTANT_PANEL ? (
+                      <span className="flex items-center gap-2">
+                        <Sparkles className="size-4 text-primary" /> {t('assistant.title')}
+                      </span>
+                    ) : (
+                      panel.title
+                    )}
+                    <Button variant="ghost" size="icon" className="size-8" onClick={hide} aria-label={t('shell.closePanel')}>
+                      <PanelRightClose />
+                    </Button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto">{panel.content}</div>
+                </aside>
+              )}
+            </div>
           </div>
         </div>
-      </div>
-      <CommandPalette open={palette} onOpenChange={setPalette} />
+        <CommandPalette open={palette} onOpenChange={setPalette} />
+      </TourProvider>
     </PanelContext.Provider>
   )
 }
@@ -260,6 +271,7 @@ const ACTIVE = 'bg-card font-medium text-foreground shadow-xs hover:bg-card'
 /** `active` overrides the router's own match when set. */
 function NavLink({
   to,
+  tour,
   exact,
   active,
   collapsed = false,
@@ -267,6 +279,8 @@ function NavLink({
   children,
 }: {
   to: string
+  /** `data-tour` anchor for the Rundgang. */
+  tour?: string
   exact?: boolean
   active?: boolean
   collapsed?: boolean
@@ -279,6 +293,7 @@ function NavLink({
         to={to}
         activeOptions={{ exact: !!exact }}
         aria-label={collapsed && typeof children === 'string' ? children : undefined}
+        data-tour={tour}
         className={cn(
           'flex items-center gap-2.5 rounded-md py-2 text-sm transition-colors hover:bg-foreground/5',
           collapsed ? 'justify-center px-0' : 'px-3',

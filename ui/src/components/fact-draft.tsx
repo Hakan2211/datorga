@@ -44,6 +44,8 @@ import {
   type ExtractProgress,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { HelpLink } from "@/components/help-link";
+import { HELP } from "@/lib/help";
 
 const KINDS: EntityKind[] = ["person", "ort", "arbeitgeber", "datum"];
 const TOKEN = /(\[(?:PERSON|ORT|ARBEITGEBER|DATUM)_\d+\])/;
@@ -168,7 +170,7 @@ export function FactDraftCard({
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Sparkles className="size-4 text-primary" /> {t("facts.title")}
+          <Sparkles className="size-4 text-primary" /> {t("facts.title")} <HelpLink slug={HELP.note} />
         </CardTitle>
         <span className="ml-auto" />
         {sessionId && <SentLink sessionId={sessionId} step="extract" />}

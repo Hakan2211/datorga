@@ -10,6 +10,7 @@ export const de = {
     settings: 'Einstellungen',
     calendar: 'Kalender',
     assistant: 'Assistent',
+    help: 'Hilfe',
   },
   shell: {
     search: 'Suchen oder Befehl…',
@@ -1286,5 +1287,75 @@ export const de = {
     cancel: 'Abbrechen',
     conversation: 'Gespräch anzeigen ({{count}} Beiträge)',
     conversationAt: 'Gespräch vom {{at}}',
+  },
+  help: {
+    title: 'Hilfe',
+    subtitle: 'Anleitungen zu allen Bereichen, auch ohne Internet',
+    articles: 'Hilfe-Artikel',
+    search: 'Hilfe durchsuchen…',
+    noHits: 'Kein Artikel passt zu dieser Suche.',
+    linkTo: 'Hilfe: {{title}}',
+    videoTitle: 'Video: thera in 5 Minuten',
+    videoBody: 'Ein kurzer Überblick über die wichtigsten Funktionen (öffnet im Browser).',
+    videoSoon: 'Das Video erscheint in Kürze.',
+    emergencyTitle: 'Hinweis',
+    emergencyBody: 'thera ist kein Notfalldienst. Bei akuter Gefahr wählen Sie bitte 112.',
+    settingsTitle: 'Hilfe & Rundgang',
+    settingsBody:
+      'Der Rundgang zeigt in acht Schritten die wichtigsten Bereiche. In der Demo-Praxis probieren Sie alles mit erfundenen Beispieldaten aus.',
+    open: 'Hilfe öffnen',
+  },
+  tour: {
+    start: 'Rundgang starten',
+    progress: '{{n}} von {{total}}',
+    next: 'Weiter',
+    finish: 'Fertig',
+    end: 'Rundgang beenden',
+    restartHint: 'Den Rundgang starten Sie jederzeit neu unter Hilfe oder Einstellungen.',
+    steps: {
+      heute: {
+        title: 'Heute',
+        body: 'Ihr Start in den Tag: die Sitzungen von heute mit dem jeweils nächsten Schritt, was fällig ist und Ihre Aufgaben.',
+      },
+      kalender: {
+        title: 'Kalender',
+        body: 'Hier planen Sie Sitzungen und Serien. Ziehen verschiebt einen Termin, ein Klick auf eine freie Zeit plant eine neue Sitzung.',
+      },
+      patient: {
+        title: 'Patient:in anlegen',
+        body: 'Legen Sie hier eine Person an. Auf ihrer Seite erfassen Sie Einwilligungen und den Behandlungsfall mit Diagnosen.',
+      },
+      aufnehmen: {
+        title: 'Sitzung aufnehmen',
+        body: 'Öffnen Sie eine Sitzung aus Heute, dem Kalender oder dieser Liste. Dort nehmen Sie das Gespräch auf (mit Einwilligung) oder diktieren eine Zusammenfassung.',
+      },
+      autopilot: {
+        title: 'Autopilot',
+        body: 'Nach der Aufnahme transkribiert thera von selbst. Sobald Sie die Abschrift bestätigt haben, entstehen Notiz, Faktenvorschläge und Zusammenfassung. Hier schalten Sie das ab.',
+      },
+      notiz: {
+        title: 'Notiz signieren',
+        body: 'Ihre Arbeitsliste: Hier sehen Sie, wo eine Abschrift zu prüfen, eine Notiz zu schreiben oder zu unterschreiben ist. Unterschriebene Notizen ändern Sie nur noch per Nachtrag.',
+      },
+      bericht: {
+        title: 'Bericht',
+        body: 'Berichte an den Gutachter entstehen aus den übernommenen Fakten. Das Board zeigt, was im Entwurf ist und wann ein Antrag fällig wird.',
+      },
+      ki: {
+        title: 'KI-Anbieter',
+        body: 'Wählen Sie hier einen KI-Anbieter oder ein lokales Modell. Die Anleitung führt Schritt für Schritt zum eigenen Schlüssel. Es gehen nur pseudonymisierte Texte hinaus.',
+      },
+    },
+  },
+  demo: {
+    enter: 'Mit Beispieldaten ausprobieren',
+    enterTitle: 'Demo-Praxis öffnen?',
+    enterBody:
+      'thera startet neu und öffnet eine Demo-Praxis mit erfundenen Patient:innen, Sitzungen und einem Berichtsentwurf. Sie liegt in einem eigenen Ordner; Ihre echten Daten bleiben unberührt. Jedes Öffnen beginnt mit frischen Beispieldaten.',
+    enterAction: 'Demo öffnen',
+    bannerTitle: 'Demo-Praxis:',
+    bannerBody: 'Alle Personen und Inhalte sind erfunden. Echte Patientendaten gehören nicht hierher.',
+    leave: 'Demo verlassen',
+    restarting: 'Startet neu…',
   },
 }

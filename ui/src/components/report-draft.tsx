@@ -20,6 +20,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api, errorMessage, q, type DraftChoice } from '@/lib/api'
+import { HelpLink } from '@/components/help-link'
+import { HELP } from '@/lib/help'
 
 /** Overview above the sections: what drafts would draw on, and "draft all empty sections". */
 export function ReportDraftCard({
@@ -45,7 +47,7 @@ export function ReportDraftCard({
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Sparkles className="size-4 text-primary" /> {t('draft.title')}
+          <Sparkles className="size-4 text-primary" /> {t('draft.title')} <HelpLink slug={HELP.report} />
         </CardTitle>
         <Button size="sm" onClick={() => onDraft(empty)} disabled={!active || facts.length === 0 || empty.length === 0}>
           {t('draft.draftEmpty')}

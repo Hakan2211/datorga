@@ -57,6 +57,7 @@ import { api, errorMessage, jobActive, q, type RecordingStatus, type SessionView
 import { SESSION_FLOW, flowStates, type FlowStep } from '@/lib/calendar'
 import { formatDuration, useCaptureDevice } from '@/lib/capture'
 import { cn } from '@/lib/utils'
+import { HELP } from '@/lib/help'
 
 export const Route = createFileRoute('/sessions/$sessionId')({ component: SessionPage })
 
@@ -252,7 +253,7 @@ function ReviewStep({ view, onCapture }: { view: SessionView; onCapture: () => v
     )
   }
   return (
-    <SectionCard icon={FileText} title={t('capture.sources')}>
+    <SectionCard icon={FileText} title={t('capture.sources')} help={HELP.capture}>
       <ul className="divide-y text-sm">
         {sources.map((s) => (
           <SourceRow key={s.id} source={s} patientId={patient.id} />
@@ -426,6 +427,7 @@ function CapturePanel({ view, primary }: { view: SessionView; primary: boolean }
     <SectionCard
       icon={Mic}
       title={t('capture.title')}
+      help={HELP.capture}
       actions={
         <StatusPill tone={consent ? 'primary' : 'sand'}>
           {t(consent ? 'flow.session.consentOk' : 'flow.session.consentMissing')}

@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { api, errorMessage, jobActive, q, type DraftChoice } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { HELP } from '@/lib/help'
 
 const TOKEN = /(\[(?:PERSON|ORT|ARBEITGEBER|DATUM)_\d+\])/
 
@@ -70,6 +71,7 @@ export function AutopilotCard({ sessionId, noteId }: { sessionId: string; noteId
 
   return (
     <SectionCard
+      help={HELP.autopilot}
       icon={Workflow}
       title={
         <span className="flex items-center gap-2">

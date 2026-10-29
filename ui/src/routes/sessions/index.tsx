@@ -71,7 +71,7 @@ function Sessions() {
           />
         ) : (
           <>
-            <div className="flex flex-wrap items-center gap-2" role="toolbar" aria-label={t('sessions.filterLabel')}>
+            <div className="flex flex-wrap items-center gap-2" role="toolbar" aria-label={t('sessions.filterLabel')} data-tour="session-filters">
               {SESSION_TODOS.map((k) => (
                 <FilterChip
                   key={k}

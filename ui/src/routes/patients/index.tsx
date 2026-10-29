@@ -73,7 +73,7 @@ function Patients() {
   const newButton = (
     <PatientFormDialog
       trigger={
-        <Button data-testid="patient-new">
+        <Button data-testid="patient-new" data-tour="patient-new">
           <Plus /> {t('patients.new')}
         </Button>
       }

@@ -92,6 +92,11 @@ fn kr(e: keyring::Error) -> thera_core::Error {
 struct AppState {
     data_dir: PathBuf,
     keyring_user: String,
+    /// The Demo-Praxis runs in its own process (`--demo`) with `data_dir` = `<real>/demo` and
+    /// its own keychain entry, so fictional and real data never meet.
+    demo: bool,
+    /// The real data dir: the demo's parent, or `data_dir` itself.
+    home_dir: PathBuf,
     /// Bundled resources: the whisper.cpp sidecar in `whisper/`, llama-server in `llama/`.
     resource_dir: PathBuf,
     store: Mutex<Option<Store>>,
@@ -299,17 +304,22 @@ struct InitResult {
     /// The current recovery key was confirmed as stored. False → the UI asks for a new kit.
     recovery_confirmed: bool,
     encrypted: bool,
+    /// This process shows the Demo-Praxis.
+    demo: bool,
 }
 
 #[tauri::command]
 fn app_init(state: State<'_, AppState>) -> CmdResult<InitResult> {
     if state.store.lock().map_err(|_| CmdError::Other("state poisoned".into()))?.is_some() {
         let recovery_confirmed = state.with(|s| s.recovery_kit_confirmed())?;
-        return Ok(InitResult { status: "ready", recovery_key: None, recovery_confirmed, encrypted: Store::is_encrypted() });
+        return Ok(InitResult { status: "ready", recovery_key: None, recovery_confirmed, encrypted: Store::is_encrypted(), demo: state.demo });
+    }
+    if state.demo {
+        return demo_open(&state);
     }
     // First start on this machine: let the user choose between a new setup and a restore.
     if state.keys().load()?.is_none() && !state.wrapped_path().exists() {
-        return Ok(InitResult { status: "new", recovery_key: None, recovery_confirmed: false, encrypted: Store::is_encrypted() });
+        return Ok(InitResult { status: "new", recovery_key: None, recovery_confirmed: false, encrypted: Store::is_encrypted(), demo: false });
     }
     app_open(&state)
 }
@@ -333,13 +343,97 @@ fn app_open(state: &AppState) -> CmdResult<InitResult> {
                 recovery_key: None,
                 recovery_confirmed: false,
                 encrypted: Store::is_encrypted(),
+                demo: state.demo,
             })
         }
         Err(e) => return Err(e.into()),
     };
     state.open_store(&key)?;
     let recovery_confirmed = state.with(|s| s.recovery_kit_confirmed())?;
-    Ok(InitResult { status: "ready", recovery_key, recovery_confirmed, encrypted: Store::is_encrypted() })
+    Ok(InitResult { status: "ready", recovery_key, recovery_confirmed, encrypted: Store::is_encrypted(), demo: state.demo })
+}
+
+// ---------- Demo-Praxis ----------
+
+/// The demo process's WebView profile: its own localStorage (tour, view choices), and no clash
+/// with the closing real window's profile.
+fn demo_webview_dir(home: &std::path::Path) -> PathBuf {
+    home.join("demo-webview")
+}
+
+/// Opens the demo store; an empty demo dir is seeded with the fictional practice first. No
+/// Notfall-Kit: there is nothing to recover.
+fn demo_open(state: &AppState) -> CmdResult<InitResult> {
+    let fresh = !state.db_path().exists();
+    let key = match crypto::unlock_or_init(&state.keys(), &state.wrapped_path())? {
+        Unlock::Existing(k) | Unlock::Created { key: k, .. } => k,
+    };
+    state.open_store(&key)?;
+    if fresh {
+        state.with(|s| {
+            s.confirm_recovery_kit()?;
+            thera_core::demo::seed(s, &state.audio_root(), thera_core::demo::today())
+        })?;
+    }
+    Ok(InitResult { status: "ready", recovery_key: None, recovery_confirmed: true, encrypted: Store::is_encrypted(), demo: true })
+}
+
+/// Starts this app again (with `--demo` or without) and closes this one. Refused while a
+/// recording runs; the exit handler stops jobs as on a normal close.
+fn relaunch(app: &AppHandle, state: &AppState, demo: bool) -> CmdResult<()> {
+    if lock(&state.recording)?.is_some() {
+        return Err(CmdError::Other("Bitte zuerst die laufende Aufnahme beenden".into()));
+    }
+    let exe = std::env::current_exe().map_err(|e| CmdError::Other(e.to_string()))?;
+    let mut cmd = std::process::Command::new(exe);
+    // The demo gets its own WebView profile; leaving restores whatever the app started with.
+    const WEBVIEW: &str = "WEBVIEW2_USER_DATA_FOLDER";
+    const PREVIOUS: &str = "THERA_WEBVIEW_BEFORE_DEMO";
+    if demo {
+        cmd.arg("--demo").env(WEBVIEW, demo_webview_dir(&state.home_dir));
+        if let Some(prev) = std::env::var_os(WEBVIEW) {
+            cmd.env(PREVIOUS, prev);
+        }
+    } else {
+        cmd.env_remove(WEBVIEW).env_remove(PREVIOUS);
+        if let Some(prev) = std::env::var_os(PREVIOUS) {
+            cmd.env(WEBVIEW, prev);
+        }
+    }
+    cmd.spawn().map_err(|e| CmdError::Other(format!("Neustart fehlgeschlagen: {e}")))?;
+    app.exit(0);
+    Ok(())
+}
+
+/// "Mit Beispieldaten ausprobieren": a fresh Demo-Praxis in a new window; this one closes.
+#[tauri::command]
+fn demo_enter(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
+    if state.demo {
+        return Err(CmdError::Other("Die Demo-Praxis ist bereits geöffnet".into()));
+    }
+    let dir = state.home_dir.join("demo");
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).map_err(|e| CmdError::Other(format!("Alte Demo-Daten nicht löschbar: {e}")))?;
+    }
+    // A key left from the last demo would open the new database too; start clean anyway.
+    let user = demo_keyring_user(&state.keyring_user);
+    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, &user) {
+        let _ = entry.delete_credential();
+    }
+    relaunch(&app, &state, true)
+}
+
+/// "Demo verlassen": back to the real practice.
+#[tauri::command]
+fn demo_leave(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
+    if !state.demo {
+        return Err(CmdError::Other("Die Demo-Praxis ist nicht geöffnet".into()));
+    }
+    relaunch(&app, &state, false)
+}
+
+fn demo_keyring_user(real: &str) -> String {
+    format!("demo-{real}")
 }
 
 #[tauri::command]
@@ -3445,10 +3539,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            #[cfg_attr(not(debug_assertions), allow(unused_mut))]
             let mut data_dir = app.path().app_data_dir()?;
-            #[cfg_attr(not(debug_assertions), allow(unused_mut))]
             let mut keyring_user = KEYRING_USER.to_string();
+            let demo = std::env::args().any(|a| a == "--demo");
             // Debug-only isolation for first-run E2E: own data dir and keychain entry.
             #[cfg(debug_assertions)]
             {
@@ -3459,10 +3552,20 @@ pub fn run() {
                     keyring_user = user;
                 }
             }
+            let home_dir = data_dir.clone();
+            if demo {
+                data_dir = home_dir.join("demo");
+                keyring_user = demo_keyring_user(&keyring_user);
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_title("thera – Demo-Praxis (Beispieldaten)");
+                }
+            }
             std::fs::create_dir_all(&data_dir)?;
             app.manage(AppState {
                 data_dir,
                 keyring_user,
+                demo,
+                home_dir,
                 resource_dir: app.path().resource_dir()?,
                 store: Mutex::new(None),
                 recording: Mutex::new(None),
@@ -3490,6 +3593,8 @@ pub fn run() {
             recovery_key_rotate,
             recovery_kit_confirm,
             app_setup,
+            demo_enter,
+            demo_leave,
             backup_create,
             backup_inspect,
             backup_restore,

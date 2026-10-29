@@ -5,7 +5,7 @@ import { useMatch, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { CalendarDays, FileText, Mic, NotebookPen, Plus, ScrollText, Settings, Sparkles, Square, Sun, User, Users } from 'lucide-react'
+import { BookOpen, CalendarDays, CircleHelp, Compass, FileText, Mic, NotebookPen, Plus, ScrollText, Settings, Sparkles, Square, Sun, User, Users } from 'lucide-react'
 import { formatDate } from '@/components/bits'
 import {
   CommandDialog,
@@ -18,6 +18,8 @@ import {
 } from '@/components/ui/command'
 import { api, errorMessage, q } from '@/lib/api'
 import { useCaptureDevice } from '@/lib/capture'
+import { HELP_ARTICLES } from '@/lib/help'
+import { useTour } from '@/components/tour'
 
 const pages = [
   { to: '/', label: 'nav.dashboard', icon: Sun },
@@ -28,6 +30,7 @@ const pages = [
   { to: '/assistant', label: 'nav.assistant', icon: Sparkles },
   { to: '/audit', label: 'nav.audit', icon: ScrollText },
   { to: '/settings', label: 'nav.settings', icon: Settings },
+  { to: '/hilfe', label: 'nav.help', icon: CircleHelp },
 ] as const
 
 const RECENT_SESSIONS = 8
@@ -43,6 +46,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const recording = useQuery({ ...q.recording(), refetchInterval: false, enabled: open })
   const sessionId = useMatch({ from: '/sessions/$sessionId', shouldThrow: false })?.params.sessionId
   const mic = useCaptureDevice()
+  const tour = useTour()
 
   const close = () => {
     onOpenChange(false)
@@ -150,12 +154,28 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               >
                 <Plus /> {t('palette.newSession')}
               </CommandItem>
+              <CommandItem value={t('tour.start')} onSelect={() => (close(), tour.start())}>
+                <Compass /> {t('tour.start')}
+              </CommandItem>
             </CommandGroup>
             <CommandSeparator />
             <CommandGroup heading={t('palette.pages')}>
               {pages.map((p) => (
                 <CommandItem key={p.to} value={`${t('palette.goTo')} ${t(p.label)}`} onSelect={() => go(p.to)}>
                   <p.icon /> {t(p.label)}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+            <CommandSeparator />
+            <CommandGroup heading={t('help.title')}>
+              {HELP_ARTICLES.map((a) => (
+                <CommandItem
+                  key={a.slug}
+                  value={`${t('help.title')} ${a.title} ${a.summary} ${a.keywords.join(' ')}`}
+                  onSelect={() => go('/hilfe/$slug', { slug: a.slug })}
+                >
+                  <BookOpen /> {a.title}
+                  <span className="ml-auto truncate pl-2 text-xs text-muted-foreground">{a.summary}</span>
                 </CommandItem>
               ))}
             </CommandGroup>

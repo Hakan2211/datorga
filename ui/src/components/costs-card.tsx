@@ -16,6 +16,7 @@ import { Label } from '@/components/ui/label'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { api, errorMessage, q, type LlmOverview } from '@/lib/api'
 import { DEFAULT_WARN_USD, dollars, last30, remaining, WARN_SETTING } from '@/lib/costs'
+import { HELP } from '@/lib/help'
 
 const CLOUD: GuideProvider[] = ['openrouter', 'requesty', 'openai']
 
@@ -43,6 +44,7 @@ export function CostsCard() {
 
   return (
     <SectionCard
+      help={HELP.ai}
       icon={Wallet}
       title={t('costs.title')}
       description={t('costs.intro')}

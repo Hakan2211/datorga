@@ -14,6 +14,8 @@ import { Route as AssistantRouteImport } from './routes/assistant'
 import { Route as AuditRouteImport } from './routes/audit'
 import { Route as CalendarRouteImport } from './routes/calendar'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as HilfeIndexRouteImport } from './routes/hilfe/index'
+import { Route as HilfeSlugRouteImport } from './routes/hilfe/$slug'
 import { Route as PatientsIndexRouteImport } from './routes/patients/index'
 import { Route as PatientsPatientIdRouteImport } from './routes/patients/$patientId'
 import { Route as ReportsIndexRouteImport } from './routes/reports/index'
@@ -47,6 +49,16 @@ const CalendarRoute = CalendarRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HilfeIndexRoute = HilfeIndexRouteImport.update({
+  id: '/hilfe/',
+  path: '/hilfe/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HilfeSlugRoute = HilfeSlugRouteImport.update({
+  id: '/hilfe/$slug',
+  path: '/hilfe/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PatientsIndexRoute = PatientsIndexRouteImport.update({
@@ -103,9 +115,11 @@ export interface FileRoutesByFullPath {
   '/audit': typeof AuditRoute
   '/calendar': typeof CalendarRoute
   '/settings': typeof SettingsRoute
+  '/hilfe/$slug': typeof HilfeSlugRoute
   '/patients/$patientId': typeof PatientsPatientIdRoute
   '/reports/$reportId': typeof ReportsReportIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
+  '/hilfe/': typeof HilfeIndexRoute
   '/patients/': typeof PatientsIndexRoute
   '/reports/': typeof ReportsIndexRoute
   '/sessions/': typeof SessionsIndexRoute
@@ -119,9 +133,11 @@ export interface FileRoutesByTo {
   '/audit': typeof AuditRoute
   '/calendar': typeof CalendarRoute
   '/settings': typeof SettingsRoute
+  '/hilfe/$slug': typeof HilfeSlugRoute
   '/patients/$patientId': typeof PatientsPatientIdRoute
   '/reports/$reportId': typeof ReportsReportIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
+  '/hilfe': typeof HilfeIndexRoute
   '/patients': typeof PatientsIndexRoute
   '/reports': typeof ReportsIndexRoute
   '/sessions': typeof SessionsIndexRoute
@@ -136,9 +152,11 @@ export interface FileRoutesById {
   '/audit': typeof AuditRoute
   '/calendar': typeof CalendarRoute
   '/settings': typeof SettingsRoute
+  '/hilfe/$slug': typeof HilfeSlugRoute
   '/patients/$patientId': typeof PatientsPatientIdRoute
   '/reports/$reportId': typeof ReportsReportIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
+  '/hilfe/': typeof HilfeIndexRoute
   '/patients/': typeof PatientsIndexRoute
   '/reports/': typeof ReportsIndexRoute
   '/sessions/': typeof SessionsIndexRoute
@@ -154,9 +172,11 @@ export interface FileRouteTypes {
     | '/audit'
     | '/calendar'
     | '/settings'
+    | '/hilfe/$slug'
     | '/patients/$patientId'
     | '/reports/$reportId'
     | '/sessions/$sessionId'
+    | '/hilfe/'
     | '/patients/'
     | '/reports/'
     | '/sessions/'
@@ -170,9 +190,11 @@ export interface FileRouteTypes {
     | '/audit'
     | '/calendar'
     | '/settings'
+    | '/hilfe/$slug'
     | '/patients/$patientId'
     | '/reports/$reportId'
     | '/sessions/$sessionId'
+    | '/hilfe'
     | '/patients'
     | '/reports'
     | '/sessions'
@@ -186,9 +208,11 @@ export interface FileRouteTypes {
     | '/audit'
     | '/calendar'
     | '/settings'
+    | '/hilfe/$slug'
     | '/patients/$patientId'
     | '/reports/$reportId'
     | '/sessions/$sessionId'
+    | '/hilfe/'
     | '/patients/'
     | '/reports/'
     | '/sessions/'
@@ -203,9 +227,11 @@ export interface RootRouteChildren {
   AuditRoute: typeof AuditRoute
   CalendarRoute: typeof CalendarRoute
   SettingsRoute: typeof SettingsRoute
+  HilfeSlugRoute: typeof HilfeSlugRoute
   PatientsPatientIdRoute: typeof PatientsPatientIdRoute
   ReportsReportIdRoute: typeof ReportsReportIdRoute
   SessionsSessionIdRoute: typeof SessionsSessionIdRoute
+  HilfeIndexRoute: typeof HilfeIndexRoute
   PatientsIndexRoute: typeof PatientsIndexRoute
   ReportsIndexRoute: typeof ReportsIndexRoute
   SessionsIndexRoute: typeof SessionsIndexRoute
@@ -249,6 +275,20 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/hilfe/': {
+      id: '/hilfe/'
+      path: '/hilfe'
+      fullPath: '/hilfe/'
+      preLoaderRoute: typeof HilfeIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/hilfe/$slug': {
+      id: '/hilfe/$slug'
+      path: '/hilfe/$slug'
+      fullPath: '/hilfe/$slug'
+      preLoaderRoute: typeof HilfeSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/patients/': {
@@ -323,9 +363,11 @@ const rootRouteChildren: RootRouteChildren = {
   AuditRoute: AuditRoute,
   CalendarRoute: CalendarRoute,
   SettingsRoute: SettingsRoute,
+  HilfeSlugRoute: HilfeSlugRoute,
   PatientsPatientIdRoute: PatientsPatientIdRoute,
   ReportsReportIdRoute: ReportsReportIdRoute,
   SessionsSessionIdRoute: SessionsSessionIdRoute,
+  HilfeIndexRoute: HilfeIndexRoute,
   PatientsIndexRoute: PatientsIndexRoute,
   ReportsIndexRoute: ReportsIndexRoute,
   SessionsIndexRoute: SessionsIndexRoute,

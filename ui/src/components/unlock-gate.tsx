@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RecoveryKitPanel } from '@/components/recovery-kit'
 import { RestoreBackup } from '@/components/backup-restore'
+import { DemoEnterButton } from '@/components/demo'
 
 /** Opens the encrypted store before anything else renders. Shows the recovery key once on first run. */
 export function UnlockGate({ children }: { children: ReactNode }) {
@@ -44,9 +45,12 @@ export function UnlockGate({ children }: { children: ReactNode }) {
           </CardHeader>
           <CardContent className="space-y-4">
             {setup.isError && <p className="text-sm text-destructive">{errorMessage(setup.error)}</p>}
-            <Button onClick={() => setup.mutate()} disabled={setup.isPending}>
-              {t('setup.newSetup')}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => setup.mutate()} disabled={setup.isPending}>
+                {t('setup.newSetup')}
+              </Button>
+              <DemoEnterButton />
+            </div>
             <div className="space-y-2 border-t pt-4">
               <p className="text-sm text-muted-foreground">{t('setup.restoreHint')}</p>
               <RestoreBackup replacesData={false} />
