@@ -528,6 +528,7 @@ mod tests {
             birth_date: Some("2012-03-14".into()),
             chiffre: None,
             pronouns: None,
+            gender: None,
             consent_recording: false,
             status: "active".into(),
             created_at: "2026-10-27T10:00:00Z".into(),

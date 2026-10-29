@@ -37,6 +37,10 @@ str_enum!(
     /// Erwachsene vs. Kinder und Jugendliche.
     AgeGroup { Adult => "adult", Kjp => "kjp" }
 );
+str_enum!(
+    /// Geschlecht as recorded by the therapist; `None` on the patient = keine Angabe.
+    Gender { W => "w", M => "m", D => "d" }
+);
 str_enum!(Setting { Einzel => "einzel", Gruppe => "gruppe", Kombi => "kombi" });
 str_enum!(Stage { Probatorik => "probatorik", Kzt1 => "kzt1", Kzt2 => "kzt2", Lzt => "lzt" });
 str_enum!(
@@ -97,6 +101,7 @@ pub struct Patient {
     pub birth_date: Option<String>,
     pub chiffre: Option<String>,
     pub pronouns: Option<String>,
+    pub gender: Option<Gender>,
     pub consent_recording: bool,
     pub status: String,
     pub created_at: String,
@@ -112,6 +117,26 @@ pub struct PatientInput {
     pub birth_date: Option<String>,
     pub chiffre: Option<String>,
     pub pronouns: Option<String>,
+    #[serde(default)]
+    pub gender: Option<Gender>,
+}
+
+/// One tile of the patient overview: the patient plus what the card shows at a glance.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PatientCard {
+    pub patient: Patient,
+    pub has_photo: bool,
+    /// Method, age group and diagnoses of the newest open Behandlungsfall (else the newest one).
+    pub method: Option<Method>,
+    pub age_group: Option<AgeGroup>,
+    pub diagnoses: Vec<Diagnosis>,
+    /// Next planned session from now on, and the last one before now (not cancelled).
+    pub next_at: Option<String>,
+    pub last_at: Option<String>,
+    /// Past sessions without a signed note plus Berichte still in draft or review.
+    #[ts(type = "number")]
+    pub open_items: i64,
 }
 
 /// One grant of consent. Revoking sets `revoked_at`; the row is never deleted (except on erasure).
@@ -140,6 +165,8 @@ pub struct Episode {
     pub stage: Stage,
     pub started_at: String,
     pub ended_at: Option<String>,
+    /// Working diagnoses, therapist-entered ([`crate::store::Store::set_episode_diagnoses`]).
+    pub diagnoses: Vec<Diagnosis>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -428,7 +455,7 @@ pub struct ReportSection {
 }
 
 /// ICD-10 diagnosis, entered by the therapist only (never AI-filled; MDR boundary).
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct Diagnosis {
     pub code: String,

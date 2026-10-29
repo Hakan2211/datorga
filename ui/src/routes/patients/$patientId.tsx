@@ -3,7 +3,8 @@ import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { FilePlus2, Pencil, Plus, Trash2 } from 'lucide-react'
+import { FilePlus2, Pencil, Plus, Stethoscope, Trash2 } from 'lucide-react'
+import type { Diagnosis } from '@/bindings/Diagnosis'
 import type { AgeGroup } from '@/bindings/AgeGroup'
 import type { ApplicationKind } from '@/bindings/ApplicationKind'
 import type { Episode } from '@/bindings/Episode'
@@ -12,6 +13,8 @@ import type { Setting } from '@/bindings/Setting'
 import { Page, PageHeader } from '@/components/app-shell'
 import { ExportOutdatedBadge, StatusBadge, formatDate } from '@/components/bits'
 import { ConsentCard } from '@/components/consent-card'
+import { DiagnosisRows } from '@/components/diagnoses'
+import { PatientAvatar } from '@/components/patient-avatar'
 import { PatientFormDialog } from '@/components/patient-form'
 import { SessionDialog, type SessionDialogMode } from '@/components/session-dialog'
 import {
@@ -41,6 +44,7 @@ function PatientDetail() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const patient = useQuery(q.patient(patientId))
+  const photo = useQuery(q.patientPhoto(patientId))
   const episodes = useQuery(q.episodes(patientId))
 
   const erase = useMutation({
@@ -58,10 +62,12 @@ function PatientDetail() {
   return (
     <>
       <PageHeader
+        leading={<PatientAvatar patientId={patientId} hasPhoto firstName={p.first_name} lastName={p.last_name} />}
         title={`${p.first_name} ${p.last_name}`}
         subtitle={
           <span className="flex items-center gap-3">
             {formatDate(p.birth_date)}
+            {p.gender && <span>{t(`enums.gender.${p.gender}`)}</span>}
             <Badge variant="outline" className="font-mono">
               {p.chiffre ?? t('patients.noChiffre')}
             </Badge>
@@ -71,6 +77,7 @@ function PatientDetail() {
           <>
             <PatientFormDialog
               patient={p}
+              hasPhoto={!!photo.data}
               trigger={
                 <Button variant="outline">
                   <Pencil /> {t('common.edit')}
@@ -135,7 +142,7 @@ function EpisodeCard({ episode }: { episode: Episode }) {
         <CardTitle className="text-base">
           {t(`enums.method.${episode.method}`)}
           <span className="ml-3 text-sm font-normal text-muted-foreground">
-            {t(`enums.age_group.${episode.age_group}`)} Â· {t(`enums.setting.${episode.setting}`)} Â·{' '}
+            {t(`enums.age_group.${episode.age_group}`)} · {t(`enums.setting.${episode.setting}`)} ·{' '}
             {t('episodes.since')} {formatDate(episode.started_at)}
           </span>
         </CardTitle>
@@ -147,7 +154,8 @@ function EpisodeCard({ episode }: { episode: Episode }) {
           ))}
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
+        <EpisodeDiagnoses episode={episode} />
         {apps.data?.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t('common.empty')}</p>
         ) : (
@@ -172,6 +180,72 @@ function EpisodeCard({ episode }: { episode: Episode }) {
         )}
       </CardContent>
     </Card>
+  )
+}
+
+function EpisodeDiagnoses({ episode }: { episode: Episode }) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [rows, setRows] = useState<Diagnosis[]>(episode.diagnoses)
+  const save = useMutation({
+    mutationFn: () => api.setEpisodeDiagnoses(episode.id, rows),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['episodes', episode.patient_id] })
+      void qc.invalidateQueries({ queryKey: ['patients'] })
+      toast.success(t('common.saved'))
+      setOpen(false)
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+
+  return (
+    <div className="flex items-start justify-between gap-4 rounded-md bg-muted/50 px-3 py-2.5">
+      <div className="flex min-w-0 items-start gap-2.5 text-sm">
+        <Stethoscope className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+        {episode.diagnoses.length === 0 ? (
+          <span className="text-muted-foreground">{t('episodes.diagnosesNone')}</span>
+        ) : (
+          <ul className="space-y-0.5" data-testid="episode-diagnoses">
+            {episode.diagnoses.map((d) => (
+              <li key={d.code}>
+                <span className="font-mono">{d.code}</span>
+                {d.certainty !== 'G' && <span className="ml-1 text-muted-foreground">{d.certainty}</span>}
+                {d.label && <span className="ml-2">{d.label}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <Dialog
+        open={open}
+        onOpenChange={(o) => {
+          if (o) setRows(episode.diagnoses)
+          setOpen(o)
+        }}
+      >
+        <DialogTrigger asChild>
+          <Button size="sm" variant="ghost" data-testid="episode-diagnoses-edit">
+            <Pencil /> {t('episodes.diagnosesEdit')}
+          </Button>
+        </DialogTrigger>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{t('episodes.diagnoses')}</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">{t('episodes.diagnosesHint')}</p>
+          <DiagnosisRows value={rows} onChange={setRows} />
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button onClick={() => save.mutate()} disabled={save.isPending}>
+              {t('common.save')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   )
 }
 

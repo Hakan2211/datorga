@@ -294,12 +294,26 @@ function NavLink({
   )
 }
 
-export function PageHeader({ title, subtitle, actions }: { title: ReactNode; subtitle?: ReactNode; actions?: ReactNode }) {
+export function PageHeader({
+  title,
+  subtitle,
+  actions,
+  leading,
+}: {
+  title: ReactNode
+  subtitle?: ReactNode
+  actions?: ReactNode
+  /** Shown left of the title, e.g. a patient's portrait. */
+  leading?: ReactNode
+}) {
   return (
     <div className="flex items-end justify-between gap-4 border-b px-8 pt-7 pb-5">
-      <div>
-        <h1 className="font-serif text-[1.65rem] leading-tight">{title}</h1>
-        {subtitle && <div className="mt-1 text-sm text-muted-foreground">{subtitle}</div>}
+      <div className="flex items-center gap-4">
+        {leading}
+        <div>
+          <h1 className="font-serif text-[1.65rem] leading-tight">{title}</h1>
+          {subtitle && <div className="mt-1 text-sm text-muted-foreground">{subtitle}</div>}
+        </div>
       </div>
       {actions && <div className="flex items-center gap-2">{actions}</div>}
     </div>

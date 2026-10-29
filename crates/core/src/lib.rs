@@ -18,6 +18,7 @@ pub mod llm;
 pub mod live;
 pub mod local;
 pub mod models;
+pub mod photo;
 pub mod pii;
 pub mod pseudo;
 pub mod render;

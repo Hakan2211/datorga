@@ -58,6 +58,7 @@ fn patient() -> Patient {
         birth_date: Some("1984-03-12".into()),
         chiffre: None,
         pronouns: None,
+        gender: None,
         consent_recording: false,
         status: "active".into(),
         created_at: String::new(),

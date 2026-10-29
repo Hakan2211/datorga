@@ -558,6 +558,35 @@ fn patient_update(state: State<'_, AppState>, id: String, input: PatientInput) -
 }
 
 #[tauri::command]
+fn patient_cards(state: State<'_, AppState>, query: Option<String>, now: String) -> CmdResult<Vec<PatientCard>> {
+    state.with(|s| s.patient_cards(query.as_deref(), &now))
+}
+
+/// The portrait as a `data:` URL, or `None`. It's decoded only in the webview, never written out.
+#[tauri::command]
+fn patient_photo(state: State<'_, AppState>, id: String) -> CmdResult<Option<String>> {
+    use base64::Engine as _;
+    let jpeg = state.with(|s| s.patient_photo(&id))?;
+    Ok(jpeg.map(|j| format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(j))))
+}
+
+/// Reads the picked file and stores a normalized copy; the original file stays where it was.
+#[tauri::command]
+fn patient_photo_set(state: State<'_, AppState>, id: String, path: String) -> CmdResult<()> {
+    let len = std::fs::metadata(&path).map_err(|e| CmdError::Other(format!("Bild nicht lesbar: {e}")))?.len();
+    if len as usize > thera_core::photo::MAX_UPLOAD {
+        return Err(CmdError::Other("Das Bild ist zu groß (höchstens 25 MB).".into()));
+    }
+    let bytes = std::fs::read(&path).map_err(|e| CmdError::Other(format!("Bild nicht lesbar: {e}")))?;
+    state.with(|s| s.set_patient_photo(&id, &bytes))
+}
+
+#[tauri::command]
+fn patient_photo_remove(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.with(|s| s.remove_patient_photo(&id))
+}
+
+#[tauri::command]
 fn patient_erase(state: State<'_, AppState>, id: String) -> CmdResult<()> {
     // A running transcription of this patient is stopped first, which removes its plaintext WAV.
     let running = lock(&state.transcribing)?.as_ref().map(|r| (r.source_id.clone(), r.cancel.clone()));
@@ -1289,6 +1318,11 @@ fn episodes_list(state: State<'_, AppState>, patient_id: String) -> CmdResult<Ve
 #[tauri::command]
 fn episode_create(state: State<'_, AppState>, input: EpisodeInput) -> CmdResult<Episode> {
     state.with(|s| s.create_episode(input))
+}
+
+#[tauri::command]
+fn episode_diagnoses_set(state: State<'_, AppState>, episode_id: String, diagnoses: Vec<Diagnosis>) -> CmdResult<Episode> {
+    state.with(|s| s.set_episode_diagnoses(&episode_id, diagnoses))
 }
 
 #[tauri::command]
@@ -3157,6 +3191,10 @@ pub fn run() {
             patient_get,
             patient_create,
             patient_update,
+            patient_cards,
+            patient_photo,
+            patient_photo_set,
+            patient_photo_remove,
             patient_erase,
             consent_text,
             consent_form_export,
@@ -3217,6 +3255,7 @@ pub fn run() {
             stt_model_import,
             episodes_list,
             episode_create,
+            episode_diagnoses_set,
             applications_list,
             application_create,
             sessions_list,

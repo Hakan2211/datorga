@@ -272,6 +272,7 @@ fn case(f: CaseFile, all: &[Template]) -> Res<Case> {
         birth_date: f.patient.birth_date,
         chiffre: None,
         pronouns: None,
+        gender: None,
         consent_recording: true,
         status: "active".into(),
         created_at: String::new(),

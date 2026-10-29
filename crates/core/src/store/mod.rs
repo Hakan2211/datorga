@@ -45,6 +45,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V14__assistant.sql"),
     include_str!("migrations/V15__speakers.sql"),
     include_str!("migrations/V16__speaker_count.sql"),
+    include_str!("migrations/V17__patient_profile.sql"),
 ];
 
 /// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).
@@ -377,11 +378,11 @@ impl Store {
         let tx = self.conn.unchecked_transaction()?;
         let id = new_id();
         tx.execute(
-            "INSERT INTO patient (id, external_ref, first_name, last_name, birth_date, chiffre, pronouns, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO patient (id, external_ref, first_name, last_name, birth_date, chiffre, pronouns, gender, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 id, input.external_ref, input.first_name.trim(), input.last_name.trim(),
-                input.birth_date, input.chiffre, input.pronouns, now()
+                input.birth_date, input.chiffre, input.pronouns, input.gender.map(Gender::as_str), now()
             ],
         )?;
         audit::append(&tx, Entry { actor: ACTOR, action: "patient.create", entity_type: "patient", entity_id: Some(&id), meta: json!({}) })?;
@@ -393,11 +394,12 @@ impl Store {
         validate_patient(&input)?;
         let tx = self.conn.unchecked_transaction()?;
         let n = tx.execute(
-            "UPDATE patient SET external_ref=?2, first_name=?3, last_name=?4, birth_date=?5, chiffre=?6, pronouns=?7
+            "UPDATE patient SET external_ref=?2, first_name=?3, last_name=?4, birth_date=?5, chiffre=?6, pronouns=?7,
+                 gender=?8
              WHERE id=?1",
             params![
                 id, input.external_ref, input.first_name.trim(), input.last_name.trim(),
-                input.birth_date, input.chiffre, input.pronouns
+                input.birth_date, input.chiffre, input.pronouns, input.gender.map(Gender::as_str)
             ],
         )?;
         if n == 0 {
@@ -424,6 +426,81 @@ impl Store {
         ))?;
         let rows = stmt.query_map([like], row_to_patient)?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// The overview tiles, same filter and order as [`Self::list_patients`]. `now` (RFC 3339)
+    /// splits "next" from "last" session.
+    pub fn patient_cards(&self, query: Option<&str>, now: &str) -> Result<Vec<PatientCard>> {
+        let now = normalize_ts(now)?;
+        let patients = self.list_patients(query)?;
+        let mut cards = Vec::with_capacity(patients.len());
+        for patient in patients {
+            let episode = self
+                .conn
+                .query_row(
+                    &format!("{EPISODE_SELECT} WHERE patient_id = ?1 ORDER BY ended_at IS NULL DESC, started_at DESC LIMIT 1"),
+                    [&patient.id],
+                    row_to_episode,
+                )
+                .optional()?;
+            let (has_photo, next_at, last_at, open_items): (bool, Option<String>, Option<String>, i64) = self.conn.query_row(
+                "SELECT
+                   EXISTS (SELECT 1 FROM patient_photo WHERE patient_id = ?1),
+                   (SELECT MIN(COALESCE(scheduled_at, started_at)) FROM session
+                     WHERE patient_id = ?1 AND status != 'cancelled' AND COALESCE(scheduled_at, started_at) >= ?2),
+                   (SELECT MAX(COALESCE(scheduled_at, started_at)) FROM session
+                     WHERE patient_id = ?1 AND status != 'cancelled' AND COALESCE(scheduled_at, started_at) < ?2),
+                   (SELECT COUNT(*) FROM session s LEFT JOIN report n ON n.session_id = s.id AND n.kind = 'sitzungsnotiz'
+                     WHERE s.patient_id = ?1 AND s.status != 'cancelled' AND COALESCE(s.scheduled_at, s.started_at) < ?2
+                       AND (n.id IS NULL OR n.status NOT IN ('signed', 'exported')))
+                   + (SELECT COUNT(*) FROM report WHERE patient_id = ?1 AND kind = 'bericht' AND status IN ('draft', 'in_review'))",
+                params![patient.id, now],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?;
+            cards.push(PatientCard {
+                has_photo,
+                method: episode.as_ref().map(|e| e.method),
+                age_group: episode.as_ref().map(|e| e.age_group),
+                diagnoses: episode.map(|e| e.diagnoses).unwrap_or_default(),
+                next_at,
+                last_at,
+                open_items,
+                patient,
+            });
+        }
+        Ok(cards)
+    }
+
+    /// Stores the portrait (any JPEG/PNG/WebP, normalized by [`crate::photo::normalize`]),
+    /// replacing an earlier one.
+    pub fn set_patient_photo(&self, patient_id: &str, upload: &[u8]) -> Result<()> {
+        self.patient(patient_id)?;
+        let jpeg = crate::photo::normalize(upload)?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO patient_photo (patient_id, jpeg, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(patient_id) DO UPDATE SET jpeg = excluded.jpeg, updated_at = excluded.updated_at",
+            params![patient_id, jpeg, now()],
+        )?;
+        audit::append(&tx, Entry { actor: ACTOR, action: "patient.photo_set", entity_type: "patient", entity_id: Some(patient_id), meta: json!({}) })?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn patient_photo(&self, patient_id: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self
+            .conn
+            .query_row("SELECT jpeg FROM patient_photo WHERE patient_id = ?1", [patient_id], |r| r.get(0))
+            .optional()?)
+    }
+
+    pub fn remove_patient_photo(&self, patient_id: &str) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        if tx.execute("DELETE FROM patient_photo WHERE patient_id = ?1", [patient_id])? > 0 {
+            audit::append(&tx, Entry { actor: ACTOR, action: "patient.photo_remove", entity_type: "patient", entity_id: Some(patient_id), meta: json!({}) })?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Art. 17 GDPR: hard delete with cascade. The audit entry keeps only the ID.
@@ -549,6 +626,24 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// Replaces the Behandlungsfall's working diagnoses. Only the therapist calls this (no agent
+    /// or extraction path writes diagnoses); the audit keeps the count, never codes.
+    pub fn set_episode_diagnoses(&self, episode_id: &str, diagnoses: Vec<Diagnosis>) -> Result<Episode> {
+        self.episode(episode_id)?;
+        let diagnoses = clean_diagnoses(diagnoses)?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE episode SET diagnoses_json = ?2 WHERE id = ?1",
+            params![episode_id, serde_json::to_string(&diagnoses)?],
+        )?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "episode.diagnoses", entity_type: "episode", entity_id: Some(episode_id),
+            meta: json!({ "count": diagnoses.len() }),
+        })?;
+        tx.commit()?;
+        self.episode(episode_id)
+    }
+
     pub fn list_applications(&self, episode_id: &str) -> Result<Vec<Application>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, episode_id, kind, seq, status, report_id, created_at FROM application
@@ -589,9 +684,16 @@ impl Store {
         )?;
         let ctx = templates::Context { method: episode.method, age_group: episode.age_group, kind: Some(kind) };
         for s in template.resolve(&ctx).sections {
+            // The Diagnosen section starts from the Behandlungsfall's working diagnoses (therapist-entered).
+            let body = match s.field {
+                templates::FieldKind::Diagnoses if !episode.diagnoses.is_empty() => serde_json::to_string(
+                    &crate::pii::DiagnosesBody { diagnoses: episode.diagnoses.clone(), notes: String::new() },
+                )?,
+                _ => String::new(),
+            };
             tx.execute(
-                "INSERT INTO report_section (id, report_id, key) VALUES (?1, ?2, ?3)",
-                params![new_id(), report_id, s.key],
+                "INSERT INTO report_section (id, report_id, key, body) VALUES (?1, ?2, ?3, ?4)",
+                params![new_id(), report_id, s.key, body],
             )?;
         }
         audit::append(&tx, Entry {
@@ -1964,6 +2066,26 @@ impl Store {
     }
 }
 
+/// Trims, drops empty rows, upper-cases the code and checks the certainty letter.
+fn clean_diagnoses(diagnoses: Vec<Diagnosis>) -> Result<Vec<Diagnosis>> {
+    let mut out = Vec::with_capacity(diagnoses.len());
+    for d in diagnoses {
+        let code = d.code.trim().to_uppercase();
+        let label = d.label.trim().to_string();
+        if code.is_empty() && label.is_empty() {
+            continue;
+        }
+        if code.is_empty() {
+            return Err(Error::Invalid(format!("Diagnose „{label}“ hat keinen ICD-10-Code")));
+        }
+        if !matches!(d.certainty.as_str(), "G" | "V" | "Z" | "A") {
+            return Err(Error::Invalid(format!("Diagnosesicherheit muss G, V, Z oder A sein ({code})")));
+        }
+        out.push(Diagnosis { code, label, certainty: d.certainty });
+    }
+    Ok(out)
+}
+
 fn validate_patient(p: &PatientInput) -> Result<()> {
     if p.first_name.trim().is_empty() || p.last_name.trim().is_empty() {
         return Err(Error::Invalid("Vor- und Nachname sind erforderlich".into()));
@@ -1976,11 +2098,11 @@ fn validate_patient(p: &PatientInput) -> Result<()> {
 }
 
 const PATIENT_SELECT: &str = "SELECT id, external_ref, first_name, last_name, birth_date, chiffre, pronouns,
-    consent_recording, status, created_at, archived_at FROM patient";
+    consent_recording, status, created_at, archived_at, gender FROM patient";
 const CONSENT_SELECT: &str = "SELECT id, patient_id, kind, scope, text_version, text_hash, granted_at, revoked_at,
     note FROM consent";
 const EPISODE_SELECT: &str =
-    "SELECT id, patient_id, method, age_group, setting, stage, started_at, ended_at FROM episode";
+    "SELECT id, patient_id, method, age_group, setting, stage, started_at, ended_at, diagnoses_json FROM episode";
 const SESSION_SELECT: &str = "SELECT s.id, s.patient_id, s.episode_id, s.scheduled_at, s.started_at, s.ended_at,
     s.duration_s, s.modality, s.status, n.id, n.status,
     n.status = 'exported' AND (SELECT count(*) FROM report_addendum x WHERE x.report_id = n.id) > COALESCE(n.exported_addenda, 0),
@@ -2037,6 +2159,9 @@ fn row_to_patient(r: &rusqlite::Row<'_>) -> rusqlite::Result<Patient> {
         status: r.get(8)?,
         created_at: r.get(9)?,
         archived_at: r.get(10)?,
+        gender: r.get::<_, Option<String>>(11)?.map(|g| g.parse()).transpose().map_err(|e: Error| {
+            rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(e))
+        })?,
     })
 }
 
@@ -2096,6 +2221,7 @@ fn row_to_episode(r: &rusqlite::Row<'_>) -> rusqlite::Result<Episode> {
         stage: parse_col(r, 5)?,
         started_at: r.get(6)?,
         ended_at: r.get(7)?,
+        diagnoses: serde_json::from_str(&r.get::<_, String>(8)?).unwrap_or_default(),
     })
 }
 
@@ -2194,6 +2320,117 @@ mod tests {
                 ..Default::default()
             })
             .unwrap()
+    }
+
+    fn diag(code: &str, certainty: &str) -> Diagnosis {
+        Diagnosis { code: code.into(), label: format!("Label {code}"), certainty: certainty.into() }
+    }
+
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(w, h).write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    #[test]
+    fn patient_gender_round_trips_and_defaults_to_none() {
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        assert_eq!(p.gender, None);
+        let mut input = PatientInput { first_name: p.first_name.clone(), last_name: p.last_name.clone(), ..Default::default() };
+        input.gender = Some(Gender::D);
+        assert_eq!(store.update_patient(&p.id, input).unwrap().gender, Some(Gender::D));
+        // Older UIs send no gender at all.
+        let old: PatientInput = serde_json::from_str(r#"{"external_ref":null,"first_name":"A","last_name":"B","birth_date":null,"chiffre":null,"pronouns":null}"#).unwrap();
+        assert_eq!(old.gender, None);
+    }
+
+    #[test]
+    fn photo_is_normalized_replaced_and_erased_with_the_patient() {
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        assert!(store.patient_photo(&p.id).unwrap().is_none());
+        store.set_patient_photo(&p.id, &png(800, 600)).unwrap();
+        let jpeg = store.patient_photo(&p.id).unwrap().unwrap();
+        assert_eq!(&jpeg[..2], &[0xFF, 0xD8]);
+        store.set_patient_photo(&p.id, &png(300, 300)).unwrap();
+        let n: i64 = store.conn.query_row("SELECT count(*) FROM patient_photo", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "replaced, not added");
+        assert!(store.set_patient_photo(&p.id, b"nope").is_err());
+        store.remove_patient_photo(&p.id).unwrap();
+        assert!(store.patient_photo(&p.id).unwrap().is_none());
+        store.set_patient_photo(&p.id, &png(64, 64)).unwrap();
+        store.erase_patient(&p.id).unwrap();
+        let n: i64 = store.conn.query_row("SELECT count(*) FROM patient_photo", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0, "erasure cascades to the photo");
+        let actions: Vec<String> = audit::list(&store.conn, 100).unwrap().into_iter().map(|e| e.action).collect();
+        assert!(actions.iter().filter(|a| *a == "patient.photo_set").count() == 3);
+        assert!(actions.contains(&"patient.photo_remove".to_string()));
+    }
+
+    #[test]
+    fn episode_diagnoses_are_cleaned_and_prefill_new_berichte() {
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let ep = store
+            .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Vt, age_group: AgeGroup::Adult, setting: Setting::Einzel })
+            .unwrap();
+        assert!(ep.diagnoses.is_empty());
+        assert!(store.set_episode_diagnoses(&ep.id, vec![diag("F32.1", "X")]).is_err(), "certainty letter checked");
+        assert!(store.set_episode_diagnoses(&ep.id, vec![Diagnosis { code: " ".into(), label: "ohne".into(), certainty: "G".into() }]).is_err());
+        let blank = Diagnosis { code: "".into(), label: " ".into(), certainty: "G".into() };
+        let ep = store.set_episode_diagnoses(&ep.id, vec![diag(" f32.1 ", "G"), blank, diag("F41.1", "V")]).unwrap();
+        assert_eq!(ep.diagnoses.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["F32.1", "F41.1"]);
+
+        let app = store.create_application(&ep.id, ApplicationKind::Erstantrag).unwrap();
+        let report = store.report(app.report_id.as_deref().unwrap()).unwrap();
+        let body = &report.sections.iter().find(|s| s.key == "diagnose").unwrap().body;
+        let parsed: crate::pii::DiagnosesBody = serde_json::from_str(body).unwrap();
+        assert_eq!(parsed.diagnoses, ep.diagnoses);
+        assert!(report.sections.iter().filter(|s| s.key != "diagnose").all(|s| s.body.is_empty()));
+
+        let ev = audit::list(&store.conn, 100).unwrap().into_iter().find(|e| e.action == "episode.diagnoses").unwrap();
+        assert!(!ev.meta_json.contains("F32"), "no codes in the audit log");
+    }
+
+    #[test]
+    fn patient_cards_show_episode_sessions_and_open_items() {
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let empty = store.patient_cards(None, "2026-10-29T12:00:00Z").unwrap();
+        assert_eq!(empty.len(), 1);
+        assert!(empty[0].method.is_none() && empty[0].next_at.is_none() && empty[0].open_items == 0 && !empty[0].has_photo);
+
+        let ep = store
+            .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Tp, age_group: AgeGroup::Adult, setting: Setting::Einzel })
+            .unwrap();
+        store.set_episode_diagnoses(&ep.id, vec![diag("F33.0", "G")]).unwrap();
+        let session = |at: &str| {
+            store
+                .create_session(SessionInput {
+                    patient_id: p.id.clone(),
+                    episode_id: Some(ep.id.clone()),
+                    scheduled_at: Some(at.into()),
+                    modality: None,
+                    planned_minutes: None,
+                })
+                .unwrap()
+        };
+        session("2026-10-20T09:00:00Z");
+        session("2026-10-27T09:00:00Z");
+        session("2026-11-03T09:00:00Z");
+        session("2026-11-10T09:00:00Z");
+        store.create_application(&ep.id, ApplicationKind::Erstantrag).unwrap();
+        store.set_patient_photo(&p.id, &png(40, 40)).unwrap();
+
+        let card = store.patient_cards(Some("Beisp"), "2026-10-29T12:00:00Z").unwrap().remove(0);
+        assert_eq!(card.method, Some(Method::Tp));
+        assert_eq!(card.diagnoses[0].code, "F33.0");
+        assert_eq!(card.next_at.as_deref(), Some("2026-11-03T09:00:00Z"));
+        assert_eq!(card.last_at.as_deref(), Some("2026-10-27T09:00:00Z"));
+        assert_eq!(card.open_items, 3, "two past sessions without a note + the draft Bericht");
+        assert!(card.has_photo);
+        assert!(store.patient_cards(Some("niemand"), "2026-10-29T12:00:00Z").unwrap().is_empty());
     }
 
     #[test]

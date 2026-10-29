@@ -256,6 +256,7 @@ mod tests {
             birth_date: Some("1985-03-14".into()),
             chiffre: Some("B140385".into()),
             pronouns: None,
+            gender: None,
             consent_recording: false,
             status: "active".into(),
             created_at: String::new(),

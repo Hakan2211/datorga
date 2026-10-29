@@ -15,6 +15,8 @@ import type { EpisodeInput } from '@/bindings/EpisodeInput'
 import type { Job } from '@/bindings/Job'
 import type { Patient } from '@/bindings/Patient'
 import type { PatientInput } from '@/bindings/PatientInput'
+import type { PatientCard } from '@/bindings/PatientCard'
+import type { Diagnosis } from '@/bindings/Diagnosis'
 import type { Report } from '@/bindings/Report'
 import type { ReportStatus } from '@/bindings/ReportStatus'
 import type { ReportSummary } from '@/bindings/ReportSummary'
@@ -271,6 +273,10 @@ export const api = {
   createPatient: (input: PatientInput) => invoke<Patient>('patient_create', { input }),
   updatePatient: (id: string, input: PatientInput) => invoke<Patient>('patient_update', { id, input }),
   erasePatient: (id: string) => invoke<void>('patient_erase', { id }),
+  patientCards: (query: string, now: string) => invoke<PatientCard[]>('patient_cards', { query: query || null, now }),
+  patientPhoto: (id: string) => invoke<string | null>('patient_photo', { id }),
+  setPatientPhoto: (id: string, path: string) => invoke<void>('patient_photo_set', { id, path }),
+  removePatientPhoto: (id: string) => invoke<void>('patient_photo_remove', { id }),
 
   exportConsentForm: (patientId: string, kind: ConsentKind, path: string) =>
     invoke<void>('consent_form_export', { patientId, kind, path }),
@@ -282,6 +288,8 @@ export const api = {
 
   episodes: (patientId: string) => invoke<Episode[]>('episodes_list', { patientId }),
   createEpisode: (input: EpisodeInput) => invoke<Episode>('episode_create', { input }),
+  setEpisodeDiagnoses: (episodeId: string, diagnoses: Diagnosis[]) =>
+    invoke<Episode>('episode_diagnoses_set', { episodeId, diagnoses }),
   applications: (episodeId: string) => invoke<Application[]>('applications_list', { episodeId }),
   createApplication: (episodeId: string, kind: ApplicationKind) =>
     invoke<Application>('application_create', { episodeId, kind }),
@@ -460,6 +468,11 @@ export const api = {
 export const q = {
   patients: (query = '') => queryOptions({ queryKey: ['patients', query], queryFn: () => api.patients(query) }),
   patient: (id: string) => queryOptions({ queryKey: ['patient', id], queryFn: () => api.patient(id) }),
+  // `now` is rounded to the minute by the caller so the key stays stable between renders.
+  patientCards: (query: string, now: string) =>
+    queryOptions({ queryKey: ['patients', 'cards', query, now], queryFn: () => api.patientCards(query, now) }),
+  patientPhoto: (id: string) =>
+    queryOptions({ queryKey: ['patient', id, 'photo'], queryFn: () => api.patientPhoto(id), staleTime: Infinity }),
   consentText: (kind: ConsentKind) =>
     queryOptions({ queryKey: ['consentText', kind], queryFn: () => api.consentText(kind), staleTime: Infinity }),
   consents: (patientId: string) =>

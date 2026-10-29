@@ -17,13 +17,10 @@ import {
   LayoutList,
   Mic,
   Sparkles,
-  Plus,
   TextSelect,
-  Trash2,
   XCircle,
 } from 'lucide-react'
 import type { ApplyMode } from '@/bindings/ApplyMode'
-import type { Diagnosis } from '@/bindings/Diagnosis'
 import type { FactEdit } from '@/bindings/FactEdit'
 import type { SectionDef } from '@/bindings/SectionDef'
 import type { SectionDraft } from '@/bindings/SectionDraft'
@@ -32,6 +29,7 @@ import { Addenda } from '@/components/addenda'
 import { FactDraftCard } from '@/components/fact-draft'
 import { DraftDialog, DraftProposal, DraftSources, ReportDraftCard } from '@/components/report-draft'
 import { Page, PageHeader } from '@/components/app-shell'
+import { DiagnosisRows } from '@/components/diagnoses'
 import { StatusBadge, Stepper, StickyActionBar, formatDate, stepStates } from '@/components/bits'
 import { useReportExport, type ExportFormat } from '@/components/report-export'
 import { ReportDocument, type DocumentFrame } from '@/components/report-document'
@@ -646,8 +644,6 @@ function SectionEditor({
   )
 }
 
-const CERTAINTIES = ['G', 'V', 'Z', 'A'] as const
-
 function DiagnosesEditor({ body, onChange, readOnly }: { body: string; onChange: (b: string) => void; readOnly: boolean }) {
   const { t } = useTranslation()
   const [state, setState] = useState(() => parseDiagnoses(body))
@@ -656,54 +652,11 @@ function DiagnosesEditor({ body, onChange, readOnly }: { body: string; onChange:
     const empty = next.diagnoses.length === 0 && !next.notes
     onChange(empty ? '' : JSON.stringify(next))
   }
-  const setRow = (i: number, patch: Partial<Diagnosis>) =>
-    commit({ ...state, diagnoses: state.diagnoses.map((d, j) => (j === i ? { ...d, ...patch } : d)) })
 
   return (
     <div className="space-y-3 rounded-md border bg-card p-3">
       <Label className="text-xs text-muted-foreground">{t('report.diagnoses')}</Label>
-      {state.diagnoses.map((d, i) => (
-        <div key={i} className="grid grid-cols-[7rem_1fr_11rem_auto] gap-2">
-          <Input
-            className="font-mono"
-            placeholder={t('report.code')}
-            value={d.code}
-            disabled={readOnly}
-            onChange={(e) => setRow(i, { code: e.target.value.toUpperCase() })}
-          />
-          <Input placeholder={t('report.label')} value={d.label} disabled={readOnly} onChange={(e) => setRow(i, { label: e.target.value })} />
-          <Select value={d.certainty} disabled={readOnly} onValueChange={(v) => setRow(i, { certainty: v })}>
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {CERTAINTIES.map((c) => (
-                <SelectItem key={c} value={c}>
-                  {t(`enums.certainty.${c}`)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="ghost"
-            size="icon"
-            disabled={readOnly}
-            aria-label={t('common.delete')}
-            onClick={() => commit({ ...state, diagnoses: state.diagnoses.filter((_, j) => j !== i) })}
-          >
-            <Trash2 />
-          </Button>
-        </div>
-      ))}
-      {!readOnly && (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => commit({ ...state, diagnoses: [...state.diagnoses, { code: '', label: '', certainty: 'G' }] })}
-        >
-          <Plus /> {t('report.addDiagnosis')}
-        </Button>
-      )}
+      <DiagnosisRows value={state.diagnoses} readOnly={readOnly} onChange={(diagnoses) => commit({ ...state, diagnoses })} />
       <Label className="block pt-2 text-xs text-muted-foreground">{t('report.notes')}</Label>
       <RichField value={state.notes} onChange={(notes) => commit({ ...state, notes })} readOnly={readOnly} />
     </div>
