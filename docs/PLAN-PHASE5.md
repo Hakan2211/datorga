@@ -235,6 +235,16 @@ This file is the plan. Every slice ends with the after-slice routine: commit, pu
 ## Step 0: Mockups (user, before slice 37)
 The user generates mockups 19–24 from the appendix prompts into `docs/mockups/19-…` and following. Read them like the Phase 4 ones: take the content area, keep the existing shell (sidebar, top bar with back arrow, Strg+K, Assistent) and the slice 20 tokens, ignore invented sidebar entries and model names.
 
+**Done (2026-10-29):** `19-lotse-start`, `20-lotse-fragen`, `21-lotse-abschnitte`, `22-lotse-pruefen`, `23-lotse-fertig`, `24-neuer-bericht`. How to read them:
+- The stepper labels differ between images; the real ones are those of #19: Start · Fragen · Abschnitte · Prüfen · Fertig, with the title "‹Antragsart› · ‹Name›", Chiffre and method badge above (#19).
+- #19 is close to the target as is: two cards (Antragsart tiles with the "Empfohlen" reason, Bereitschaft list with dots + counts and the diagnoses notice), a bottom bar with "Ganzes Dokument" left and one primary button right.
+- #20: progress bar "5 von 8 beantwortet", "Lieber frei diktieren" top right, cards grouped by section, mic inside the field, chips below, "Ihre Angabe" check once answered, "Später" + primary button at the bottom.
+- #21: the section names (Anamnese, Ressourcen …) and the fact tags (Familie, Kindheit …) are invented; use the template's sections and the real fact text. Keep the layout: rail with status dots and a legend, middle column in serif with the current sentence in a teal box, the keyboard bar at the bottom, the three cards on the right.
+- #22: take the hint cards (section number badge, text, "Zum Abschnitt" / "Ignorieren"), the green "Pflichtangaben vollständig" row, the preview on the right and "Zurück" bottom left. Its header and 4-step stepper are off-prompt.
+- #23: only the layout (A4 preview with page arrows below, the sign card on the right). The document text is invented and wrong for a Bericht (it shows an expert opinion with ICD codes in the text).
+- #24: only the dialog and the "Neuer Bericht" button at the top right; the page behind it shows tabs and a table instead of the board.
+- Ignore the invented sidebar footers (Datenschutz, user profile, "DSGVO-konform").
+
 ## Appendix: GPT-image prompts (Bericht-Lotse)
 
 Prepend the `[style]` block below to each prompt. Make 2–3 variants each. Fictional data only.
