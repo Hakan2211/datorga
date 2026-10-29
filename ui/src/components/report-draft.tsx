@@ -15,68 +15,13 @@ import type { SectionDraft } from '@/bindings/SectionDraft'
 import { formatDate } from '@/components/bits'
 import { RedactionDialog } from '@/components/fact-draft'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api, errorMessage, q, type DraftChoice } from '@/lib/api'
-import { HelpLink } from '@/components/help-link'
-import { HELP } from '@/lib/help'
 
-/** Overview above the sections: what drafts would draw on, and "draft all empty sections". */
-export function ReportDraftCard({
-  reportId,
-  sections,
-  isEmpty,
-  onDraft,
-}: {
-  reportId: string
-  sections: SectionDef[]
-  isEmpty: (key: string) => boolean
-  onDraft: (keys: string[]) => void
-}) {
-  const { t } = useTranslation()
-  const llm = useQuery(q.llm())
-  const sources = useQuery(q.draftSources(reportId))
-  const facts = sources.data?.facts ?? []
-  const sessions = new Set(facts.map((f) => f.session_id)).size
-  const empty = sections.filter((s) => isEmpty(s.key)).map((s) => s.key)
-  const active = llm.data?.config.active
-
-  return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Sparkles className="size-4 text-primary" /> {t('draft.title')} <HelpLink slug={HELP.report} />
-        </CardTitle>
-        <Button size="sm" onClick={() => onDraft(empty)} disabled={!active || facts.length === 0 || empty.length === 0}>
-          {t('draft.draftEmpty')}
-        </Button>
-      </CardHeader>
-      <CardContent className="space-y-2 text-sm text-muted-foreground">
-        {!active ? (
-          <p>
-            {t('facts.noProvider')}{' '}
-            <Link to="/settings" className="underline">
-              {t('facts.settingsLink')}
-            </Link>
-          </p>
-        ) : facts.length === 0 ? (
-          <p>{t('draft.noSources')}</p>
-        ) : (
-          <>
-            <p>{t('draft.intro')}</p>
-            <p className="text-foreground">{t('draft.sources', { count: facts.length, sessions })}</p>
-            {empty.length === 0 && <p>{t('draft.allFilled')}</p>}
-          </>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-type SessionRow = { id: string; no: number; at: string | null; facts: number }
+export type SessionRow = { id: string; no: number; at: string | null; facts: number }
 
 /** The sessions with applied facts, in order, from the episode's facts. */
 function sessionRows(facts: EpisodeFact[]): SessionRow[] {
@@ -89,9 +34,27 @@ function sessionRows(facts: EpisodeFact[]): SessionRow[] {
   return rows
 }
 
+/** The sessions a draft could draw on, and the default choice: those since the previous application. */
+export function useDraftSessions(reportId: string) {
+  const sources = useQuery(q.draftSources(reportId))
+  return useMemo(() => {
+    const rows = sessionRows(sources.data?.facts ?? [])
+    const since = sources.data?.since ?? null
+    const recent = rows.filter((r) => !since || !r.at || r.at > since).map((r) => r.id)
+    return { ready: !!sources.data, rows, since, defaults: recent.length ? recent : rows.map((r) => r.id) }
+  }, [sources.data])
+}
+
+/**
+ * What the focus mode's "Optionen" and "Neu entwerfen" chose; the dialog then only previews.
+ * `sessionIds` undefined: the default sessions, `null`: all.
+ */
+export type DraftPreset = { sessionIds?: string[] | null; withExisting?: boolean; instruction?: string }
+
 /**
  * Redaction preview + the choices for drafting `keys` (sessions, existing text, instruction),
- * then the run. `filled`: the keys whose section already holds text.
+ * then the run. `filled`: the keys whose section already holds text. With a `preset` the choices
+ * were made before and the dialog shows them in one line.
  */
 export function DraftDialog({
   reportId,
@@ -99,6 +62,7 @@ export function DraftDialog({
   keys,
   sections,
   filled,
+  preset,
   onClose,
 }: {
   reportId: string
@@ -106,23 +70,24 @@ export function DraftDialog({
   keys: string[]
   sections: SectionDef[]
   filled: string[]
+  preset?: DraftPreset
   onClose: () => void
 }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const sources = useQuery(q.draftSources(reportId))
-  const rows = useMemo(() => sessionRows(sources.data?.facts ?? []), [sources.data])
+  const sessions = useDraftSessions(reportId)
+  const rows = sessions.rows
   // Default: the sessions since the previous application (all for the first one).
   const [chosen, setChosen] = useState<string[] | null>(null)
   useEffect(() => {
-    if (chosen !== null || !sources.data) return
-    const since = sources.data.since
-    const recent = rows.filter((r) => !since || !r.at || r.at > since).map((r) => r.id)
-    setChosen(recent.length ? recent : rows.map((r) => r.id))
-  }, [chosen, rows, sources.data])
-  const [withExisting, setWithExisting] = useState(filled.length > 0)
+    if (chosen !== null || !sessions.ready) return
+    const given = preset?.sessionIds
+    setChosen(given === undefined ? sessions.defaults : given === null ? rows.map((r) => r.id) : given)
+  }, [chosen, rows, sessions, preset])
+  const [withExisting, setWithExisting] = useState(preset?.withExisting ?? filled.length > 0)
   const [allFacts, setAllFacts] = useState(false)
-  const [instruction, setInstruction] = useState('')
+  const [instruction, setInstruction] = useState(preset?.instruction ?? '')
   // The preview follows the instruction once typing pauses.
   const [sent, setSent] = useState('')
   useEffect(() => {
@@ -195,7 +160,14 @@ export function DraftDialog({
         {preview.data && preview.data.untagged > 0 && (
           <p className="text-[13px] text-muted-foreground">{t('draft.untagged', { count: preview.data.untagged })}</p>
         )}
-        {rows.length > 1 && chosen !== null && (
+        {preset && chosen !== null && (
+          <p className="text-[13px] text-muted-foreground" data-testid="draft-preset">
+            {all ? t('draft.presetAll', { count: rows.length }) : t('draft.presetSome', { count: chosen.length, total: rows.length })}
+            {withExisting && filled.length > 0 && ` · ${t('draft.presetExisting')}`}
+            {sent && ` · ${t('draft.presetInstruction', { text: sent })}`}
+          </p>
+        )}
+        {!preset && rows.length > 1 && chosen !== null && (
           <div className="space-y-1.5" data-testid="draft-sessions">
             <p className="text-xs font-medium">{t('draft.sessions')}</p>
             <ul className="flex flex-wrap gap-x-4 gap-y-1">
@@ -225,7 +197,7 @@ export function DraftDialog({
             </p>
           </div>
         )}
-        {filled.length > 0 && (
+        {!preset && filled.length > 0 && (
           <div className="space-y-1">
             <label className="flex items-center gap-2 text-[13px]">
               <Checkbox checked={withExisting} onCheckedChange={(v) => setWithExisting(v === true)} />
@@ -234,17 +206,21 @@ export function DraftDialog({
             <p className="pl-6 text-[13px] text-muted-foreground">{t('draft.withExistingHint')}</p>
           </div>
         )}
-        <Label htmlFor="draft-instruction" className="text-xs">
-          {t('draft.instruction')}
-        </Label>
-        <Input
-          id="draft-instruction"
-          value={instruction}
-          maxLength={500}
-          onChange={(e) => setInstruction(e.target.value)}
-          placeholder={t('draft.instructionPlaceholder')}
-        />
-        <p className="text-[13px] text-muted-foreground">{t('draft.instructionHint')}</p>
+        {!preset && (
+          <>
+            <Label htmlFor="draft-instruction" className="text-xs">
+              {t('draft.instruction')}
+            </Label>
+            <Input
+              id="draft-instruction"
+              value={instruction}
+              maxLength={500}
+              onChange={(e) => setInstruction(e.target.value)}
+              placeholder={t('draft.instructionPlaceholder')}
+            />
+            <p className="text-[13px] text-muted-foreground">{t('draft.instructionHint')}</p>
+          </>
+        )}
       </section>
     </RedactionDialog>
   )
@@ -344,7 +320,7 @@ export function DraftSources({ draft, noteSections }: { draft: SectionDraft; not
   )
 }
 
-function Sentences({ draft, noteSections }: { draft: SectionDraft; noteSections: SectionDef[] }) {
+export function Sentences({ draft, noteSections }: { draft: SectionDraft; noteSections: SectionDef[] }) {
   return (
     <ol className="space-y-1">
       {draft.sentences.map((s) => (
@@ -363,7 +339,7 @@ function Sentences({ draft, noteSections }: { draft: SectionDraft; noteSections:
 }
 
 /** A sentence resting on her answer to a Lotse question. */
-function AnswerChip({ answer }: { answer: ReportAnswer }) {
+export function AnswerChip({ answer }: { answer: ReportAnswer }) {
   const { t } = useTranslation()
   return (
     <Tooltip>
@@ -380,7 +356,7 @@ function AnswerChip({ answer }: { answer: ReportAnswer }) {
   )
 }
 
-function FactChip({ fact, noteSections }: { fact: EpisodeFact; noteSections: SectionDef[] }) {
+export function FactChip({ fact, noteSections }: { fact: EpisodeFact; noteSections: SectionDef[] }) {
   const { t } = useTranslation()
   const heading = noteSections.find((s) => s.key === fact.section_key)?.heading ?? fact.section_key
   return (

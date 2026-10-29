@@ -21,6 +21,7 @@ mod answers;
 mod autopilot;
 mod calendar;
 mod contingent;
+mod focus;
 mod speakers;
 mod spend;
 mod summary;
@@ -29,6 +30,7 @@ pub use agent::{TextMode, TextProposal};
 pub use answers::{CoveredAsk, GapCheck, GapCheckMeta};
 pub use autopilot::{AutopilotRun, AutopilotStep};
 pub use calendar::normalize_ts;
+pub use focus::SentenceChoice;
 pub use spend::{day_before, DaySpend, LlmSpend, ModelSpend, SpendReport, SpendTask, TaskSpend};
 pub use summary::{SessionSummary, SummaryInput, SummaryMeta, SummaryPointView};
 pub use timeline::{TimelineGroup, TimelineItem};
@@ -61,6 +63,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V19__autopilot.sql"),
     include_str!("migrations/V20__lotse.sql"),
     include_str!("migrations/V21__answers.sql"),
+    include_str!("migrations/V22__focus.sql"),
 ];
 
 /// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).
@@ -98,6 +101,7 @@ impl Store {
         let store = Self { conn };
         store.migrate()?;
         store.seed_builtin_templates()?;
+        store.sync_review_statuses()?;
         Ok(store)
     }
 
@@ -1813,18 +1817,20 @@ impl Store {
             })?
             .collect::<std::result::Result<_, _>>()?;
         let answers = self.report_answers(report_id)?;
-        let mut sentences = self.conn.prepare("SELECT id, text FROM draft_sentence WHERE draft_id = ?1 ORDER BY seq")?;
+        let mut sentences = self.conn.prepare("SELECT id, text, decision, edited FROM draft_sentence WHERE draft_id = ?1 ORDER BY seq")?;
         let mut cites = self.conn.prepare("SELECT fact_id FROM report_citation WHERE sentence_id = ?1")?;
         let mut answer_cites = self.conn.prepare("SELECT answer_id FROM answer_citation WHERE sentence_id = ?1")?;
         for d in &mut drafts {
-            let rows: Vec<(String, String)> =
-                sentences.query_map([&d.id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<std::result::Result<_, _>>()?;
-            for (id, text) in rows {
+            let rows: Vec<(String, String, Option<String>, bool)> = sentences
+                .query_map([&d.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                .collect::<std::result::Result<_, _>>()?;
+            for (id, text, decision, edited) in rows {
+                let decision = decision.map(|d| d.parse()).transpose()?;
                 let ids: Vec<String> = cites.query_map([&id], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
                 let sources = facts.iter().filter(|f| ids.contains(&f.fact_id)).cloned().collect();
                 let ids: Vec<String> = answer_cites.query_map([&id], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
                 let answers = answers.iter().filter(|a| ids.contains(&a.id)).cloned().collect();
-                d.sentences.push(DraftSentenceView { id, text, sources, answers });
+                d.sentences.push(DraftSentenceView { id, text, sources, answers, decision, edited });
             }
         }
         Ok(drafts)
@@ -1894,6 +1900,7 @@ impl Store {
                 "with_existing": drafts.iter().filter(|d| d.with_existing).count(),
             }),
         })?;
+        focus::sync_review(&tx, report_id)?;
         tx.commit()?;
         self.section_drafts(report_id)
     }
@@ -1907,6 +1914,7 @@ impl Store {
         if n == 0 {
             return Err(Error::Invalid("Der Entwurf ist nicht mehr offen".into()));
         }
+        focus::sync_review(&self.conn, report_id)?;
         self.section_drafts(report_id)
     }
 
@@ -1919,9 +1927,6 @@ impl Store {
             .into_iter()
             .find(|d| d.id == draft_id && d.status == DraftStatus::Proposed)
             .ok_or_else(|| Error::Invalid("Der Entwurf ist nicht mehr offen".into()))?;
-        if draft.sentences.is_empty() {
-            return Err(Error::Invalid("Der Entwurf ist leer".into()));
-        }
         let section = report
             .sections
             .iter()
@@ -1932,9 +1937,23 @@ impl Store {
             [draft_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
-        let html = crate::draft::html(draft.sentences.iter().map(|s| s.text.as_str()));
         // Into an empty section, append and replace are the same.
         let replaces = mode == ApplyMode::Replace || crate::pii::plain_text(&section.body).trim().is_empty();
+        // Sentences taken over one by one are in the text already, discarded ones stay out.
+        let taken: Vec<&str> = draft
+            .sentences
+            .iter()
+            .filter(|s| match s.decision {
+                None => true,
+                Some(SentenceDecision::Accepted) => replaces,
+                Some(SentenceDecision::Rejected) => false,
+            })
+            .map(|s| s.text.as_str())
+            .collect();
+        if !draft.sentences.iter().any(|s| s.decision.is_none()) {
+            return Err(Error::Invalid("Der Entwurf ist leer".into()));
+        }
+        let html = crate::draft::html(taken);
         let (body, origin) = if replaces {
             (html, SectionOrigin::Ai)
         } else {
@@ -1967,6 +1986,7 @@ impl Store {
             actor: ACTOR, action: "report.draft_apply", entity_type: "report", entity_id: Some(report_id),
             meta: json!({ "draft_id": draft_id, "section": draft.section_key, "mode": mode.as_str(), "sentences": draft.sentences.len() }),
         })?;
+        focus::sync_review(&tx, report_id)?;
         tx.commit()?;
         self.report(report_id)
     }
@@ -2105,6 +2125,7 @@ impl Store {
             return Err(Error::NotFound(format!("section {key}")));
         }
         tx.execute("UPDATE report SET updated_at = ?2 WHERE id = ?1", params![report_id, ts])?;
+        focus::sync_review(&tx, report_id)?;
         tx.commit()?;
         Ok(())
     }
@@ -2129,6 +2150,7 @@ impl Store {
             actor: ACTOR, action: "report.section_relevance", entity_type: "report", entity_id: Some(report_id),
             meta: json!({ "section": key, "not_relevant": on }),
         })?;
+        focus::sync_review(&tx, report_id)?;
         tx.commit()?;
         self.report(report_id)
     }
@@ -3393,6 +3415,105 @@ mod tests {
         store.seed_builtin_templates().unwrap();
         let t = store.template("ptv3-erst-umwandlung").unwrap();
         assert!(t.sections.iter().any(|s| s.optional && !s.asks.is_empty()));
+    }
+
+    #[test]
+    fn focus_mode_takes_sentences_over_one_by_one_and_sets_in_review() {
+        use crate::draft::{DraftSentence, Parsed, SectionResult};
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let ep = store
+            .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Vt, age_group: AgeGroup::Adult, setting: Setting::Einzel })
+            .unwrap();
+        note_with_tagged_facts(&store, &p, &ep, "2026-02-10T09:00:00Z", &[("verlauf", "Panik im Bus", &["symptomatik_befund"])]);
+        let facts = store.episode_facts(&ep.id).unwrap();
+        let app = store.create_application(&ep.id, ApplicationKind::Erstantrag).unwrap();
+        let rid = app.report_id.clone().unwrap();
+        let meta = DraftMeta { provider: "local".into(), model: "m".into(), prompt_hash: "ph".into(), instructed: false, session_ids: None, source: DraftSource::Facts };
+        let sentence = |t: &str| DraftSentence { text: t.into(), facts: vec![0] };
+        let run = |key: &str, s: Vec<DraftSentence>| vec![SectionResult { key: key.into(), parsed: Parsed { sentences: s, dropped: 0 }, with_existing: false }];
+        let choice = |id: &str, accept: bool, text: Option<&str>| SentenceChoice { sentence_id: id.into(), accept, text: text.map(Into::into) };
+        let body = |r: &Report, k: &str| r.sections.iter().find(|s| s.key == k).unwrap().body.clone();
+
+        let d = store.save_drafts(&rid, &meta, &run("symptomatik_befund", vec![sentence("A."), sentence("B."), sentence("C."), sentence("D.")]), &facts, &[]).unwrap();
+        let d = d.into_iter().find(|d| d.section_key == "symptomatik_befund").unwrap();
+        let ids: Vec<String> = d.sentences.iter().map(|s| s.id.clone()).collect();
+        let r = store.decide_sentences(&rid, &d.id, &[choice(&ids[0], true, None)]).unwrap();
+        assert_eq!(body(&r, "symptomatik_befund"), "<p>A.</p>");
+        let r = store.decide_sentences(&rid, &d.id, &[choice(&ids[1], false, None), choice(&ids[2], true, Some("  C   in  ihren Worten. "))]).unwrap();
+        assert_eq!(body(&r, "symptomatik_befund"), "<p>A. C in ihren Worten.</p>");
+        assert_eq!(r.sections.iter().find(|s| s.key == "symptomatik_befund").unwrap().origin, SectionOrigin::Mixed);
+        assert!(store.decide_sentences(&rid, &d.id, &[choice(&ids[0], true, None)]).is_err(), "decided once");
+        let open = store.section_drafts(&rid).unwrap().into_iter().find(|x| x.id == d.id).unwrap();
+        assert_eq!(open.status, DraftStatus::Proposed);
+        assert_eq!(open.sentences.iter().map(|s| (s.decision, s.edited)).collect::<Vec<_>>(), [
+            (Some(SentenceDecision::Accepted), false),
+            (Some(SentenceDecision::Rejected), false),
+            (Some(SentenceDecision::Accepted), true),
+            (None, false),
+        ]);
+        // "Alle übernehmen" on the rest appends only what is still undecided.
+        let r = store.apply_draft(&rid, &d.id, ApplyMode::Append).unwrap();
+        assert_eq!(body(&r, "symptomatik_befund"), "<p>A. C in ihren Worten.</p><p>D.</p>");
+
+        // The last decision closes the draft: rejected when nothing was taken over.
+        let d = store.save_drafts(&rid, &meta, &run("somatik", vec![sentence("X.")]), &facts, &[]).unwrap();
+        let d = d.into_iter().find(|d| d.section_key == "somatik").unwrap();
+        store.decide_sentences(&rid, &d.id, &[choice(&d.sentences[0].id, false, None)]).unwrap();
+        assert!(store.section_drafts(&rid).unwrap().iter().all(|x| x.id != d.id));
+
+        // in_review once every section has text or is "nicht relevant" and no proposal waits.
+        let status = |s: &Store| s.report(&rid).unwrap().status;
+        let report = store.report(&rid).unwrap();
+        for sec in &report.sections {
+            if sec.key != "somatik" && !section_filled(&sec.body) {
+                store.save_section(&rid, &sec.key, "<p>Text.</p>").unwrap();
+            }
+        }
+        assert_eq!(status(&store), ReportStatus::Draft, "Somatik is still empty");
+        store.save_drafts(&rid, &meta, &run("somatik", vec![]), &facts, &[]).unwrap();
+        store.set_section_not_relevant(&rid, "somatik", true).unwrap();
+        assert_eq!(status(&store), ReportStatus::InReview, "its waiting proposal doesn't count");
+        let d = store.save_drafts(&rid, &meta, &run("symptomatik_befund", vec![sentence("Neu.")]), &facts, &[]).unwrap();
+        assert_eq!(status(&store), ReportStatus::Draft, "a new proposal waits");
+        let d = d.into_iter().find(|x| x.status == DraftStatus::Proposed && x.section_key == "symptomatik_befund").unwrap();
+        store.decide_sentences(&rid, &d.id, &[choice(&d.sentences[0].id, true, None)]).unwrap();
+        assert_eq!(status(&store), ReportStatus::InReview);
+        store.save_section(&rid, "symptomatik_befund", "<p></p>").unwrap();
+        assert_eq!(status(&store), ReportStatus::Draft, "emptied again");
+        store.save_section(&rid, "symptomatik_befund", "<p>Wieder.</p>").unwrap();
+        store.sign_report(&rid, "M. Berger").unwrap();
+        assert_eq!(status(&store), ReportStatus::Signed);
+        assert!(audit::list(store.conn(), 200).unwrap().iter().any(|e| e.action == "report.status"));
+    }
+
+    #[test]
+    fn applied_fact_tags_change_afterwards() {
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let ep = store
+            .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Vt, age_group: AgeGroup::Adult, setting: Setting::Einzel })
+            .unwrap();
+        note_with_tagged_facts(&store, &p, &ep, "2026-02-10T09:00:00Z", &[("verlauf", "Panik im Bus", &["symptomatik_befund"])]);
+        let fact = store.episode_facts(&ep.id).unwrap().remove(0);
+        store.set_fact_sections(&fact.fact_id, &["lebensgeschichte".into(), "symptomatik_befund".into(), "lebensgeschichte".into()]).unwrap();
+        let tags = || store.episode_facts(&ep.id).unwrap()[0].bericht.clone().unwrap();
+        assert_eq!(tags(), ["lebensgeschichte", "symptomatik_befund"]);
+        let sources: Vec<(String, String)> = store
+            .conn()
+            .prepare("SELECT section_key, source FROM note_fact_section ORDER BY section_key")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(sources, [("lebensgeschichte".into(), "therapist".into()), ("symptomatik_befund".into(), "ai".into())]);
+        store.set_fact_sections(&fact.fact_id, &[]).unwrap();
+        assert!(tags().is_empty());
+        assert!(store.set_fact_sections(&fact.fact_id, &["Bad Key".into()]).is_err());
+        assert!(store.set_fact_sections("nope", &[]).is_err());
+        let e = audit::list(store.conn(), 50).unwrap().into_iter().find(|e| e.action == "note.fact_tags").unwrap();
+        assert!(!e.meta_json.contains("Panik"), "no text in the audit");
     }
 
     #[test]

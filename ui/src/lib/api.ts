@@ -64,6 +64,7 @@ import type { ReportAnswer } from '@/bindings/ReportAnswer'
 import type { AnswerSource } from '@/bindings/AnswerSource'
 import type { SectionDef } from '@/bindings/SectionDef'
 import type { SectionDraft } from '@/bindings/SectionDraft'
+import type { SentenceChoice } from '@/bindings/SentenceChoice'
 import type { SttConfig } from '@/bindings/SttConfig'
 import type { CloudSttModel } from '@/bindings/CloudSttModel'
 import type { SttTarget } from '@/bindings/SttTarget'
@@ -503,6 +504,12 @@ export const api = {
   rejectDraft: (reportId: string, draftId: string) => invoke<SectionDraft[]>('report_draft_reject', { reportId, draftId }),
   applyDraft: (reportId: string, draftId: string, mode: ApplyMode) =>
     invoke<Report>('report_draft_apply', { reportId, draftId, mode }),
+  /** Focus mode: sentences taken over (maybe in her wording) or discarded one by one. */
+  decideSentences: (reportId: string, draftId: string, choices: SentenceChoice[]) =>
+    invoke<Report>('report_draft_decide', { reportId, draftId, choices }),
+  /** The Bericht sections an applied fact belongs to (Erst-/Umwandlungsbericht keys). */
+  setFactSections: (reportId: string, factId: string, sections: string[]) =>
+    invoke<void>('fact_sections_set', { reportId, factId, sections }),
 
   local: () => invoke<LocalOverview>('local_overview'),
   downloadLocalModel: (id: string) => invoke<void>('local_model_download', { id }),

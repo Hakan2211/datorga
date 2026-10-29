@@ -61,3 +61,25 @@ export function addChip(text: string, chip: string): string {
   }
   return text.trim() ? `${text.trim().replace(/[;,]$/, '')}${CHIP_SEP}${chip}` : chip
 }
+
+/** A section in the focus mode's list: taken over, proposal waiting, still empty, or left out. */
+export type SectionState = 'done' | 'proposal' | 'open' | 'skipped'
+
+export function sectionState(o: { notRelevant: boolean; proposal: boolean; filled: boolean }): SectionState {
+  return o.notRelevant ? 'skipped' : o.proposal ? 'proposal' : o.filled ? 'done' : 'open'
+}
+
+/** Ready for step 4 (mirrors `store::focus::sync_review`): every section done or left out. */
+export function allSectionsDone(states: SectionState[]): boolean {
+  return states.length > 0 && states.every((s) => s === 'done' || s === 'skipped')
+}
+
+/** The next section after `from` (wrapping) that still needs her, or null when none does. */
+export function nextOpenSection(keys: string[], states: Record<string, SectionState>, from: string): string | null {
+  const at = keys.indexOf(from)
+  for (let i = 1; i <= keys.length; i++) {
+    const k = keys[(at + i) % keys.length]
+    if (states[k] === 'proposal' || states[k] === 'open') return k
+  }
+  return null
+}

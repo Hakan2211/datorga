@@ -111,10 +111,8 @@ function report(id: string, patch: Partial<ReportSummary> = {}): ReportSummary {
 }
 
 describe('board', () => {
-  it('puts a fully written draft under review', () => {
-    expect(boardColumn(report('a', { sections_filled: 5 }))).toBe('draft')
-    expect(boardColumn(report('a', { sections_filled: 7 }))).toBe('review')
-    expect(boardColumn(report('a', { sections_total: 0 }))).toBe('draft')
+  it('follows the status', () => {
+    expect(boardColumn(report('a', { sections_filled: 7 }))).toBe('draft')
     expect(boardColumn(report('a', { status: 'in_review' }))).toBe('review')
     expect(boardColumn(report('a', { status: 'exported' }))).toBe('exported')
   })

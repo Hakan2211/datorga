@@ -7,8 +7,6 @@ import {
   AlertTriangle,
   ArrowRight,
   CheckCircle2,
-  ChevronDown,
-  CircleSlash,
   CornerDownLeft,
   Download,
   Eye,
@@ -24,20 +22,21 @@ import type { ApplyMode } from '@/bindings/ApplyMode'
 import type { FactEdit } from '@/bindings/FactEdit'
 import type { SectionDef } from '@/bindings/SectionDef'
 import type { SectionDraft } from '@/bindings/SectionDraft'
+import type { SentenceChoice } from '@/bindings/SentenceChoice'
 import type { SourceSegment } from '@/bindings/SourceSegment'
 import { Addenda } from '@/components/addenda'
 import { FactDraftCard } from '@/components/fact-draft'
-import { DraftDialog, DraftProposal, DraftSources, ReportDraftCard } from '@/components/report-draft'
+import { DraftDialog, DraftProposal, DraftSources, type DraftPreset } from '@/components/report-draft'
 import { AutoDraft } from '@/components/autopilot'
 import { StartStep } from '@/components/lotse/start-step'
 import { QuestionsStep, openQuestions } from '@/components/lotse/questions-step'
+import { SectionsStep } from '@/components/lotse/sections-step'
 import { Page, PageHeader } from '@/components/app-shell'
-import { DiagnosisRows } from '@/components/diagnoses'
 import { StatusBadge, Stepper, StickyActionBar, formatDate, stepStates } from '@/components/bits'
 import { useReportExport, type ExportFormat } from '@/components/report-export'
 import { ReportDocument, type DocumentFrame } from '@/components/report-document'
 import { ReportPreview } from '@/components/report-preview'
-import { RichField } from '@/components/rich-field'
+import { SectionEditor } from '@/components/section-editor'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -47,10 +46,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Toggle } from '@/components/ui/toggle'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { api, errorMessage, q, type ReportView } from '@/lib/api'
-import { appendParagraph, estimatePages, isBlank, parseDiagnoses, sectionText } from '@/lib/report'
+import { allSectionsDone, nextOpenSection, sectionState, type SectionState } from '@/lib/lotse'
+import { appendParagraph, estimatePages, isBlank, sectionText } from '@/lib/report'
 import { cn } from '@/lib/utils'
 
-type ReportSearch = { autodraft?: boolean; step?: LotseStep }
+type ReportSearch = { autodraft?: boolean; step?: LotseStep; section?: string; doc?: boolean }
 
 export const Route = createFileRoute('/reports/$reportId')({
   component: ReportEditorPage,
@@ -59,6 +59,9 @@ export const Route = createFileRoute('/reports/$reportId')({
   validateSearch: (s: Record<string, unknown>): ReportSearch => ({
     ...(s.autodraft === true || s.autodraft === 'true' ? { autodraft: true } : {}),
     ...(LOTSE_STEPS.includes(s.step as LotseStep) ? { step: s.step as LotseStep } : {}),
+    // `section`: the section open in the focus mode; `doc`: "Ganzes Dokument" instead of the focus.
+    ...(typeof s.section === 'string' && /^[a-z_]+$/.test(s.section) ? { section: s.section } : {}),
+    ...(s.doc === true || s.doc === 'true' ? { doc: true } : {}),
   }),
 })
 
@@ -66,9 +69,11 @@ function ReportEditorPage() {
   const { reportId } = Route.useParams()
   const view = useQuery({ ...q.report(reportId), staleTime: Infinity })
   if (!view.data) return null
-  // Keyed so local editor state resets when the report changes (after signing, another Antragsart).
+  // Keyed so local editor state resets when the report changes (after signing, another Antragsart),
+  // not when it moves between draft and in_review.
   const { report, application } = view.data
-  return <ReportEditor key={`${reportId}:${report.status}:${report.template_key}:${application?.kind}`} view={view.data} />
+  const locked = report.status === 'signed' || report.status === 'exported'
+  return <ReportEditor key={`${reportId}:${locked ? report.status : 'open'}:${report.template_key}:${application?.kind}`} view={view.data} />
 }
 
 const LOTSE_STEPS = ['start', 'fragen', 'abschnitte', 'pruefen', 'fertig'] as const
@@ -205,7 +210,9 @@ function ReportEditor({ view }: { view: ReportView }) {
   const drafts = useQuery(q.reportDrafts(report.id))
   const templates = useQuery({ ...q.templates(), enabled: !isNote })
   const noteSections = templates.data?.find((tp) => tp.key === 'sitzungsnotiz')?.sections ?? []
-  const [draftKeys, setDraftKeys] = useState<string[] | null>(null)
+  const [draftKeys, setDraftKeys] = useState<{ keys: string[]; preset?: DraftPreset } | null>(null)
+  // Focus mode "Optionen": sessions and "ergänzen" for the drafts that follow.
+  const [draftOptions, setDraftOptions] = useState<DraftPreset>({})
   const search = Route.useSearch()
   const autodraft = search.autodraft === true
   const navigate = useNavigate()
@@ -220,9 +227,9 @@ function ReportEditor({ view }: { view: ReportView }) {
     [navigate, report.id],
   )
   // The draft may send the sections' current text along: save pending edits first.
-  const openDraft = (keys: string[]) => {
+  const openDraft = (keys: string[], preset?: DraftPreset) => {
     flush()
-      .then(() => setDraftKeys(keys))
+      .then(() => setDraftKeys({ keys, preset }))
       .catch((e) => toast.error(errorMessage(e)))
   }
   const applyDraft = async (d: SectionDraft, mode: ApplyMode) => {
@@ -232,6 +239,16 @@ function ReportEditor({ view }: { view: ReportView }) {
   }
   const rejectDraft = async (d: SectionDraft) => {
     qc.setQueryData(q.reportDrafts(report.id).queryKey, await api.rejectDraft(report.id, d.id))
+    void qc.invalidateQueries({ queryKey: ['reports'] })
+  }
+  // Focus mode: sentence by sentence; taken-over ones land in the section text.
+  const decideSentences = async (d: SectionDraft, choices: SentenceChoice[]) => {
+    await flushThen(() => api.decideSentences(report.id, d.id, choices))
+    await qc.invalidateQueries({ queryKey: ['reportDrafts', report.id] })
+  }
+  const applyRest = async (d: SectionDraft, mode: ApplyMode) => {
+    await flushThen(() => api.applyDraft(report.id, d.id, mode))
+    await qc.invalidateQueries({ queryKey: ['reportDrafts', report.id] })
   }
 
   const pages = useMemo(
@@ -267,6 +284,26 @@ function ReportEditor({ view }: { view: ReportView }) {
   const current = REPORT_FLOW.find((k) => states[k] === 'current')
   const emptyDraftable = draftable.filter((s) => isBlank(bodies[s.key] ?? '')).map((s) => s.key)
 
+  // Focus mode: each section taken over, waiting for a proposal decision, empty, or left out.
+  const sectionStates = useMemo(
+    () =>
+      Object.fromEntries(
+        template.sections.map((s) => [
+          s.key,
+          sectionState({
+            notRelevant: notRelevant.has(s.key),
+            proposal: proposals.some((d) => d.section_key === s.key),
+            filled: !isBlank(bodies[s.key] ?? ''),
+          }),
+        ]),
+      ) as Record<string, SectionState>,
+    [template.sections, notRelevant, proposals, bodies],
+  )
+  const sectionsDone = allSectionsDone(Object.values(sectionStates))
+  const sectionKeys = template.sections.map((s) => s.key)
+  const firstOpen = sectionKeys.find((k) => sectionStates[k] === 'proposal' || sectionStates[k] === 'open') ?? sectionKeys[0]
+  const focusKey = search.section && sectionKeys.includes(search.section) ? search.section : firstOpen
+
   // Bericht-Lotse: an untouched Bericht opens on the start step, anything else on its sections.
   const anyProse = template.sections.some((s) => s.field === 'prose' && !isBlank(bodies[s.key] ?? ''))
   const touched = anyProse || (drafts.data?.length ?? 0) > 0
@@ -276,13 +313,19 @@ function ReportEditor({ view }: { view: ReportView }) {
       { key: 'start', done: readOnly || touched },
       // Done once nothing is open or the drafting has started; text alone doesn't answer them.
       { key: 'fragen', done: readOnly || (drafts.data?.length ?? 0) > 0 || (!!questions.data && open === 0) },
-      { key: 'abschnitte', done: readOnly || (!blocked && proposals.length === 0) },
+      { key: 'abschnitte', done: readOnly || sectionsDone },
       { key: 'pruefen', done: readOnly },
       { key: 'fertig', done: exported },
     ],
   )
   const setStep = (step: LotseStep, replace = false) =>
-    void navigate({ to: '/reports/$reportId', params: { reportId: report.id }, search: (s: ReportSearch) => ({ ...s, step }), replace })
+    void navigate({ to: '/reports/$reportId', params: { reportId: report.id }, search: (s: ReportSearch) => ({ ...s, step, doc: undefined }), replace })
+  const selectSection = (section: string) =>
+    void navigate({ to: '/reports/$reportId', params: { reportId: report.id }, search: (s: ReportSearch): ReportSearch => ({ ...s, step: 'abschnitte', section }) })
+  // "Ganzes Dokument": today's editor as a view, from every step; back to the focus mode from there.
+  const showDocument = (on: boolean) =>
+    void navigate({ to: '/reports/$reportId', params: { reportId: report.id }, search: (s: ReportSearch) => ({ ...s, step: on ? s.step : 'abschnitte', doc: on || undefined }) })
+  const focusOn = flowOn && viewing === 'abschnitte' && !search.doc
   const openStep = (step: LotseStep) => {
     setStep(step)
     // Until slices 39–40 give them their own screens, Prüfen and Fertig are places on the editor page.
@@ -401,6 +444,26 @@ function ReportEditor({ view }: { view: ReportView }) {
               onChange={update}
             />
           </>
+        ) : focusOn ? (
+          <SectionsStep
+            view={view}
+            bodies={bodies}
+            states={sectionStates}
+            drafts={drafts.data ?? []}
+            current={focusKey}
+            onSelect={selectSection}
+            readOnly={readOnly}
+            canDraft={drafting && !!llm.data?.config.active}
+            noteSections={noteSections}
+            options={draftOptions}
+            onOptions={setDraftOptions}
+            onChange={update}
+            onRelevance={setRelevance}
+            onDecide={decideSentences}
+            onApply={applyRest}
+            onReject={rejectDraft}
+            onDraft={openDraft}
+          />
         ) : flowOn && viewing === 'fragen' ? (
           <QuestionsStep
             reportId={report.id}
@@ -449,16 +512,6 @@ function ReportEditor({ view }: { view: ReportView }) {
               />
             )}
             {drafting && autodraft && <AutoDraft reportId={report.id} keys={emptyDraftable} onDone={endAutodraft} />}
-            {drafting && (
-              <div id="flow-draft" className="scroll-mt-6">
-                <ReportDraftCard
-                  reportId={report.id}
-                  sections={draftable}
-                  isEmpty={(key) => isBlank(bodies[key] ?? '')}
-                  onDraft={openDraft}
-                />
-              </div>
-            )}
             {mode === 'document' && proposals.length > 0 && !readOnly && (
               <div className="flex items-center justify-between gap-3 rounded-md border border-primary/30 bg-primary/5 px-4 py-2 text-sm">
                 <span className="flex items-center gap-2">
@@ -481,7 +534,6 @@ function ReportEditor({ view }: { view: ReportView }) {
                 dictateFor={report.id}
               />
             ) : template.sections.map((s) => {
-              const canDraft = drafting && draftable.some((d) => d.key === s.key)
               const proposal = drafts.data?.find((d) => d.section_key === s.key && d.status === 'proposed')
               const applied = drafts.data?.filter((d) => d.section_key === s.key && d.status === 'applied') ?? []
               return (
@@ -496,13 +548,6 @@ function ReportEditor({ view }: { view: ReportView }) {
                   dictateFor={report.id}
                   notRelevant={notRelevant.has(s.key)}
                   onRelevance={flowOn && s.optional && !readOnly ? (off) => setRelevance(s.key, off) : undefined}
-                  action={
-                    canDraft && (
-                      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => openDraft([s.key])}>
-                        <Sparkles className="size-3.5" /> {t('draft.section')}
-                      </Button>
-                    )
-                  }
                   above={
                     proposal &&
                     !readOnly && (
@@ -521,16 +566,6 @@ function ReportEditor({ view }: { view: ReportView }) {
                 />
               )
             })}
-            {draftKeys && (
-              <DraftDialog
-                reportId={report.id}
-                patientId={patient.id}
-                keys={draftKeys}
-                sections={draftable}
-                filled={draftKeys.filter((k) => !isBlank(bodies[k] ?? ''))}
-                onClose={() => setDraftKeys(null)}
-              />
-            )}
             {isNote && readOnly && <Addenda reportId={report.id} addenda={report.addenda} noteSigner={report.signed_by} />}
           </div>
           {preview ? (
@@ -578,6 +613,17 @@ function ReportEditor({ view }: { view: ReportView }) {
         </>
         )}
       </Page>
+      {draftKeys && (
+        <DraftDialog
+          reportId={report.id}
+          patientId={patient.id}
+          keys={draftKeys.keys}
+          sections={draftable}
+          filled={draftKeys.keys.filter((k) => !isBlank(bodies[k] ?? ''))}
+          preset={draftKeys.preset}
+          onClose={() => setDraftKeys(null)}
+        />
+      )}
       <ReportBar
         info={
           <>
@@ -587,17 +633,40 @@ function ReportEditor({ view }: { view: ReportView }) {
                 ≈ {pages.toFixed(1)} / {template.rules.target_pages} {t('report.pages')}
               </span>
             )}
+            {focusOn && (
+              <span data-testid="focus-progress">
+                {t('lotse.focus.progress', {
+                  done: Object.values(sectionStates).filter((st) => st === 'done' || st === 'skipped').length,
+                  total: sectionKeys.length,
+                })}
+              </span>
+            )}
+            {flowOn && (viewing === 'start' || viewing === 'fragen' || viewing === 'abschnitte') && (
+              <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => showDocument(!search.doc)} data-testid="lotse-document">
+                {search.doc ? t('lotse.focus.backToFocus') : t('lotse.focus.document')}
+              </Button>
+            )}
           </>
         }
         step={barStep}
         lotseStep={flowOn && !readOnly && (viewing === 'start' || viewing === 'fragen') ? viewing : null}
+        focus={
+          focusOn && !readOnly
+            ? {
+                done: sectionsDone,
+                next: nextOpenSection(sectionKeys, sectionStates, focusKey),
+                onNext: () => setStep('pruefen'),
+                onSection: selectSection,
+              }
+            : null
+        }
         openQuestions={open}
         onLotseNext={setStep}
         canDraftEmpty={drafting && !!llm.data?.config.active && emptyDraftable.length > 0 && material > 0}
         proposals={proposals.length}
         onDraftEmpty={() => {
           if (viewing === 'start' || viewing === 'fragen') setStep('abschnitte')
-          openDraft(emptyDraftable)
+          openDraft(emptyDraftable, draftOptions)
         }}
         onJump={jump}
         onExport={() => exportAs.mutate('pdf')}
@@ -622,6 +691,7 @@ function ReportBar({
   info,
   step,
   lotseStep,
+  focus,
   openQuestions,
   onLotseNext,
   canDraftEmpty,
@@ -635,6 +705,8 @@ function ReportBar({
   step: ReportStep | null
   /** A Lotse step with its own bar: start leads to the questions (if any are open), the questions to the draft. */
   lotseStep: 'start' | 'fragen' | null
+  /** Lotse step 3 (focus mode): onward to Prüfen once every section is done, else to the next open one. */
+  focus: { done: boolean; next: string | null; onNext: () => void; onSection: (key: string) => void } | null
   openQuestions: number
   onLotseNext: (step: LotseStep) => void
   canDraftEmpty: boolean
@@ -648,7 +720,23 @@ function ReportBar({
   let action: ReactNode = null
   // After the questions, drafting the empty sections is the next thing even in a half-written Bericht.
   const toDraft = canDraftEmpty && proposals === 0 && (step === 'draft' || lotseStep === 'fragen')
-  if (lotseStep === 'start' && openQuestions > 0) {
+  if (focus) {
+    action = focus.done ? (
+      <Button onClick={focus.onNext} data-testid="lotse-next">
+        {t('lotse.focus.toCheck')} <ArrowRight />
+      </Button>
+    ) : canDraftEmpty && proposals === 0 ? (
+      <Button onClick={onDraftEmpty} data-testid="lotse-draft-empty">
+        <Sparkles /> {t('lotse.focus.draftEmpty')}
+      </Button>
+    ) : (
+      focus.next && (
+        <Button variant="outline" onClick={() => focus.onSection(focus.next!)} data-testid="lotse-next-open">
+          {t('lotse.focus.nextOpen')} <ArrowRight />
+        </Button>
+      )
+    )
+  } else if (lotseStep === 'start' && openQuestions > 0) {
     action = (
       <Button onClick={() => onLotseNext('fragen')} data-testid="lotse-next">
         {t('lotse.nextQuestions', { count: openQuestions })} <ArrowRight />
@@ -709,128 +797,6 @@ function ReportBar({
     <StickyActionBar info={info} className="mt-auto">
       {action}
     </StickyActionBar>
-  )
-}
-
-function SectionEditor({
-  def,
-  body,
-  readOnly,
-  active = false,
-  onFocus,
-  onChange,
-  action,
-  above,
-  below,
-  dictateFor,
-  notRelevant = false,
-  onRelevance,
-}: {
-  def: SectionDef
-  body: string
-  readOnly: boolean
-  /** Marked "nicht relevant": the editor collapses to a note. */
-  notRelevant?: boolean
-  /** Set for an optional section that may be marked "nicht relevant". */
-  onRelevance?: (notRelevant: boolean) => void
-  /** Report id: voice mode in this section's toolbar. */
-  dictateFor?: string
-  active?: boolean
-  onFocus?: () => void
-  onChange: (body: string) => void
-  /** Next to the heading (e.g. "Entwurf…"). */
-  action?: ReactNode
-  /** Between the hints and the editor (e.g. an AI proposal). */
-  above?: ReactNode
-  /** Under the editor (e.g. sources of applied AI text). */
-  below?: ReactNode
-}) {
-  const { t } = useTranslation()
-  const [showHints, setShowHints] = useState(true)
-  return (
-    <section
-      id={`section-${def.key}`}
-      onFocusCapture={onFocus}
-      className={cn('scroll-mt-6 space-y-2 border-l-2 border-transparent pl-3 -ml-3.5', active && 'border-primary/60')}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <h2 className={cn('font-serif text-[17px] leading-snug font-semibold', notRelevant && 'text-muted-foreground')}>
-          {def.number && <span className="mr-1.5 text-primary">{def.number}.</span>}
-          {def.heading}
-        </h2>
-        <div className="flex shrink-0 items-center gap-1">
-          {onRelevance && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 text-xs text-muted-foreground"
-              title={t('lotse.notRelevantHint')}
-              onClick={() => onRelevance(!notRelevant)}
-              data-testid={`relevance-${def.key}`}
-            >
-              {notRelevant ? t('lotse.markRelevant') : t('lotse.markNotRelevant')}
-            </Button>
-          )}
-          {!notRelevant && action}
-        </div>
-      </div>
-      {notRelevant ? (
-        <p className="rounded-md border border-dashed px-3 py-2 text-[13px] text-muted-foreground">{t('lotse.notRelevantHint')}</p>
-      ) : (
-      <>
-      {def.hints.length > 0 && (
-        <div className="rounded-md bg-muted/60 px-3 py-2 text-[13px] text-muted-foreground">
-          <button
-            type="button"
-            className="flex items-center gap-1 text-xs font-medium tracking-wide uppercase"
-            onClick={() => setShowHints((v) => !v)}
-          >
-            <ChevronDown className={cn('size-3.5 transition-transform', !showHints && '-rotate-90')} />
-            {t('report.hints')}
-          </button>
-          {showHints && (
-            <ul className="mt-1.5 list-disc space-y-0.5 pl-5">
-              {def.hints.map((h, i) => (
-                <li key={i}>{h.text}</li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-      {!def.ai_allowed && (
-        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <CircleSlash className="size-3.5" /> {t('report.noAi')}
-        </p>
-      )}
-      {above}
-      {def.field === 'prose' ? (
-        <RichField value={body} onChange={onChange} placeholder={t('report.placeholder')} readOnly={readOnly} dictateFor={dictateFor} />
-      ) : (
-        <DiagnosesEditor body={body} onChange={onChange} readOnly={readOnly} />
-      )}
-      {below}
-      </>
-      )}
-    </section>
-  )
-}
-
-function DiagnosesEditor({ body, onChange, readOnly }: { body: string; onChange: (b: string) => void; readOnly: boolean }) {
-  const { t } = useTranslation()
-  const [state, setState] = useState(() => parseDiagnoses(body))
-  const commit = (next: typeof state) => {
-    setState(next)
-    const empty = next.diagnoses.length === 0 && !next.notes
-    onChange(empty ? '' : JSON.stringify(next))
-  }
-
-  return (
-    <div className="space-y-3 rounded-md border bg-card p-3">
-      <Label className="text-xs text-muted-foreground">{t('report.diagnoses')}</Label>
-      <DiagnosisRows value={state.diagnoses} readOnly={readOnly} onChange={(diagnoses) => commit({ ...state, diagnoses })} />
-      <Label className="block pt-2 text-xs text-muted-foreground">{t('report.notes')}</Label>
-      <RichField value={state.notes} onChange={(notes) => commit({ ...state, notes })} readOnly={readOnly} />
-    </div>
   )
 }
 

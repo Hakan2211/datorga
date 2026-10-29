@@ -85,6 +85,10 @@ str_enum!(
     AnswerSource { Typed => "typed", Dictated => "dictated", Chip => "chip" }
 );
 str_enum!(
+    /// Her decision on one sentence of a proposed draft (focus mode, slice 39).
+    SentenceDecision { Accepted => "accepted", Rejected => "rejected" }
+);
+str_enum!(
     /// How a section draft goes into the section: instead of its text or after it.
     ApplyMode { Replace => "replace", Append => "append" }
 );
@@ -625,6 +629,10 @@ pub struct DraftSentenceView {
     pub sources: Vec<EpisodeFact>,
     /// Her answers to Lotse questions it rests on ("Ihre Angabe").
     pub answers: Vec<ReportAnswer>,
+    /// Taken over or discarded one by one in the focus mode; `None` while undecided.
+    pub decision: Option<SentenceDecision>,
+    /// Taken over in her own wording.
+    pub edited: bool,
 }
 
 /// The therapist's answer to one Lotse question of a Bericht (slice 38).

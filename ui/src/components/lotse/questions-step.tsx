@@ -157,12 +157,12 @@ function groupBySection(items: QuestionView[]): [string, QuestionView[]][] {
 }
 
 /** The PTV 3 heading up to its first comma or parenthesis. */
-function shortHeading(h: string) {
+export function shortHeading(h: string) {
   const i = h.search(/[,(]/)
   return (i > 0 ? h.slice(0, i) : h).trim()
 }
 
-function QuestionCard({ reportId, question, readOnly }: { reportId: string; question: QuestionView; readOnly: boolean }) {
+export function QuestionCard({ reportId, question, readOnly }: { reportId: string; question: QuestionView; readOnly: boolean }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const [text, setTextState] = useState(question.answer?.text ?? '')

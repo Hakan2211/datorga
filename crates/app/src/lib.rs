@@ -27,7 +27,7 @@ use thera_core::models::ModelInfo;
 use thera_core::pii::{self, CheckItem};
 use thera_core::pseudo::EntityKind;
 use thera_core::render;
-use thera_core::store::{day_before, AutopilotRun, CoveredAsk, DaySpend, GapCheckMeta, LlmSpend, SessionSummary, SpendReport, Store, TimelineGroup};
+use thera_core::store::{day_before, AutopilotRun, CoveredAsk, DaySpend, GapCheckMeta, LlmSpend, SentenceChoice, SessionSummary, SpendReport, Store, TimelineGroup};
 use thera_core::summary;
 use thera_core::stt::{self, CloudStt, CloudSttModel, SttConfig, SttEngine, WhisperCli};
 use thera_core::templates::{Context, Template};
@@ -2933,6 +2933,30 @@ fn report_draft_apply(state: State<'_, AppState>, report_id: String, draft_id: S
     state.with(|s| s.apply_draft(&report_id, &draft_id, mode))
 }
 
+/// Focus mode: sentences of a proposal taken over (maybe in her wording) or discarded.
+#[tauri::command]
+fn report_draft_decide(state: State<'_, AppState>, report_id: String, draft_id: String, choices: Vec<SentenceChoice>) -> CmdResult<Report> {
+    state.with(|s| s.decide_sentences(&report_id, &draft_id, &choices))
+}
+
+/// The Bericht sections an applied fact of this Bericht's episode belongs to (focus mode, "Fakten
+/// zu diesem Abschnitt"). Only the Erst-/Umwandlungsbericht's sections can be tags.
+#[tauri::command]
+fn fact_sections_set(state: State<'_, AppState>, report_id: String, fact_id: String, sections: Vec<String>) -> CmdResult<()> {
+    state.with(|s| {
+        let view = report_view(s, &report_id)?;
+        let Some(ep) = &view.report.episode_id else { return Err(thera_core::Error::Invalid("Der Bericht gehört zu keinem Behandlungsfall".into())) };
+        if !s.episode_facts(ep)?.iter().any(|f| f.fact_id == fact_id) {
+            return Err(thera_core::Error::NotFound(format!("Fakt {fact_id}")));
+        }
+        let allowed = draft_tag_keys(s, &view, false)?;
+        if allowed.is_empty() || sections.iter().any(|k| !allowed.contains(k)) {
+            return Err(thera_core::Error::Invalid("Diesem Abschnitt lassen sich keine Fakten zuordnen".into()));
+        }
+        s.set_fact_sections(&fact_id, &sections)
+    })
+}
+
 // ---------- live dictation + Diktat-Werkstatt (slice 24) ----------
 
 /// whisper-server stays loaded this long after the last dictation.
@@ -4035,6 +4059,8 @@ pub fn run() {
             report_drafts,
             report_draft_reject,
             report_draft_apply,
+            report_draft_decide,
+            fact_sections_set,
             local_overview,
             local_model_download,
             local_model_import,

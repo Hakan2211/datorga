@@ -67,8 +67,8 @@ export function matchesPatient(s: QueueSession, query: string): boolean {
 // ---------- Berichte ----------
 
 /**
- * Board columns. Nothing sets `in_review` yet, so a draft whose sections all have text counts as
- * ready for her review as well.
+ * Board columns, by status: a Bericht is `in_review` once every section is taken over or "nicht
+ * relevant" and no proposal waits (set by the backend since slice 39).
  */
 export type BoardColumn = 'draft' | 'review' | 'signed' | 'exported'
 export const BOARD_COLUMNS: BoardColumn[] = ['draft', 'review', 'signed', 'exported']
@@ -82,7 +82,7 @@ export function boardColumn(r: ReportSummary): BoardColumn {
     case 'in_review':
       return 'review'
     case 'draft':
-      return r.sections_total > 0 && r.sections_filled >= r.sections_total ? 'review' : 'draft'
+      return 'draft'
   }
 }
 
