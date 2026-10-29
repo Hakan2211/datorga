@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { PatientLabel } from '@/components/patient-label'
 import { q } from '@/lib/api'
 import { BOARD_COLUMNS, boardColumn, matchesReport, noReportFilter, sortBoard, type ReportFilter } from '@/lib/queue'
 import { cn, storedChoice } from '@/lib/utils'
@@ -108,14 +109,15 @@ function Reports() {
 function Board({ reports }: { reports: ReportSummary[] }) {
   const { t } = useTranslation()
   return (
-    <div className="grid grid-cols-4 gap-4" data-testid="reports-board">
+    // Columns keep a readable width and the board scrolls sideways when the side panel takes room.
+    <div className="grid auto-cols-[minmax(14rem,1fr)] grid-flow-col gap-4 overflow-x-auto pb-2" data-testid="reports-board">
       {BOARD_COLUMNS.map((col) => {
         const cards = reports.filter((r) => boardColumn(r) === col)
         return (
           <section key={col} className="flex min-w-0 flex-col gap-3 rounded-xl bg-muted/50 p-3" data-testid={`board-${col}`}>
-            <h2 className="flex items-center justify-between px-1 text-sm font-semibold">
-              {t(`reports.column.${col}`)}
-              <span className="text-xs font-normal text-muted-foreground tabular-nums">{cards.length}</span>
+            <h2 className="flex items-center justify-between gap-2 px-1 text-sm font-semibold">
+              <span className="min-w-0 truncate">{t(`reports.column.${col}`)}</span>
+              <span className="shrink-0 text-xs font-normal text-muted-foreground tabular-nums">{cards.length}</span>
             </h2>
             {cards.length === 0 ? (
               <p className="rounded-lg border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">{t('reports.columnEmpty')}</p>
@@ -137,18 +139,18 @@ function ReportCard({ report: r }: { report: ReportSummary }) {
     <Link
       to="/reports/$reportId"
       params={{ reportId: r.id }}
-      className="block rounded-lg border bg-card p-3.5 shadow-xs transition-colors hover:border-primary/40 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+      className="block min-w-0 overflow-hidden rounded-lg border bg-card p-3.5 shadow-xs transition-colors hover:border-primary/40 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
       data-testid="report-card"
     >
       <div className="flex items-start justify-between gap-2">
-        <span className="truncate text-sm font-medium">{r.patient_name}</span>
+        <PatientLabel name={r.patient_name} chiffre={r.chiffre} />
         {r.method && (
           <Badge variant="secondary" className="shrink-0">
             {r.method}
           </Badge>
         )}
       </div>
-      <div className="mt-0.5 text-sm text-muted-foreground">
+      <div className="mt-1 truncate text-sm text-muted-foreground">
         {r.kind ? t(`enums.kind.${r.kind}`) : '—'}
         {r.kind === 'fortfuehrung' && r.seq ? ` Nr. ${r.seq}` : ''}
       </div>
@@ -156,7 +158,7 @@ function ReportCard({ report: r }: { report: ReportSummary }) {
         <>
           <Progress value={pct} className="mt-3 h-1.5" />
           <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
-            <span className="whitespace-nowrap" data-testid="report-card-progress">{t('reports.sections', { filled: r.sections_filled, total: r.sections_total })}</span>
+            <span data-testid="report-card-progress">{t('reports.sections', { filled: r.sections_filled, total: r.sections_total })}</span>
             <Deadline report={r} />
           </div>
         </>
@@ -181,10 +183,10 @@ function Deadline({ report: r }: { report: ReportSummary }) {
         : t('reports.sessionsLeft', { count: r.sessions_left })
   return (
     <span
-      className={cn('flex items-center gap-1 whitespace-nowrap', r.sessions_left <= 1 && 'font-medium text-warning-foreground')}
+      className={cn('flex items-center gap-1', r.sessions_left <= 1 && 'font-medium text-warning-foreground')}
       data-testid="report-card-deadline"
     >
-      <CalendarClock className="size-3" />
+      <CalendarClock className="size-3 shrink-0" />
       {text}
     </span>
   )

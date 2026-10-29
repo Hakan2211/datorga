@@ -19,7 +19,7 @@ const GENDERS: Gender[] = ['w', 'm', 'd']
 const NO_GENDER = 'none'
 
 /** Photo change, applied after the patient itself is saved. */
-type PhotoChange = { kind: 'keep' } | { kind: 'set'; path: string } | { kind: 'remove' }
+type PhotoChange = { kind: 'keep' } | { kind: 'set'; path: string; preview: string } | { kind: 'remove' }
 
 const empty: PatientInput = {
   external_ref: null,
@@ -54,6 +54,7 @@ export function PatientFormDialog({
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState<PatientInput>(patient ? { ...patient } : empty)
   const [photo, setPhoto] = useState<PhotoChange>({ kind: 'keep' })
+  const [photoError, setPhotoError] = useState<string | null>(null)
 
   const save = useMutation({
     mutationFn: async () => {
@@ -85,7 +86,14 @@ export function PatientFormDialog({
       multiple: false,
       filters: [{ name: t('patients.photoFilter'), extensions: ['jpg', 'jpeg', 'png', 'webp'] }],
     })
-    if (typeof path === 'string') setPhoto({ kind: 'set', path })
+    if (typeof path !== 'string') return
+    // The preview is the normalized image as it will be stored, so a broken file shows up right away.
+    try {
+      setPhoto({ kind: 'set', path, preview: await api.patientPhotoPreview(path) })
+      setPhotoError(null)
+    } catch (e) {
+      setPhotoError(errorMessage(e))
+    }
   }
   const showsPhoto = photo.kind === 'set' || (photo.kind === 'keep' && hasPhoto)
 
@@ -139,13 +147,20 @@ export function PatientFormDialog({
               <PatientAvatar
                 patientId={patient?.id ?? ''}
                 hasPhoto={!!patient && hasPhoto && photo.kind === 'keep'}
+                src={photo.kind === 'set' ? photo.preview : undefined}
                 firstName={form.first_name}
                 lastName={form.last_name}
-                className="size-12 text-base"
+                className="size-16 text-lg"
               />
               <div className="min-w-0 flex-1">
                 {photo.kind === 'set' && <p className="truncate text-sm">{photo.path.split(/[\\/]/).pop()}</p>}
-                <p className="text-xs text-muted-foreground">{t('patients.photoHint')}</p>
+                {photoError ? (
+                  <p className="text-xs text-destructive" data-testid="patient-photo-error">
+                    {photoError}
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">{t('patients.photoHint')}</p>
+                )}
               </div>
               <Button type="button" variant="outline" size="sm" onClick={() => void pickPhoto()} data-testid="patient-photo-pick">
                 <ImagePlus /> {showsPhoto ? t('patients.photoChange') : t('patients.photoPick')}
@@ -156,7 +171,10 @@ export function PatientFormDialog({
                   variant="ghost"
                   size="icon"
                   aria-label={t('patients.photoRemove')}
-                  onClick={() => setPhoto(hasPhoto ? { kind: 'remove' } : { kind: 'keep' })}
+                  onClick={() => {
+                    setPhoto(hasPhoto ? { kind: 'remove' } : { kind: 'keep' })
+                    setPhotoError(null)
+                  }}
                 >
                   <X />
                 </Button>

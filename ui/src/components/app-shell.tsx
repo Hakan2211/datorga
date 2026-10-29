@@ -1,8 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react'
-import { Link, useMatch } from '@tanstack/react-router'
+import { Link, useCanGoBack, useMatch, useRouter } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import {
+  ArrowLeft,
   CalendarDays,
   CircleHelp,
   FileText,
@@ -81,6 +82,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const hide = useCallback(() => setPanel(null), [])
   const panelApi = useMemo(() => ({ panel, show: setPanel, hide }), [panel, hide])
 
+  const router = useRouter()
+  const canGoBack = useCanGoBack()
   const [palette, setPalette] = useState(false)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -88,10 +91,15 @@ export function AppShell({ children }: { children: ReactNode }) {
         e.preventDefault()
         setPalette((o) => !o)
       }
+      // The webview's own Alt+← would leave the router's history index out of step: handle it here.
+      if (e.altKey && e.key === 'ArrowLeft') {
+        e.preventDefault()
+        if (router.history.canGoBack()) router.history.back()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [router])
 
   return (
     <PanelContext.Provider value={panelApi}>
@@ -176,6 +184,22 @@ export function AppShell({ children }: { children: ReactNode }) {
           </aside>
           <div className="flex min-w-0 flex-1 flex-col">
             <header className="flex h-14 shrink-0 items-center gap-3 border-b px-6">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="-ml-2 size-9 text-muted-foreground"
+                    disabled={!canGoBack}
+                    onClick={() => router.history.back()}
+                    aria-label={t('shell.back')}
+                    data-testid="nav-back"
+                  >
+                    <ArrowLeft />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t('shell.back')} (Alt+←)</TooltipContent>
+              </Tooltip>
               <button
                 type="button"
                 onClick={() => setPalette(true)}

@@ -669,15 +669,31 @@ fn patient_photo(state: State<'_, AppState>, id: String) -> CmdResult<Option<Str
     Ok(jpeg.map(|j| format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(j))))
 }
 
-/// Reads the picked file and stores a normalized copy; the original file stays where it was.
-#[tauri::command]
-fn patient_photo_set(state: State<'_, AppState>, id: String, path: String) -> CmdResult<()> {
-    let len = std::fs::metadata(&path).map_err(|e| CmdError::Other(format!("Bild nicht lesbar: {e}")))?.len();
+fn read_photo_file(path: &str) -> CmdResult<Vec<u8>> {
+    let len = std::fs::metadata(path).map_err(|e| CmdError::Other(format!("Bild nicht lesbar: {e}")))?.len();
     if len as usize > thera_core::photo::MAX_UPLOAD {
         return Err(CmdError::Other("Das Bild ist zu groß (höchstens 25 MB).".into()));
     }
-    let bytes = std::fs::read(&path).map_err(|e| CmdError::Other(format!("Bild nicht lesbar: {e}")))?;
+    std::fs::read(path).map_err(|e| CmdError::Other(format!("Bild nicht lesbar: {e}")))
+}
+
+/// Reads the picked file and stores a normalized copy; the original file stays where it was.
+#[tauri::command]
+fn patient_photo_set(state: State<'_, AppState>, id: String, path: String) -> CmdResult<()> {
+    let bytes = read_photo_file(&path)?;
     state.with(|s| s.set_patient_photo(&id, &bytes))
+}
+
+/// The picked file normalized exactly as it would be stored, as a `data:` URL; nothing is saved.
+#[tauri::command]
+async fn patient_photo_preview(path: String) -> CmdResult<String> {
+    use base64::Engine as _;
+    tauri::async_runtime::spawn_blocking(move || -> CmdResult<String> {
+        let jpeg = thera_core::photo::normalize(&read_photo_file(&path)?)?;
+        Ok(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(jpeg)))
+    })
+    .await
+    .map_err(|e| CmdError::Other(e.to_string()))?
 }
 
 #[tauri::command]
@@ -3606,6 +3622,7 @@ pub fn run() {
             patient_cards,
             patient_photo,
             patient_photo_set,
+            patient_photo_preview,
             patient_photo_remove,
             patient_erase,
             consent_text,

@@ -27,6 +27,7 @@ import { Page, PageHeader } from '@/components/app-shell'
 import { EmptyState, SectionCard, StatusPill } from '@/components/bits'
 import { SessionDialog, invalidateSessions, type SessionDialogMode } from '@/components/session-dialog'
 import { usePrepareApplication } from '@/components/autopilot'
+import { PatientLabel } from '@/components/patient-label'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -283,8 +284,8 @@ function ApplicationDueRow({ item }: { item: DueItem }) {
   if (!c || !item.application_kind) return null
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 py-0.5 text-sm" data-testid="application-due">
-      <Link to="/patients/$patientId" params={{ patientId: item.patient_id }} className="font-mono text-xs hover:underline">
-        {item.chiffre ?? item.patient_name}
+      <Link to="/patients/$patientId" params={{ patientId: item.patient_id }} className="min-w-0 hover:underline">
+        <PatientLabel name={item.patient_name} chiffre={item.chiffre} />
       </Link>
       <span className="min-w-40 flex-1 text-muted-foreground">
         {t('today.applicationDue', { kind: t(`enums.kind.${item.application_kind}`), used: c.used, limit: c.limit })}
@@ -304,17 +305,16 @@ function ApplicationDueRow({ item }: { item: DueItem }) {
 
 function DueLink({ item }: { item: DueItem }) {
   const { t } = useTranslation()
-  const who = item.chiffre ?? item.patient_name
   const when = item.at ? format(new Date(item.at), item.kind === 'report_draft' ? 'd.M.' : 'EEE d.M., HH:mm', { locale: de }) : ''
   const label =
     item.kind === 'report_draft'
       ? `${t(`enums.kind.${item.application_kind}`)}${item.application_kind === 'fortfuehrung' && item.seq ? ` ${item.seq}` : ''}`
       : when
-  const cls = 'group flex items-center gap-2 rounded px-1 py-0.5 text-sm hover:bg-foreground/5'
+  const cls = 'group flex items-center gap-2 rounded px-1 py-1 text-sm hover:bg-foreground/5'
   const body = (
     <>
-      <span className="font-mono text-xs">{who}</span>
-      <span className="min-w-0 flex-1 truncate text-muted-foreground">{label}</span>
+      <PatientLabel name={item.patient_name} chiffre={item.chiffre} className="flex-1" />
+      <span className="shrink-0 text-xs text-muted-foreground">{label}</span>
       <ChevronRight className="size-3.5 text-muted-foreground opacity-0 group-hover:opacity-100" />
     </>
   )

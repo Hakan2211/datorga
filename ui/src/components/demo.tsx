@@ -32,9 +32,9 @@ export function DemoBanner() {
   const leave = useMutation({ mutationFn: api.demoLeave, onError: (e) => toast.error(errorMessage(e)) })
   if (!demo) return null
   return (
-    <div role="status" className="flex items-center gap-3 border-b bg-sand px-8 py-2.5 text-sm text-sand-foreground" data-testid="demo-banner">
+    <div role="status" className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b bg-sand px-8 py-2.5 text-sm text-sand-foreground" data-testid="demo-banner">
       <FlaskConical className="size-4 shrink-0" />
-      <span className="min-w-0 flex-1">
+      <span className="min-w-64 flex-1">
         <span className="font-medium">{t('demo.bannerTitle')}</span> {t('demo.bannerBody')}
       </span>
       <Button size="sm" variant="ghost" onClick={tour.start} disabled={tour.running}>

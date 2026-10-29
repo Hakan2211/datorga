@@ -303,6 +303,7 @@ export const api = {
   patientCards: (query: string, now: string) => invoke<PatientCard[]>('patient_cards', { query: query || null, now }),
   patientPhoto: (id: string) => invoke<string | null>('patient_photo', { id }),
   setPatientPhoto: (id: string, path: string) => invoke<void>('patient_photo_set', { id, path }),
+  patientPhotoPreview: (path: string) => invoke<string>('patient_photo_preview', { path }),
   removePatientPhoto: (id: string) => invoke<void>('patient_photo_remove', { id }),
 
   exportConsentForm: (patientId: string, kind: ConsentKind, path: string) =>

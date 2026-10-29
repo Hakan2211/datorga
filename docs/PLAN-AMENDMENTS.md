@@ -341,3 +341,12 @@ Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.
 | V7 | **The Demo-Praxis now shares the speech and local AI models** with the real practice (`<data>/models`); before, the demo looked in `<data>/demo/models` and always said "Kein Sprachmodell installiert". | Models hold no patient data; found while filming. |
 
 Fixed while filming: after signing a note or Bericht, every editor turning read-only fired an update and tried to save, which ended in the toast "signed reports are read-only" (TipTap's `setEditable` emits an update by default; now `setEditable(…, false)`).
+
+## 22. UI quick-fix decisions (slice 36, 2026-10-29; U1 by the user, the rest made while building, for the user to review)
+
+| # | Decision | Why |
+|---|---|---|
+| U1 | **Name on top, Chiffre small underneath** (user) in Heute → Fällig and on the Berichte board cards, via one shared `PatientLabel`. No avatar there: `DueItem` carries no photo flag, and the rows stay compact. | The name is what she recognizes; the Chiffre is still visible for the Gutachter context. |
+| U2 | **The photo preview is the stored result**: `patient_photo_preview` runs the same normalization as saving (EXIF rotation, centre square, 256 px JPEG) and returns a `data:` URL without storing anything. A file that can't be read shows its error under the picker right away. | What she sees is exactly what gets saved. |
+| U3 | **Back only, no forward button**: an arrow at the left of the header (disabled when there's nowhere to go) plus Alt+←. The mouse's back button is left to the webview's own handling (not tested). | Forward is rarely needed and would crowd the header. |
+| U4 | **Board columns keep at least 14 rem and the board scrolls sideways** when the space is too narrow (e.g. Assistent open), instead of squeezing four columns. Column titles truncate, card text wraps. The Demo-Praxis banner wraps its buttons below the text for the same reason. | The usual kanban behaviour; nothing overlaps. |

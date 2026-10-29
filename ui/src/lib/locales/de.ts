@@ -14,6 +14,7 @@ export const de = {
   },
   shell: {
     search: 'Suchen oder Befehl…',
+    back: 'Zurück',
     collapse: 'Seitenleiste einklappen',
     expand: 'Seitenleiste ausklappen',
     soon: 'kommt bald',
