@@ -30,6 +30,7 @@ import { FactDraftCard } from '@/components/fact-draft'
 import { DraftDialog, DraftProposal, DraftSources, ReportDraftCard } from '@/components/report-draft'
 import { AutoDraft } from '@/components/autopilot'
 import { StartStep } from '@/components/lotse/start-step'
+import { QuestionsStep, openQuestions } from '@/components/lotse/questions-step'
 import { Page, PageHeader } from '@/components/app-shell'
 import { DiagnosisRows } from '@/components/diagnoses'
 import { StatusBadge, Stepper, StickyActionBar, formatDate, stepStates } from '@/components/bits'
@@ -70,7 +71,7 @@ function ReportEditorPage() {
   return <ReportEditor key={`${reportId}:${report.status}:${report.template_key}:${application?.kind}`} view={view.data} />
 }
 
-const LOTSE_STEPS = ['start', 'abschnitte', 'pruefen', 'fertig'] as const
+const LOTSE_STEPS = ['start', 'fragen', 'abschnitte', 'pruefen', 'fertig'] as const
 type LotseStep = (typeof LOTSE_STEPS)[number]
 
 const SAVE_DELAY_MS = 700
@@ -241,6 +242,14 @@ function ReportEditor({ view }: { view: ReportView }) {
   // Guided flow for a Bericht; a note's flow is its session's.
   const flowOn = !isNote && !!application
   const sources = useQuery({ ...q.draftSources(report.id), enabled: flowOn && !readOnly })
+  const questions = useQuery({ ...q.reportQuestions(report.id), enabled: flowOn })
+  // Questions of a section that already has text are no gap: they don't count as open.
+  const filledKeys = useMemo(
+    () => new Set(template.sections.filter((s) => !isBlank(bodies[s.key] ?? '')).map((s) => s.key)),
+    [bodies, template.sections],
+  )
+  const open = openQuestions(questions.data, filledKeys).length
+  const material = (sources.data?.facts.length ?? 0) + (sources.data?.answers ?? 0)
   const llm = useQuery({ ...q.llm(), enabled: flowOn && !readOnly })
   const checklist = useQuery(q.checklist(report.id))
   const exportAs = useReportExport(view)
@@ -265,6 +274,8 @@ function ReportEditor({ view }: { view: ReportView }) {
   const lotse = stepStates<LotseStep>(
     [
       { key: 'start', done: readOnly || touched },
+      // Done once nothing is open or the drafting has started; text alone doesn't answer them.
+      { key: 'fragen', done: readOnly || (drafts.data?.length ?? 0) > 0 || (!!questions.data && open === 0) },
       { key: 'abschnitte', done: readOnly || (!blocked && proposals.length === 0) },
       { key: 'pruefen', done: readOnly },
       { key: 'fertig', done: exported },
@@ -384,11 +395,20 @@ function ReportEditor({ view }: { view: ReportView }) {
               notRelevant={notRelevant}
               drafts={drafts.data ?? []}
               sources={sources.data}
+              questions={questions.data?.questions ?? []}
               llmActive={!!llm.data?.config.active}
               onRelevance={setRelevance}
               onChange={update}
             />
           </>
+        ) : flowOn && viewing === 'fragen' ? (
+          <QuestionsStep
+            reportId={report.id}
+            patientId={patient.id}
+            filled={filledKeys}
+            readOnly={readOnly}
+            llmActive={!!llm.data?.config.active}
+          />
         ) : (
         <>
         <div className="flex items-center justify-between gap-3">
@@ -570,14 +590,13 @@ function ReportEditor({ view }: { view: ReportView }) {
           </>
         }
         step={barStep}
-        start={flowOn && viewing === 'start' && !readOnly}
-        onStartNext={() => setStep('abschnitte')}
-        canDraftEmpty={
-          drafting && !!llm.data?.config.active && emptyDraftable.length > 0 && (sources.data?.facts.length ?? 0) > 0
-        }
+        lotseStep={flowOn && !readOnly && (viewing === 'start' || viewing === 'fragen') ? viewing : null}
+        openQuestions={open}
+        onLotseNext={setStep}
+        canDraftEmpty={drafting && !!llm.data?.config.active && emptyDraftable.length > 0 && material > 0}
         proposals={proposals.length}
         onDraftEmpty={() => {
-          if (viewing === 'start') setStep('abschnitte')
+          if (viewing === 'start' || viewing === 'fragen') setStep('abschnitte')
           openDraft(emptyDraftable)
         }}
         onJump={jump}
@@ -602,8 +621,9 @@ const STEP_ANCHOR: Record<ReportStep, string> = {
 function ReportBar({
   info,
   step,
-  start,
-  onStartNext,
+  lotseStep,
+  openQuestions,
+  onLotseNext,
   canDraftEmpty,
   proposals,
   onDraftEmpty,
@@ -613,9 +633,10 @@ function ReportBar({
 }: {
   info: ReactNode
   step: ReportStep | null
-  /** The Lotse start step is shown: its one action leads on to the sections. */
-  start: boolean
-  onStartNext: () => void
+  /** A Lotse step with its own bar: start leads to the questions (if any are open), the questions to the draft. */
+  lotseStep: 'start' | 'fragen' | null
+  openQuestions: number
+  onLotseNext: (step: LotseStep) => void
   canDraftEmpty: boolean
   proposals: number
   onDraftEmpty: () => void
@@ -625,17 +646,33 @@ function ReportBar({
 }) {
   const { t } = useTranslation()
   let action: ReactNode = null
-  if (start) {
-    action =
-      step === 'draft' && canDraftEmpty && proposals === 0 ? (
-        <Button onClick={onDraftEmpty} data-testid="lotse-next">
-          {t('lotse.nextDraft')} <ArrowRight />
-        </Button>
-      ) : (
-        <Button onClick={onStartNext} data-testid="lotse-next">
-          {t('lotse.next')} <ArrowRight />
-        </Button>
-      )
+  // After the questions, drafting the empty sections is the next thing even in a half-written Bericht.
+  const toDraft = canDraftEmpty && proposals === 0 && (step === 'draft' || lotseStep === 'fragen')
+  if (lotseStep === 'start' && openQuestions > 0) {
+    action = (
+      <Button onClick={() => onLotseNext('fragen')} data-testid="lotse-next">
+        {t('lotse.nextQuestions', { count: openQuestions })} <ArrowRight />
+      </Button>
+    )
+  } else if (lotseStep) {
+    action = (
+      <>
+        {lotseStep === 'fragen' && openQuestions > 0 && (
+          <Button variant="ghost" onClick={() => onLotseNext('abschnitte')} data-testid="lotse-later">
+            {t('lotse.later')}
+          </Button>
+        )}
+        {toDraft ? (
+          <Button onClick={onDraftEmpty} data-testid="lotse-next">
+            {t('lotse.nextDraft')} <ArrowRight />
+          </Button>
+        ) : (
+          <Button onClick={() => onLotseNext('abschnitte')} data-testid="lotse-next">
+            {t('lotse.next')} <ArrowRight />
+          </Button>
+        )}
+      </>
+    )
   } else if (step === 'facts') {
     info = (
       <>

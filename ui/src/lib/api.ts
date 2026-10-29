@@ -60,6 +60,8 @@ import type { Preview } from '@/bindings/Preview'
 import type { PseudoTerm } from '@/bindings/PseudoTerm'
 import type { ApplyMode } from '@/bindings/ApplyMode'
 import type { EpisodeFact } from '@/bindings/EpisodeFact'
+import type { ReportAnswer } from '@/bindings/ReportAnswer'
+import type { AnswerSource } from '@/bindings/AnswerSource'
 import type { SectionDef } from '@/bindings/SectionDef'
 import type { SectionDraft } from '@/bindings/SectionDraft'
 import type { SttConfig } from '@/bindings/SttConfig'
@@ -219,7 +221,29 @@ export type DraftChoice = {
 /** `skipped`: sections no fact is tagged for (nothing sent); `untagged`: facts from before tagging. */
 export type DraftPreview = ExtractPreview & { skipped: string[]; untagged: number }
 /** `since`: when the previous application was created (sessions after it are the default choice). */
-export type DraftSources = { facts: EpisodeFact[]; since: string | null }
+export type DraftSources = { facts: EpisodeFact[]; since: string | null; answers: number }
+/** One question of the Lotse "Fragen" step (slice 38). */
+export type QuestionView = {
+  section_key: string
+  number: string | null
+  heading: string
+  ask_key: string
+  question: string
+  chips: string[]
+  /** From the patient record ("41 Jahre, weiblich"), offered as the first chip. */
+  record: string | null
+  answer: ReportAnswer | null
+  /** Session facts that answer it, by the last check; empty once she answered herself. */
+  covered_by: EpisodeFact[]
+}
+export type ReportQuestions = {
+  questions: QuestionView[]
+  check: { model: string; checked_at: string; stale: boolean } | null
+  /** Questions a check would send now. */
+  checkable: number
+  /** Session facts a check would read. */
+  facts: number
+}
 /** `chunks` < `total` when cancelled: facts from the finished chunks were kept. */
 export type ExtractResult = { facts: NoteFact[]; dropped: number; chunks: number; total: number; cancelled: boolean }
 export type SummaryResult = { summary: SessionSummary | null; dropped: number; cancelled: boolean }
@@ -459,6 +483,12 @@ export const api = {
   applyFacts: (reportId: string, facts: FactEdit[]) => invoke<Report>('note_facts_apply', { reportId, facts }),
   factTagSections: (reportId: string) => invoke<SectionDef[]>('fact_tag_sections', { reportId }),
   draftSources: (reportId: string) => invoke<DraftSources>('draft_sources', { reportId }),
+  reportQuestions: (reportId: string) => invoke<ReportQuestions>('report_questions', { reportId }),
+  setAnswer: (reportId: string, sectionKey: string, askKey: string, text: string, source: AnswerSource) =>
+    invoke<ReportAnswer | null>('report_answer_set', { reportId, sectionKey, askKey, text, source }),
+  gapsPreview: (reportId: string) => invoke<ExtractPreview>('gaps_preview', { reportId }),
+  gapsRun: (reportId: string, digest: string, requestId: string) =>
+    invoke<ReportQuestions>('gaps_run', { reportId, digest, requestId }),
   draftPreview: (reportId: string, choice: DraftChoice) => invoke<DraftPreview>('draft_preview', { reportId, choice }),
   draftRun: (reportId: string, choice: DraftChoice, digest: string, requestId: string) =>
     invoke<DraftResult>('draft_run', { reportId, choice, digest, requestId }),
@@ -596,6 +626,8 @@ export const q = {
     queryOptions({ queryKey: ['factTagSections', reportId], queryFn: () => api.factTagSections(reportId), staleTime: Infinity }),
   draftSources: (reportId: string) =>
     queryOptions({ queryKey: ['draftSources', reportId], queryFn: () => api.draftSources(reportId) }),
+  reportQuestions: (reportId: string) =>
+    queryOptions({ queryKey: ['reportQuestions', reportId], queryFn: () => api.reportQuestions(reportId) }),
   reportDrafts: (reportId: string) =>
     queryOptions({ queryKey: ['reportDrafts', reportId], queryFn: () => api.reportDrafts(reportId) }),
   // Polled during a download/import and while a model loads (`busy`: a request may be loading one).

@@ -3,4 +3,4 @@
 /**
  * What an AI request was for, from its audit action.
  */
-export type SpendTask = "facts" | "draft" | "summary" | "workshop" | "agent" | "prep" | "speech" | "read_aloud" | "other";
+export type SpendTask = "facts" | "draft" | "summary" | "gaps" | "workshop" | "agent" | "prep" | "speech" | "read_aloud" | "other";

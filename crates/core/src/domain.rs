@@ -81,6 +81,10 @@ str_enum!(
     DraftSource { Facts => "facts", Dictation => "dictation" }
 );
 str_enum!(
+    /// How the therapist answered a Lotse question: typed, dictated or with a quick chip.
+    AnswerSource { Typed => "typed", Dictated => "dictated", Chip => "chip" }
+);
+str_enum!(
     /// How a section draft goes into the section: instead of its text or after it.
     ApplyMode { Replace => "replace", Append => "append" }
 );
@@ -619,6 +623,22 @@ pub struct DraftSentenceView {
     pub id: String,
     pub text: String,
     pub sources: Vec<EpisodeFact>,
+    /// Her answers to Lotse questions it rests on ("Ihre Angabe").
+    pub answers: Vec<ReportAnswer>,
+}
+
+/// The therapist's answer to one Lotse question of a Bericht (slice 38).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReportAnswer {
+    pub id: String,
+    pub section_key: String,
+    pub ask_key: String,
+    /// The question as it was asked.
+    pub question: String,
+    pub text: String,
+    pub source: AnswerSource,
+    pub updated_at: String,
 }
 
 /// Provenance of one drafting run.

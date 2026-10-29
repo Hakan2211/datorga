@@ -80,6 +80,33 @@ pub struct SectionDef {
     pub when: When,
     #[serde(default)]
     pub hints: Vec<Hint>,
+    /// Questions the Bericht-Lotse asks when the sessions don't answer them (slice 38).
+    #[serde(default)]
+    pub asks: Vec<Ask>,
+}
+
+/// A question for the "Fragen" step. Her answer counts as her own statement in the draft.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Ask {
+    pub key: String,
+    pub question: String,
+    /// Quick answers ("keine", "nicht bekannt"); a chip fills or extends the answer.
+    #[serde(default)]
+    pub chips: Vec<String>,
+    /// Answered from the patient record: offered as a chip, never sent to the coverage check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record: Option<RecordField>,
+    #[serde(default)]
+    pub when: When,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum RecordField {
+    /// "41 Jahre, weiblich" from the birth date and Geschlecht.
+    AgeGender,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -146,6 +173,14 @@ impl Template {
                     s.key
                 )));
             }
+            // No questions about diagnoses (MDR boundary); answers feed AI drafts only.
+            if !s.asks.is_empty() && (s.field != FieldKind::Prose || !s.ai_allowed) {
+                return Err(Error::Template(format!("section {}: questions only on AI-draftable prose sections", s.key)));
+            }
+            let mut asks = std::collections::HashSet::new();
+            if let Some(a) = s.asks.iter().find(|a| !asks.insert(a.key.as_str()) || a.question.trim().is_empty()) {
+                return Err(Error::Template(format!("section {}: question {} is empty or twice", s.key, a.key)));
+            }
         }
         Ok(())
     }
@@ -156,6 +191,7 @@ impl Template {
         t.sections.retain(|s| s.when.matches(ctx));
         for s in &mut t.sections {
             s.hints.retain(|h| h.when.matches(ctx));
+            s.asks.retain(|a| a.when.matches(ctx));
         }
         t
     }
@@ -223,6 +259,45 @@ mod tests {
         let tp = note.resolve(&Context { method: Method::Tp, age_group: AgeGroup::Kjp, kind: None });
         assert!(hints(&tp, "interventionen").iter().any(|h| h.contains("Übertragung")));
         assert!(hints(&tp, "risiko").iter().any(|h| h.contains("Kindeswohl")));
+    }
+
+    fn asks(t: &Template, key: &str) -> Vec<String> {
+        t.sections.iter().find(|s| s.key == key).unwrap().asks.iter().map(|a| a.key.clone()).collect()
+    }
+
+    #[test]
+    fn questions_follow_method_age_and_kind() {
+        let vt = erst().resolve(&Context { method: Method::Vt, age_group: AgeGroup::Adult, kind: Some(ApplicationKind::Erstantrag) });
+        assert!(asks(&vt, "soziodemographie").contains(&"beruf".to_string()));
+        assert!(asks(&vt, "lebensgeschichte_modell").contains(&"bedingungsmodell".to_string()));
+        assert!(!asks(&vt, "lebensgeschichte_modell").contains(&"psychodynamik".to_string()));
+        assert!(asks(&vt, "somatik").contains(&"medikation".to_string()));
+        assert!(vt.sections.iter().all(|s| s.field == FieldKind::Prose || s.asks.is_empty()), "no questions about diagnoses");
+        let tp = erst().resolve(&Context { method: Method::Tp, age_group: AgeGroup::Kjp, kind: Some(ApplicationKind::Umwandlung) });
+        assert!(asks(&tp, "lebensgeschichte_modell").contains(&"psychodynamik".to_string()));
+        assert!(asks(&tp, "soziodemographie").contains(&"schule".to_string()));
+        assert!(!asks(&tp, "soziodemographie").contains(&"beruf".to_string()));
+        assert!(asks(&tp, "umwandlung").contains(&"begruendung".to_string()));
+        let fort = builtin().unwrap().into_iter().find(|t| t.key == "ptv3-fortfuehrung").unwrap();
+        let fort = fort.resolve(&Context { method: Method::Vt, age_group: AgeGroup::Adult, kind: Some(ApplicationKind::Fortfuehrung) });
+        assert!(asks(&fort, "begruendung_planung").contains(&"begruendung".to_string()));
+        let record: Vec<_> = vt.sections.iter().flat_map(|s| &s.asks).filter(|a| a.record.is_some()).collect();
+        assert_eq!(record.len(), 1);
+    }
+
+    #[test]
+    fn no_questions_on_the_diagnoses() {
+        let src = include_str!("../../../templates/ptv3/fortfuehrung.yaml").replace(
+            "    ai_allowed: false
+",
+            "    ai_allowed: false
+    asks:
+      - key: icd
+        question: Welche Diagnose?
+",
+        );
+        assert!(src.contains("key: icd"));
+        assert!(Template::from_yaml(&src).is_err());
     }
 
     #[test]

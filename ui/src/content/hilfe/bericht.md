@@ -2,7 +2,7 @@
 title: Bericht schreiben
 summary: Vom Antrag zum unterschriebenen PTV-3-Bericht
 order: 5
-keywords: bericht, gutachter, ptv 3, erstantrag, umwandlung, fortführung, entwurf, kontingent, export, pdf, docx, board
+keywords: bericht, gutachter, ptv 3, fragen, lotse, medikation, ihre angabe, erstantrag, umwandlung, fortführung, entwurf, kontingent, export, pdf, docx, board
 ---
 Berichte an den Gutachter gehören zu einem Behandlungsfall. thera kennt Erstantrag, Umwandlungsantrag und Fortführungsantrag nach PTV 3.
 
@@ -11,6 +11,15 @@ Berichte an den Gutachter gehören zu einem Behandlungsfall. thera kennt Erstant
 - Auf der Patientenseite wählen Sie im Behandlungsfall **Bericht anlegen**.
 - Oder Sie folgen dem Hinweis „… vorbereiten“ auf **Heute** bzw. unter **Berichte**, sobald das Kontingent knapp wird.
 - Die Diagnosen des Behandlungsfalls werden übernommen. Pflegen Sie sie deshalb dort.
+
+## Fragen vor dem Entwurf
+
+Was die Sitzungen nicht hergeben, etwa Medikation, Vorbehandlungen, Therapieziele, Setting oder Prognose, fragt thera im Schritt **Fragen** ab. Stichworte genügen. Sie können tippen, diktieren (Mikrofon im Feld) oder eine Schnellantwort wie „keine“ wählen.
+
+- Ihre Antworten gehen als **Ihre Angabe** in den Entwurf und sind dort am Satz zu sehen. Medikamente übernimmt der Entwurf so, wie Sie sie angeben.
+- **Mit KI prüfen** schaut nach, welche Fragen Ihre Sitzungsnotizen schon beantworten (pseudonymisiert, mit Vorschau). Diese Fragen werden eingeklappt; Sie können sie trotzdem selbst beantworten.
+- Nach Diagnosen fragt thera nie: die tragen Sie selbst ein.
+- **Später** führt ohne Antworten weiter. Die Fragen bleiben offen und lassen sich jederzeit nachholen.
 
 ## Die Schritte im Bericht
 

@@ -9,6 +9,7 @@ import { toast } from 'sonner'
 import { Sparkles, X } from 'lucide-react'
 import type { ApplyMode } from '@/bindings/ApplyMode'
 import type { EpisodeFact } from '@/bindings/EpisodeFact'
+import type { ReportAnswer } from '@/bindings/ReportAnswer'
 import type { SectionDef } from '@/bindings/SectionDef'
 import type { SectionDraft } from '@/bindings/SectionDraft'
 import { formatDate } from '@/components/bits'
@@ -352,9 +353,30 @@ function Sentences({ draft, noteSections }: { draft: SectionDraft; noteSections:
           {s.sources.map((f) => (
             <FactChip key={f.fact_id} fact={f} noteSections={noteSections} />
           ))}
+          {s.answers.map((a) => (
+            <AnswerChip key={a.id} answer={a} />
+          ))}
         </li>
       ))}
     </ol>
+  )
+}
+
+/** A sentence resting on her answer to a Lotse question. */
+function AnswerChip({ answer }: { answer: ReportAnswer }) {
+  const { t } = useTranslation()
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] whitespace-nowrap text-primary" data-testid="answer-chip">
+          {t('lotse.questions.own')}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-sm">
+        <p className="text-xs opacity-80">{answer.question}</p>
+        <p>{answer.text}</p>
+      </TooltipContent>
+    </Tooltip>
   )
 }
 

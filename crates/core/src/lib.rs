@@ -17,6 +17,7 @@ pub mod dictate;
 pub mod domain;
 pub mod draft;
 pub mod extract;
+pub mod gaps;
 pub mod llm;
 pub mod live;
 pub mod local;

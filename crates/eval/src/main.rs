@@ -380,7 +380,7 @@ fn input_facts(suite: &Suite, all: &[EpisodeFact], subset: &[usize], tag_of: &Ta
             let f = &c.facts[all[i].fact];
             let key = &f.sections[0];
             let label = c.note.sections.iter().find(|d| &d.key == key).map_or(key.clone(), |d| d.heading.clone());
-            InputFact { session_no: all[i].session_no, label, text: f.def.text.clone(), bericht: tag_of(c, all[i].fact) }
+            InputFact { session_no: all[i].session_no, label, text: f.def.text.clone(), bericht: tag_of(c, all[i].fact), own: false }
         })
         .collect()
 }

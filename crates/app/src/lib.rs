@@ -20,13 +20,14 @@ use thera_core::domain::*;
 use thera_core::catalog::{self, CloudModel, Tier};
 use thera_core::draft;
 use thera_core::extract;
+use thera_core::gaps;
 use thera_core::llm::{self, Credits, Endpoint, KeyInfo, LlmConfig, ProviderId, ProviderInfo, RemoteModel};
 use thera_core::local::{self, Fit, Gpu, Hardware, LlamaServer, Recommendation};
 use thera_core::models::ModelInfo;
 use thera_core::pii::{self, CheckItem};
 use thera_core::pseudo::EntityKind;
 use thera_core::render;
-use thera_core::store::{day_before, AutopilotRun, DaySpend, LlmSpend, SessionSummary, SpendReport, Store, TimelineGroup};
+use thera_core::store::{day_before, AutopilotRun, CoveredAsk, DaySpend, GapCheckMeta, LlmSpend, SessionSummary, SpendReport, Store, TimelineGroup};
 use thera_core::summary;
 use thera_core::stt::{self, CloudStt, CloudSttModel, SttConfig, SttEngine, WhisperCli};
 use thera_core::templates::{Context, Template};
@@ -2493,9 +2494,63 @@ struct DraftChoice {
     all_facts: bool,
 }
 
+/// Session facts as draft input, labelled with their Sitzungsnotiz section.
+fn input_facts(s: &Store, facts: &[EpisodeFact]) -> thera_core::Result<Vec<draft::InputFact>> {
+    let note = s.template(thera_core::templates::SESSION_NOTE_KEY)?;
+    Ok(facts
+        .iter()
+        .map(|f| draft::InputFact {
+            session_no: f.session_no,
+            label: note.sections.iter().find(|d| d.key == f.section_key).map_or(f.section_key.clone(), |d| d.heading.clone()),
+            text: f.text.clone(),
+            bericht: f.bericht.clone(),
+            own: false,
+        })
+        .collect())
+}
+
+/// Sections whose drafts see only the facts tagged for them: the Erst-/Umwandlungsbericht's,
+/// unless she asked for all facts. Other templates take all facts.
+fn draft_tag_keys(s: &Store, view: &ReportView, all_facts: bool) -> thera_core::Result<Vec<String>> {
+    Ok(match (view.template.key == extract::TAG_TEMPLATE_KEY && !all_facts, autopilot::tag_template(s, view.episode.as_ref())?) {
+        (true, Some(t)) => extract::tag_sections(&t).iter().map(|d| d.key.clone()).collect(),
+        _ => vec![],
+    })
+}
+
+/// Her answers to the questions this Bericht asks (template resolved for method, age and kind;
+/// sections marked "nicht relevant" left out), in the order they were given.
+fn current_answers(s: &Store, view: &ReportView) -> thera_core::Result<Vec<ReportAnswer>> {
+    let asked = gaps::questions(&view.template, |k| not_relevant(view, k));
+    Ok(s.report_answers(&view.report.id)?
+        .into_iter()
+        .filter(|a| asked.iter().any(|q| q.section.key == a.section_key && q.ask.key == a.ask_key))
+        .collect())
+}
+
+fn not_relevant(view: &ReportView, key: &str) -> bool {
+    view.report.sections.iter().any(|sec| sec.key == key && sec.not_relevant)
+}
+
+/// When the episode's previous application was created: the sessions after it are what this
+/// Bericht draws on by default (`None`: the first application, all sessions).
+fn previous_application_at(s: &Store, report: &Report) -> thera_core::Result<Option<String>> {
+    let Some(ep) = &report.episode_id else { return Ok(None) };
+    let apps = s.list_applications(ep)?;
+    let this = apps.iter().find(|a| Some(&a.id) == report.application_id.as_ref());
+    // `seq` counts per kind (Fortführung Nr. n), so order by creation.
+    Ok(this
+        .and_then(|t| apps.iter().filter(|a| a.created_at < t.created_at).max_by_key(|a| a.created_at.clone()))
+        .map(|a| a.created_at.clone()))
+}
+
 /// Exactly what drafting the chosen sections of this Bericht would send, from the episode's
-/// applied facts of the chosen sessions.
-fn prepare_draft(s: &Store, report_id: &str, choice: &DraftChoice) -> thera_core::Result<(draft::Prepared, Vec<EpisodeFact>, Vec<draft::InputFact>)> {
+/// applied facts of the chosen sessions and her answers to the Lotse questions.
+fn prepare_draft(
+    s: &Store,
+    report_id: &str,
+    choice: &DraftChoice,
+) -> thera_core::Result<(draft::Prepared, Vec<EpisodeFact>, Vec<ReportAnswer>, Vec<draft::InputFact>)> {
     let view = report_view(s, report_id)?;
     let (Some(episode), Some(application)) = (&view.episode, &view.application) else {
         return Err(thera_core::Error::Invalid("Entwürfe gibt es nur für Berichte zu einem Antrag".into()));
@@ -2507,21 +2562,11 @@ fn prepare_draft(s: &Store, report_id: &str, choice: &DraftChoice) -> thera_core
         }
         facts.retain(|f| ids.contains(&f.session_id));
     }
-    let note = s.template(thera_core::templates::SESSION_NOTE_KEY)?;
-    let input: Vec<draft::InputFact> = facts
-        .iter()
-        .map(|f| draft::InputFact {
-            session_no: f.session_no,
-            label: note.sections.iter().find(|d| d.key == f.section_key).map_or(f.section_key.clone(), |d| d.heading.clone()),
-            text: f.text.clone(),
-            bericht: f.bericht.clone(),
-        })
-        .collect();
-    // Tags name the sections of the Erst-/Umwandlungsbericht; other templates take all facts.
-    let tag_keys: Vec<String> = match (view.template.key == extract::TAG_TEMPLATE_KEY && !choice.all_facts, autopilot::tag_template(s, Some(episode))?) {
-        (true, Some(t)) => extract::tag_sections(&t).iter().map(|d| d.key.clone()).collect(),
-        _ => vec![],
-    };
+    // Her answers come after the facts: citation indices past the facts point at them.
+    let answers = current_answers(s, &view)?;
+    let mut input = input_facts(s, &facts)?;
+    input.extend(answers.iter().map(|a| draft::InputFact::answer(&a.section_key, &a.question, &a.text)));
+    let tag_keys = draft_tag_keys(s, &view, choice.all_facts)?;
     let existing: Vec<(String, String)> = if choice.with_existing {
         view.report.sections.iter().map(|sec| (sec.key.clone(), draft::plain_text(&sec.body))).collect()
     } else {
@@ -2530,12 +2575,7 @@ fn prepare_draft(s: &Store, report_id: &str, choice: &DraftChoice) -> thera_core
     let frame = draft::Frame { method: episode.method, age_group: episode.age_group, kind: application.kind };
     let dict = s.pseudo_dictionary(&view.patient.id)?;
     // Sections marked "nicht relevant" are not drafted.
-    let keys: Vec<String> = choice
-        .sections
-        .iter()
-        .filter(|k| !view.report.sections.iter().any(|sec| &sec.key == *k && sec.not_relevant))
-        .cloned()
-        .collect();
+    let keys: Vec<String> = choice.sections.iter().filter(|k| !not_relevant(&view, k)).cloned().collect();
     let req = draft::Request {
         keys: &keys,
         facts: &input,
@@ -2544,7 +2584,7 @@ fn prepare_draft(s: &Store, report_id: &str, choice: &DraftChoice) -> thera_core
         instruction: choice.instruction.as_deref(),
     };
     let prepared = draft::prepare(&view.template, &frame, &req, &view.patient, dict)?;
-    Ok((prepared, facts, input))
+    Ok((prepared, facts, answers, input))
 }
 
 #[derive(Serialize)]
@@ -2560,7 +2600,7 @@ struct DraftPreview {
 /// The redaction preview for a draft: one outgoing message per section.
 #[tauri::command]
 fn draft_preview(state: State<'_, AppState>, report_id: String, choice: DraftChoice) -> CmdResult<DraftPreview> {
-    let (prepared, _, _) = state.with(|s| prepare_draft(s, &report_id, &choice))?;
+    let (prepared, ..) = state.with(|s| prepare_draft(s, &report_id, &choice))?;
     let report = state.with(|s| s.report(&report_id))?;
     let terms = state.with(|s| s.pseudo_terms(&report.patient_id))?;
     let config = state.with(|s| s.llm_config())?;
@@ -2576,22 +2616,223 @@ struct DraftSources {
     /// When the episode's previous application was created: sessions after it are the default
     /// choice for this Bericht (`None`: the first application, all sessions).
     since: Option<String>,
+    /// Her answers to the Lotse questions, which drafts use too.
+    answers: usize,
 }
 
-/// The applied Sitzungsnotiz facts a draft of this Bericht could draw on.
+/// The applied Sitzungsnotiz facts (and answers) a draft of this Bericht could draw on.
 #[tauri::command]
 fn draft_sources(state: State<'_, AppState>, report_id: String) -> CmdResult<DraftSources> {
     state.with(|s| {
-        let report = s.report(&report_id)?;
-        let Some(ep) = report.episode_id else { return Ok(DraftSources { facts: vec![], since: None }) };
-        let apps = s.list_applications(&ep)?;
-        let this = apps.iter().find(|a| Some(&a.id) == report.application_id.as_ref());
-        // `seq` counts per kind (Fortführung Nr. n), so order by creation.
-        let since = this
-            .and_then(|t| apps.iter().filter(|a| a.created_at < t.created_at).max_by_key(|a| a.created_at.clone()))
-            .map(|a| a.created_at.clone());
-        Ok(DraftSources { facts: s.episode_facts(&ep)?, since })
+        let view = report_view(s, &report_id)?;
+        let Some(ep) = &view.report.episode_id else { return Ok(DraftSources { facts: vec![], since: None, answers: 0 }) };
+        let since = previous_application_at(s, &view.report)?;
+        Ok(DraftSources { facts: s.episode_facts(ep)?, since, answers: current_answers(s, &view)?.len() })
     })
+}
+
+// ---------- Bericht-Lotse "Fragen" (slice 38) ----------
+
+/// One question of the "Fragen" step.
+#[derive(Serialize)]
+struct QuestionView {
+    section_key: String,
+    number: Option<String>,
+    heading: String,
+    ask_key: String,
+    question: String,
+    chips: Vec<String>,
+    /// The answer the patient record gives ("41 Jahre, weiblich"), offered as the first chip.
+    record: Option<String>,
+    answer: Option<ReportAnswer>,
+    /// Session facts that answer it, by the last check; empty once she answered herself.
+    covered_by: Vec<EpisodeFact>,
+}
+
+#[derive(Serialize)]
+struct GapCheckInfo {
+    model: String,
+    checked_at: String,
+    /// Facts changed since: a new check may find more.
+    stale: bool,
+}
+
+#[derive(Serialize)]
+struct ReportQuestions {
+    questions: Vec<QuestionView>,
+    check: Option<GapCheckInfo>,
+    /// Questions a check would send now (unanswered, not from the record).
+    checkable: usize,
+    /// Session facts a check would read.
+    facts: usize,
+}
+
+/// The episode's applied facts a Bericht draws on by default: those since the previous application.
+fn recent_facts(s: &Store, report: &Report) -> thera_core::Result<Vec<EpisodeFact>> {
+    let Some(ep) = &report.episode_id else { return Ok(vec![]) };
+    let since = previous_application_at(s, report)?;
+    let mut facts = s.episode_facts(ep)?;
+    if let Some(since) = since {
+        facts.retain(|f| f.session_at.as_ref().is_none_or(|at| *at >= since));
+    }
+    Ok(facts)
+}
+
+/// Questions a coverage check sends: not from the record, not answered by her.
+fn checkable<'a>(view: &'a ReportView, answers: &[ReportAnswer]) -> Vec<gaps::Question<'a>> {
+    gaps::questions(&view.template, |k| not_relevant(view, k))
+        .into_iter()
+        .filter(|q| q.ask.record.is_none() && !answers.iter().any(|a| a.section_key == q.section.key && a.ask_key == q.ask.key))
+        .collect()
+}
+
+fn report_questions_view(s: &Store, report_id: &str) -> thera_core::Result<ReportQuestions> {
+    let view = report_view(s, report_id)?;
+    let answers = current_answers(s, &view)?;
+    let facts = recent_facts(s, &view.report)?;
+    let all_facts = match &view.report.episode_id {
+        Some(ep) => s.episode_facts(ep)?,
+        None => vec![],
+    };
+    let check = s.gap_check(report_id)?;
+    let now = thera_core::domain::now();
+    let questions = gaps::questions(&view.template, |k| not_relevant(&view, k))
+        .into_iter()
+        .map(|q| {
+            let answer = answers.iter().find(|a| a.section_key == q.section.key && a.ask_key == q.ask.key).cloned();
+            let covered_by = match (&answer, &check) {
+                (None, Some(c)) => c
+                    .covered
+                    .iter()
+                    .find(|c| c.section == q.section.key && c.ask == q.ask.key)
+                    .map(|c| all_facts.iter().filter(|f| c.facts.contains(&f.fact_id)).cloned().collect())
+                    .unwrap_or_default(),
+                _ => vec![],
+            };
+            QuestionView {
+                section_key: q.section.key.clone(),
+                number: q.section.number.clone(),
+                heading: q.section.heading.clone(),
+                ask_key: q.ask.key.clone(),
+                question: q.ask.question.clone(),
+                chips: q.ask.chips.clone(),
+                record: q.ask.record.and_then(|r| gaps::record_answer(r, &view.patient, &now)),
+                answer,
+                covered_by,
+            }
+        })
+        .collect();
+    let digest = gaps::facts_digest(&facts);
+    Ok(ReportQuestions {
+        questions,
+        check: check.map(|c| GapCheckInfo { stale: c.facts_digest != digest, model: c.model, checked_at: c.checked_at }),
+        checkable: checkable(&view, &answers).len(),
+        facts: facts.len(),
+    })
+}
+
+#[tauri::command]
+fn report_questions(state: State<'_, AppState>, report_id: String) -> CmdResult<ReportQuestions> {
+    state.with(|s| report_questions_view(s, &report_id))
+}
+
+/// Her answer to one of the template's questions; empty text removes it.
+#[tauri::command]
+fn report_answer_set(
+    state: State<'_, AppState>,
+    report_id: String,
+    section_key: String,
+    ask_key: String,
+    text: String,
+    source: AnswerSource,
+) -> CmdResult<Option<ReportAnswer>> {
+    state.with(|s| {
+        let view = report_view(s, &report_id)?;
+        let question = gaps::questions(&view.template, |_| false)
+            .into_iter()
+            .find(|q| q.section.key == section_key && q.ask.key == ask_key)
+            .map(|q| q.ask.question.clone())
+            .ok_or_else(|| thera_core::Error::Invalid(format!("Unbekannte Frage {section_key}/{ask_key}")))?;
+        s.set_report_answer(&report_id, &section_key, &ask_key, &question, &text, source)
+    })
+}
+
+/// Exactly what the coverage check would send: the open questions and the recent facts.
+fn prepare_gaps(s: &Store, report_id: &str) -> thera_core::Result<(gaps::Prepared, Vec<EpisodeFact>)> {
+    let view = report_view(s, report_id)?;
+    if view.application.is_none() {
+        return Err(thera_core::Error::Invalid("Fragen gibt es nur für Berichte zu einem Antrag".into()));
+    }
+    let answers = current_answers(s, &view)?;
+    let facts = recent_facts(s, &view.report)?;
+    let input = input_facts(s, &facts)?;
+    let tag_keys = draft_tag_keys(s, &view, false)?;
+    let dict = s.pseudo_dictionary(&view.patient.id)?;
+    let prepared = gaps::prepare(&checkable(&view, &answers), &input, &tag_keys, &view.patient, dict)?;
+    Ok((prepared, facts))
+}
+
+#[tauri::command]
+fn gaps_preview(state: State<'_, AppState>, report_id: String) -> CmdResult<ExtractPreview> {
+    let (prepared, _) = state.with(|s| prepare_gaps(s, &report_id))?;
+    let report = state.with(|s| s.report(&report_id))?;
+    let terms = state.with(|s| s.pseudo_terms(&report.patient_id))?;
+    let config = state.with(|s| s.llm_config())?;
+    let provider = config.active.map(llm::provider);
+    let model = config.active.and_then(|id| config.settings(id).model).filter(|m| !m.is_empty());
+    Ok(ExtractPreview { preview: prepared.preview(), terms, provider, model })
+}
+
+/// Sends the previewed check (one request) and replaces the Bericht's check with its result.
+/// Cancelled: the earlier check stays.
+#[tauri::command]
+async fn gaps_run(app: AppHandle, report_id: String, digest: String, request_id: String) -> CmdResult<ReportQuestions> {
+    let events = app.clone();
+    blocking(app, move |state| {
+        let run = LlmRun::start(state, &request_id)?;
+        let (provider, model) = active_llm(state)?;
+        let (prepared, facts) = state.with(|s| prepare_gaps(s, &report_id))?;
+        if prepared.digest != digest {
+            return Err(CmdError::Other("Der Text hat sich seit der Vorschau geändert. Bitte die Vorschau erneut prüfen.".into()));
+        }
+        let progress = |stage, done| {
+            let _ = events.emit("gaps-progress", ExtractProgress { report_id: report_id.clone(), stage, done, total: 1 });
+        };
+        let unchanged = |state: &AppState| -> CmdResult<ReportQuestions> { Ok(state.with(|s| report_questions_view(s, &report_id))?) };
+        if provider == ProviderId::Local {
+            progress("loading", 0);
+        }
+        let ep = match llm_endpoint(state, provider, &run.cancel) {
+            Err(_) if run.cancelled() => return unchanged(state),
+            r => r?.0,
+        };
+        progress("running", 0);
+        let messages = [(llm::Role::System, &prepared.system), (llm::Role::User, &prepared.user)];
+        let Some(completion) = stream_call(state, &events, &run, "llm.gaps", (provider, &model), &ep, &messages, &gaps::chat_options())? else {
+            return unchanged(state);
+        };
+        let (covered, dropped) = gaps::parse(&completion.text, &prepared)?;
+        let covered: Vec<CoveredAsk> = covered
+            .into_iter()
+            .map(|c| CoveredAsk { section: c.section_key, ask: c.ask_key, facts: c.facts.iter().map(|&i| facts[i].fact_id.clone()).collect() })
+            .collect();
+        progress("running", 1);
+        let provider = provider_str(provider);
+        let meta = GapCheckMeta {
+            provider: &provider,
+            model: &completion.model,
+            prompt_hash: &prepared.prompt_hash,
+            facts_digest: &gaps::facts_digest(&facts),
+            asked: prepared.asks.len(),
+            dropped,
+        };
+        state.with(|s| {
+            s.save_gap_check(&report_id, &meta, &covered)?;
+            report_questions_view(s, &report_id)
+        })
+        .map_err(Into::into)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -2619,7 +2860,7 @@ async fn draft_run(app: AppHandle, report_id: String, choice: DraftChoice, diges
     blocking(app, move |state| {
         let run = LlmRun::start(state, &request_id)?;
         let (provider, model) = active_llm(state)?;
-        let (prepared, facts, input) = state.with(|s| prepare_draft(s, &report_id, &choice))?;
+        let (prepared, facts, answers, input) = state.with(|s| prepare_draft(s, &report_id, &choice))?;
         if prepared.digest != digest {
             return Err(CmdError::Other("Der Text hat sich seit der Vorschau geändert. Bitte die Vorschau erneut prüfen.".into()));
         }
@@ -2676,7 +2917,7 @@ async fn draft_run(app: AppHandle, report_id: String, choice: DraftChoice, diges
             session_ids: choice.session_ids.clone(),
             source: DraftSource::Facts,
         };
-        let drafts = state.with(|s| s.save_drafts(&report_id, &meta, &drafts, &facts))?;
+        let drafts = state.with(|s| s.save_drafts(&report_id, &meta, &drafts, &facts, &answers))?;
         Ok(DraftResult { drafts, sentences, dropped, done, total, cancelled: done < total })
     })
     .await
@@ -3121,7 +3362,7 @@ async fn workshop_run(app: AppHandle, report_id: String, choice: WorkshopChoice,
             session_ids: None,
             source: DraftSource::Dictation,
         };
-        let drafts = state.with(|s| s.save_drafts(&report_id, &meta, &results, &[]))?;
+        let drafts = state.with(|s| s.save_drafts(&report_id, &meta, &results, &[], &[]))?;
         Ok(DraftResult { drafts, sentences, dropped, done: 1, total: 1, cancelled: false })
     })
     .await
@@ -3786,6 +4027,10 @@ pub fn run() {
             fact_tag_sections,
             draft_preview,
             draft_sources,
+            report_questions,
+            report_answer_set,
+            gaps_preview,
+            gaps_run,
             draft_run,
             report_drafts,
             report_draft_reject,

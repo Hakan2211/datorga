@@ -25,6 +25,15 @@ sections:
     hints:
       - text: Auch bezüglich der begleitenden Behandlung der Bezugspersonen
         when: { age: [kjp] }
+    # Bericht-Lotse (slice 38), see erst-umwandlung.yaml.
+    asks:
+      - key: verlauf
+        question: Wie verlief die Behandlung seit dem letzten Bericht, was hat sich an der Symptomatik verändert?
+      - key: zielerreichung
+        question: Welche Therapieziele wurden erreicht, welche noch nicht?
+      - key: bezugspersonen
+        question: Wie verlief die begleitende Arbeit mit den Bezugspersonen?
+        when: { age: [kjp] }
 
   - key: diagnose_befund
     number: "2"
@@ -51,3 +60,15 @@ sections:
       - text: Geänderte Behandlungsmethoden und -techniken
       - text: Prognose, Planung des Therapieabschlusses
       - text: Ggf. weiterführende Maßnahmen nach Ende der Therapie
+    asks:
+      - key: begruendung
+        question: Warum ist die Fortführung der Behandlung notwendig?
+      - key: planung
+        question: Geänderte oder erweiterte Ziele, Methoden und Techniken?
+        chips: [unverändert]
+      - key: prognose
+        question: Wie schätzen Sie die Prognose ein?
+        chips: [günstig, eher günstig, eingeschränkt]
+      - key: abschluss
+        question: Wie planen Sie den Therapieabschluss, und was folgt danach?
+        chips: [Ausschleichen der Frequenz, Rückfallprophylaxe]

@@ -27,6 +27,8 @@ pub enum SpendTask {
     Draft,
     /// `llm.summary`
     Summary,
+    /// `llm.gaps`: which Lotse questions the sessions answer.
+    Gaps,
     /// `llm.workshop`: Diktat-Werkstatt.
     Workshop,
     /// `llm.agent`: assistant chat.
@@ -46,6 +48,7 @@ fn task(action: &str) -> Option<SpendTask> {
         "llm.extract" => SpendTask::Facts,
         "llm.draft" => SpendTask::Draft,
         "llm.summary" => SpendTask::Summary,
+        "llm.gaps" => SpendTask::Gaps,
         "llm.workshop" => SpendTask::Workshop,
         "llm.agent" => SpendTask::Agent,
         "llm.prep_sheet" | "prep.live" => SpendTask::Prep,

@@ -11,6 +11,10 @@
 //! from before tagging existed); on "ergänzen" the section's current text goes along so the draft
 //! doesn't repeat it; and a sentence about prognosis, motivation, goals or setting is kept only if
 //! a fact it cites says so too (small models invent these).
+//!
+//! Slice 38: the therapist's answers to the Lotse questions go along as her own statements
+//! ("Angaben der Therapeutin"), numbered and cited like facts but offered only to their section.
+//! A sentence citing one may state prognosis, goals or setting when her question was about that.
 
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -28,7 +32,7 @@ use crate::templates::{FieldKind, SectionDef, Template};
 use crate::{Error, Result};
 
 /// Bump on any change to the prompt or the answer format.
-pub const PROMPT_VERSION: &str = "draft-2026.3";
+pub const PROMPT_VERSION: &str = "draft-2026.4";
 
 /// Fact characters per request, like `extract::CHUNK_CHARS` (fits a 16k-context local model).
 pub const FACT_CHARS: usize = 24_000;
@@ -58,6 +62,24 @@ pub struct InputFact {
     /// Bericht sections it was tagged with; `None` for a fact from before tagging (offered to
     /// every section).
     pub bericht: Option<Vec<String>>,
+    /// The therapist's answer to a Lotse question (`label` is the question, `bericht` its one
+    /// section, `session_no` 0): offered only to that section, whatever the tags.
+    pub own: bool,
+}
+
+impl InputFact {
+    /// Her answer to `question` for section `key`.
+    pub fn answer(key: &str, question: &str, text: &str) -> Self {
+        InputFact { session_no: 0, label: question.to_string(), text: text.to_string(), bericht: Some(vec![key.to_string()]), own: true }
+    }
+}
+
+/// The facts (indices) a draft of section `key` sees: her answers for it, and the session facts
+/// tagged for it if it is one of `tag_keys` (untagged ones too), else all session facts.
+pub fn section_facts(facts: &[InputFact], key: &str, tag_keys: &[String]) -> Vec<usize> {
+    let tagged = tag_keys.iter().any(|k| k == key);
+    let of_key = |f: &InputFact| f.bericht.as_ref().is_none_or(|b| b.iter().any(|k| k == key));
+    (0..facts.len()).filter(|&i| if facts[i].own { of_key(&facts[i]) } else { !tagged || of_key(&facts[i]) }).collect()
 }
 
 /// What to draft and from what.
@@ -170,7 +192,9 @@ pub fn system_prompt(template: &Template, frame: &Frame) -> String {
          Gutachter ({title}; {kind}, {method}, {age}).\n\
          Leitfaden: {intro}\n\n\
          Du erhältst die Überschrift und die Hinweise eines Abschnitts sowie nummerierte Fakten ([F1], [F2] …) \
-         aus den Sitzungsnotizen, die die Therapeutin geprüft hat. Sitzung 1 ist die erste dokumentierte Sitzung.\n\n\
+         aus den Sitzungsnotizen, die die Therapeutin geprüft hat. Sitzung 1 ist die erste dokumentierte Sitzung. \
+         Unter \"Angaben der Therapeutin\" stehen ihre eigenen Antworten auf Fragen zum Bericht, die Frage in \
+         Klammern; sie gelten wie Fakten und werden genauso zitiert.\n\n\
          Aufgabe: Schreibe den Entwurf für diesen einen Abschnitt. Die anderen Abschnitte des Berichts \
          werden getrennt entworfen.\n\
          Vorgehen: Prüfe zuerst jeden Fakt an der Überschrift und den Hinweisen. Verwende nur Fakten, \
@@ -182,7 +206,11 @@ pub fn system_prompt(template: &Template, frame: &Frame) -> String {
          - Keine eigenen Bewertungen, Prognosen, Therapieziele, Begründungen oder Wirkungen, die nicht \
          ausdrücklich in den Fakten stehen. Was fehlt, ergänzt die Therapeutin selbst.\n\
          - Prognose, Motivation, Therapieziele, Setting (Einzel/Gruppe) und Sitzungszahl nur, wenn ein \
-         zitierter Fakt sie ausdrücklich nennt; sonst weglassen, auch im Abschnitt zu Behandlungsplan und Prognose.\n\
+         zitierter Fakt oder eine Angabe der Therapeutin sie ausdrücklich nennt; sonst weglassen, auch im \
+         Abschnitt zu Behandlungsplan und Prognose.\n\
+         - Eine kurze Angabe wie \"keine\" oder \"nicht bekannt\" bezieht sich auf ihre Frage: als ganzen Satz \
+         wiedergeben (z. B. \"Keine psychopharmakologische Medikation.\"). Medikamente und Dosierungen genau so \
+         übernehmen, wie sie angegeben sind.\n\
          - Steht schon Text im Abschnitt, nichts davon wiederholen; nur ergänzen, was dort noch fehlt. \
          Ist nichts Neues dabei, leere Liste.\n\
          - Ein Eintrag pro Satz. Jeder Satz nennt im Feld \"facts\" die Nummern der Fakten, auf denen er \
@@ -279,16 +307,21 @@ fn section_message(def: &SectionDef, instruction: Option<&str>, existing: Option
 }
 
 /// The facts `subset` as numbered lines under their session (numbers count in all facts).
-fn fact_list(facts: &[InputFact], subset: &[usize], patient: &Patient) -> String {
+pub(crate) fn fact_list(facts: &[InputFact], subset: &[usize], patient: &Patient) -> String {
     let mut list = String::new();
     let mut session = 0;
+    let mut own = false;
     for &i in subset {
         let f = &facts[i];
-        if f.session_no != session {
+        if f.own && !own {
+            own = true;
+            list.push_str("Angaben der Therapeutin:\n");
+        } else if !f.own && f.session_no != session {
             session = f.session_no;
             list.push_str(&format!("Sitzung {session}:\n"));
         }
-        list.push_str(&format!("[F{}] ({}) {}\n", i + 1, f.label, patient_as_pat(f.text.trim(), patient)));
+        let label = if f.own { patient_as_pat(f.label.trim(), patient) } else { f.label.clone() };
+        list.push_str(&format!("[F{}] ({}) {}\n", i + 1, label, patient_as_pat(f.text.trim(), patient)));
     }
     list
 }
@@ -327,7 +360,7 @@ pub fn prepare(template: &Template, frame: &Frame, req: &Request, patient: &Pati
     let (keys, facts) = (req.keys, req.facts);
     if facts.is_empty() {
         return Err(Error::Invalid(
-            "Keine übernommenen Fakten aus Sitzungsnotizen dieses Behandlungsfalls. Zuerst in den Sitzungsnotizen Fakten übernehmen.".into(),
+            "Keine übernommenen Fakten aus Sitzungsnotizen dieses Behandlungsfalls und keine beantworteten Fragen. Zuerst Fakten übernehmen oder Fragen beantworten.".into(),
         ));
     }
     let targets = target_sections(template);
@@ -355,11 +388,7 @@ pub fn prepare(template: &Template, frame: &Frame, req: &Request, patient: &Pati
     let system = p.pseudonymize(&system_raw)?;
     let (mut sections, mut skipped) = (Vec::new(), Vec::new());
     for def in defs {
-        let subset: Vec<usize> = if req.tag_keys.contains(&def.key) {
-            all.iter().copied().filter(|&i| facts[i].bericht.as_ref().is_none_or(|b| b.contains(&def.key))).collect()
-        } else {
-            all.clone()
-        };
+        let subset = section_facts(facts, &def.key, req.tag_keys);
         if subset.is_empty() {
             skipped.push(def.key.clone());
             continue;
@@ -386,7 +415,7 @@ pub fn prepare(template: &Template, frame: &Frame, req: &Request, patient: &Pati
         h.update([1]);
         h.update(k);
     }
-    let untagged = facts.iter().filter(|f| f.bericht.is_none()).count();
+    let untagged = facts.iter().filter(|f| !f.own && f.bericht.is_none()).count();
     Ok(Prepared { system, sections, skipped, untagged, map: p.into_map(), prompt_hash, digest: hex::encode(h.finalize()) })
 }
 
@@ -438,8 +467,14 @@ pub(crate) fn unsupported(text: &str, sources: &[&str]) -> bool {
 }
 
 /// A sentence states something of the [`GROUNDED`] kind that none of its cited facts states.
+/// For her answers the question counts too: "günstig" to "Wie schätzen Sie die Prognose ein?"
+/// grounds a sentence on the prognosis.
 fn ungrounded(text: &str, cited: &[usize], facts: &[InputFact]) -> bool {
-    let sources: Vec<&str> = cited.iter().filter_map(|&i| facts.get(i)).map(|f| f.text.as_str()).collect();
+    let sources: Vec<&str> = cited
+        .iter()
+        .filter_map(|&i| facts.get(i))
+        .flat_map(|f| if f.own { vec![f.label.as_str(), f.text.as_str()] } else { vec![f.text.as_str()] })
+        .collect();
     unsupported(text, &sources)
 }
 
@@ -561,7 +596,7 @@ mod tests {
     }
 
     fn fact(session_no: usize, label: &str, text: &str) -> InputFact {
-        InputFact { session_no, label: label.into(), text: text.into(), bericht: None }
+        InputFact { session_no, label: label.into(), text: text.into(), bericht: None, own: false }
     }
 
     fn tagged(session_no: usize, label: &str, text: &str, tags: &[&str]) -> InputFact {
@@ -703,6 +738,49 @@ mod tests {
             ["Ziel ist, wieder allein Bus zu fahren.", "Pat. ist hoch motiviert.", "Expositionen im Bus sind geplant."]
         );
         assert_eq!(out.dropped, 4);
+    }
+
+    #[test]
+    fn her_answers_are_cited_and_ground_their_topic() {
+        let facts = vec![
+            tagged(1, "Verlauf", "Panik im Bus", &["symptomatik_befund"]),
+            tagged(2, "Vereinbarungen", "Exposition im Bus geplant", &["behandlungsplan_prognose"]),
+            InputFact::answer("behandlungsplan_prognose", "Wie schätzen Sie die Prognose ein?", "günstig, Anna ist sehr motiviert"),
+            InputFact::answer("behandlungsplan_prognose", "Setting, Sitzungszahl und Frequenz?", "Einzeltherapie, wöchentlich"),
+            InputFact::answer("somatik", "Nimmt Pat. aktuell Psychopharmaka?", "keine"),
+        ];
+        let p = prep(&["behandlungsplan_prognose", "somatik", "symptomatik_befund"], &facts, Dictionary::from_patient(&patient()), None).unwrap();
+        assert_eq!(p.untagged, 0, "answers are not untagged facts");
+        assert_eq!(p.sections.iter().map(|s| (s.key.as_str(), s.facts.clone())).collect::<Vec<_>>(), [
+            ("behandlungsplan_prognose", vec![1, 2, 3]),
+            ("somatik", vec![4]),
+            ("symptomatik_befund", vec![0]),
+        ]);
+        let m = p.sections[0].user.get();
+        assert!(
+            m.contains("Sitzung 2:\n[F2] (Vereinbarungen) Exposition im Bus geplant\nAngaben der Therapeutin:\n[F3] (Wie schätzen Sie die Prognose ein?) günstig, Pat. ist sehr motiviert\n[F4] (Setting, Sitzungszahl und Frequenz?) Einzeltherapie, wöchentlich\n"),
+            "{m}"
+        );
+        assert!(!m.contains("Anna"));
+        // An answer about the prognosis grounds the prognosis and motivation, not an invented goal.
+        let answer = r#"{"sentences": [
+          {"text": "Die Prognose ist günstig, Pat. ist motiviert.", "facts": [3]},
+          {"text": "Geplant ist eine Einzeltherapie mit wöchentlichen Sitzungen.", "facts": [4]},
+          {"text": "Ziel ist die Reduktion der Panik.", "facts": [3]},
+          {"text": "Das Setting ist eine Gruppentherapie.", "facts": [2]}
+        ]}"#;
+        let out = parse(answer, &p.sections[0], &facts, &p.map).unwrap();
+        assert_eq!(
+            out.sentences.iter().map(|s| (s.text.as_str(), s.facts.clone())).collect::<Vec<_>>(),
+            [("Die Prognose ist günstig, Pat. ist motiviert.", vec![2]), ("Geplant ist eine Einzeltherapie mit wöchentlichen Sitzungen.", vec![3])]
+        );
+        assert_eq!(out.dropped, 2);
+        // ICD codes stay out, also from her answers.
+        let out = parse(r#"[{"text": "Keine Medikation, Verdacht auf F41.0.", "facts": [5]}]"#, &p.sections[1], &facts, &p.map).unwrap();
+        assert!(out.sentences.is_empty());
+        // Answers alone are enough to draft.
+        let only = vec![InputFact::answer("somatik", "Psychopharmaka?", "keine")];
+        assert_eq!(prep(&["somatik"], &only, Dictionary::new(), None).unwrap().sections.len(), 1);
     }
 
     #[test]

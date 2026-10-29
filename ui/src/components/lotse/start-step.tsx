@@ -8,8 +8,8 @@ import type { SectionDraft } from '@/bindings/SectionDraft'
 import { PatientFormDialog } from '@/components/patient-form'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { api, errorMessage, q, type DraftSources, type ReportView } from '@/lib/api'
-import { factReadiness, sameDiagnoses, sectionFacts, type Readiness } from '@/lib/lotse'
+import { api, errorMessage, q, type DraftSources, type QuestionView, type ReportView } from '@/lib/api'
+import { isOpen, readiness, sameDiagnoses, sectionFacts, type Readiness } from '@/lib/lotse'
 import { isBlank, parseDiagnoses } from '@/lib/report'
 import { cn } from '@/lib/utils'
 
@@ -29,6 +29,7 @@ export function StartStep({
   notRelevant,
   drafts,
   sources,
+  questions,
   llmActive,
   onRelevance,
   onChange,
@@ -38,6 +39,8 @@ export function StartStep({
   notRelevant: ReadonlySet<string>
   drafts: SectionDraft[]
   sources: DraftSources | undefined
+  /** The "Fragen" step's questions: open ones show per section. */
+  questions: QuestionView[]
   llmActive: boolean
   onRelevance: (key: string, notRelevant: boolean) => void
   onChange: (key: string, body: string) => void
@@ -164,8 +167,14 @@ export function StartStep({
                 label = t('lotse.proposal')
               } else {
                 const n = sectionFacts(template.key, def, facts, since).length
-                state = factReadiness(n)
-                label = n === 0 ? t('lotse.noFacts') : t('lotse.facts', { count: n })
+                const own = questions.filter((x) => x.section_key === def.key)
+                const open = own.filter(isOpen).length
+                state = readiness(n + own.filter((x) => x.answer).length, open)
+                const parts = [
+                  n > 0 || open === 0 ? (n === 0 ? t('lotse.noFacts') : t('lotse.facts', { count: n })) : null,
+                  open > 0 ? t('lotse.openQuestions', { count: open }) : null,
+                ]
+                label = parts.filter(Boolean).join(' · ')
               }
               return (
                 <li key={def.key} className="flex items-center gap-3 py-2.5 text-sm" data-section={def.key} data-state={state}>
@@ -185,7 +194,7 @@ export function StartStep({
                       {off ? t('lotse.markRelevant') : t('lotse.markNotRelevant')}
                     </Button>
                   )}
-                  <span className="flex w-44 shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                  <span className="flex w-52 shrink-0 items-center gap-2 text-xs text-muted-foreground">
                     <Dot state={state} />
                     <span className="truncate">{label}</span>
                   </span>

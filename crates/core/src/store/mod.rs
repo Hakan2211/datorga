@@ -17,6 +17,7 @@ use crate::templates::{self, Template};
 use crate::{Error, Result};
 
 mod agent;
+mod answers;
 mod autopilot;
 mod calendar;
 mod contingent;
@@ -25,6 +26,7 @@ mod spend;
 mod summary;
 mod timeline;
 pub use agent::{TextMode, TextProposal};
+pub use answers::{CoveredAsk, GapCheck, GapCheckMeta};
 pub use autopilot::{AutopilotRun, AutopilotStep};
 pub use calendar::normalize_ts;
 pub use spend::{day_before, DaySpend, LlmSpend, ModelSpend, SpendReport, SpendTask, TaskSpend};
@@ -58,6 +60,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V18__session_summary.sql"),
     include_str!("migrations/V19__autopilot.sql"),
     include_str!("migrations/V20__lotse.sql"),
+    include_str!("migrations/V21__answers.sql"),
 ];
 
 /// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).
@@ -117,11 +120,15 @@ impl Store {
         Ok(())
     }
 
+    /// Built-in packs follow the compiled-in YAML: a changed definition of the same version
+    /// (new flags or questions) replaces the stored one; user packs are left alone.
     fn seed_builtin_templates(&self) -> Result<()> {
         for t in templates::builtin()? {
             self.conn.execute(
-                "INSERT OR IGNORE INTO template (id, key, version, origin, definition, created_at)
-                 VALUES (?1, ?2, ?3, 'builtin', ?4, ?5)",
+                "INSERT INTO template (id, key, version, origin, definition, created_at)
+                 VALUES (?1, ?2, ?3, 'builtin', ?4, ?5)
+                 ON CONFLICT (key, version) DO UPDATE SET definition = excluded.definition
+                 WHERE template.origin = 'builtin' AND template.definition != excluded.definition",
                 params![new_id(), t.key, t.version, serde_json::to_string(&t)?, now()],
             )?;
         }
@@ -730,6 +737,8 @@ impl Store {
             params![report_id, template.key, template.version, now()],
         )?;
         tx.execute("DELETE FROM report_section WHERE report_id = ?1", [&report_id])?;
+        // The check was over the other template's questions; answers stay (shared keys still fit).
+        tx.execute("DELETE FROM report_gap_check WHERE report_id = ?1", [&report_id])?;
         let kept = diagnoses.filter(|d| section_filled(&d.body)).map(|d| d.body.clone());
         insert_report_sections(&tx, &report_id, &template, &episode, kind, kept)?;
         audit::append(&tx, Entry {
@@ -1803,28 +1812,33 @@ impl Store {
                 })
             })?
             .collect::<std::result::Result<_, _>>()?;
+        let answers = self.report_answers(report_id)?;
         let mut sentences = self.conn.prepare("SELECT id, text FROM draft_sentence WHERE draft_id = ?1 ORDER BY seq")?;
         let mut cites = self.conn.prepare("SELECT fact_id FROM report_citation WHERE sentence_id = ?1")?;
+        let mut answer_cites = self.conn.prepare("SELECT answer_id FROM answer_citation WHERE sentence_id = ?1")?;
         for d in &mut drafts {
             let rows: Vec<(String, String)> =
                 sentences.query_map([&d.id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<std::result::Result<_, _>>()?;
             for (id, text) in rows {
                 let ids: Vec<String> = cites.query_map([&id], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
                 let sources = facts.iter().filter(|f| ids.contains(&f.fact_id)).cloned().collect();
-                d.sentences.push(DraftSentenceView { id, text, sources });
+                let ids: Vec<String> = answer_cites.query_map([&id], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
+                let answers = answers.iter().filter(|a| ids.contains(&a.id)).cloned().collect();
+                d.sentences.push(DraftSentenceView { id, text, sources, answers });
             }
         }
         Ok(drafts)
     }
 
     /// Stores one run's drafts, one per section. An open proposal for the same section is replaced.
-    /// `facts` are the facts the run saw: `DraftSentence::facts` index into them.
+    /// `facts` and then `answers` are what the run saw: `DraftSentence::facts` index into them.
     pub fn save_drafts(
         &self,
         report_id: &str,
         meta: &DraftMeta,
         drafts: &[crate::draft::SectionResult],
         facts: &[EpisodeFact],
+        answers: &[ReportAnswer],
     ) -> Result<Vec<SectionDraft>> {
         let report = self.editable_for_drafts(report_id, Some(meta.source))?;
         let ts = now();
@@ -1858,8 +1872,12 @@ impl Store {
                     params![sid, id, seq as i64, sentence.text],
                 )?;
                 for &i in &sentence.facts {
-                    let f = facts.get(i).ok_or_else(|| Error::Invalid(format!("Beleg auf unbekannten Fakt {i}")))?;
-                    tx.execute("INSERT OR IGNORE INTO report_citation (sentence_id, fact_id) VALUES (?1, ?2)", params![sid, f.fact_id])?;
+                    if let Some(f) = facts.get(i) {
+                        tx.execute("INSERT OR IGNORE INTO report_citation (sentence_id, fact_id) VALUES (?1, ?2)", params![sid, f.fact_id])?;
+                    } else {
+                        let a = answers.get(i - facts.len()).ok_or_else(|| Error::Invalid(format!("Beleg auf unbekannten Fakt {i}")))?;
+                        tx.execute("INSERT OR IGNORE INTO answer_citation (sentence_id, answer_id) VALUES (?1, ?2)", params![sid, a.id])?;
+                    }
                 }
             }
             sentences += parsed.sentences.len();
@@ -1871,7 +1889,7 @@ impl Store {
                 "provider": meta.provider, "model": meta.model,
                 "prompt_version": prompt_version, "prompt_hash": meta.prompt_hash, "source": meta.source.as_str(),
                 "sections": drafts.iter().map(|d| d.key.as_str()).collect::<Vec<_>>(),
-                "facts": facts.len(), "sentences": sentences, "dropped": dropped, "instructed": meta.instructed,
+                "facts": facts.len(), "answers": answers.len(), "sentences": sentences, "dropped": dropped, "instructed": meta.instructed,
                 "sessions": meta.session_ids.as_ref().map(Vec::len),
                 "with_existing": drafts.iter().filter(|d| d.with_existing).count(),
             }),
@@ -3301,6 +3319,83 @@ mod tests {
     }
 
     #[test]
+    fn answers_are_cited_by_drafts_and_follow_the_report() {
+        use crate::draft::{DraftSentence, Parsed, SectionResult};
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let ep = store
+            .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Vt, age_group: AgeGroup::Adult, setting: Setting::Einzel })
+            .unwrap();
+        note_with_tagged_facts(&store, &p, &ep, "2026-02-10T09:00:00Z", &[("verlauf", "Panik im Bus", &["symptomatik_befund"])]);
+        let facts = store.episode_facts(&ep.id).unwrap();
+        let app = store.create_application(&ep.id, ApplicationKind::Erstantrag).unwrap();
+        let rid = app.report_id.clone().unwrap();
+
+        let q = "Nimmt Pat. aktuell Psychopharmaka?";
+        assert!(store.set_report_answer(&rid, "somatik", "medikation", q, "  ", AnswerSource::Typed).unwrap().is_none());
+        let a = store.set_report_answer(&rid, "somatik", "medikation", q, " keine ", AnswerSource::Chip).unwrap().unwrap();
+        assert_eq!((a.text.as_str(), a.source), ("keine", AnswerSource::Chip));
+        let b = store.set_report_answer(&rid, "somatik", "medikation", q, "Sertralin 50 mg", AnswerSource::Typed).unwrap().unwrap();
+        assert_eq!(b.id, a.id, "one answer per question");
+        store.set_report_answer(&rid, "behandlungsplan_prognose", "ziele", "Ziele?", "Bus fahren", AnswerSource::Dictated).unwrap();
+        let answers = store.report_answers(&rid).unwrap();
+        assert_eq!(answers.iter().map(|a| a.text.as_str()).collect::<Vec<_>>(), ["Sertralin 50 mg", "Bus fahren"]);
+        assert!(store.set_report_answer(&rid, "somatik", "x", q, &"y".repeat(crate::gaps::MAX_ANSWER_CHARS + 1), AnswerSource::Typed).is_err());
+
+        // Index 0 is the fact, 1 and 2 the answers.
+        let meta = DraftMeta { provider: "local".into(), model: "m".into(), prompt_hash: "h".into(), instructed: false, session_ids: None, source: DraftSource::Facts };
+        let run = vec![SectionResult {
+            key: "somatik".into(),
+            parsed: Parsed { sentences: vec![DraftSentence { text: "Pat. nimmt Sertralin 50 mg.".into(), facts: vec![0, 1] }], dropped: 0 },
+            with_existing: false,
+        }];
+        let drafts = store.save_drafts(&rid, &meta, &run, &facts, &answers).unwrap();
+        let s = &drafts[0].sentences[0];
+        assert_eq!((s.sources.len(), s.answers.len()), (1, 1));
+        assert_eq!(s.answers[0].question, q);
+        let bad = vec![SectionResult { key: "somatik".into(), parsed: Parsed { sentences: vec![DraftSentence { text: "x".into(), facts: vec![3] }], dropped: 0 }, with_existing: false }];
+        assert!(store.save_drafts(&rid, &meta, &bad, &facts, &answers).is_err(), "unknown index");
+
+        let covered = vec![CoveredAsk { section: "symptomatik_befund".into(), ask: "befund".into(), facts: vec![facts[0].fact_id.clone()] }];
+        let check = GapCheckMeta { provider: "local", model: "m", prompt_hash: "h", facts_digest: "d", asked: 9, dropped: 0 };
+        assert_eq!(store.save_gap_check(&rid, &check, &covered).unwrap().covered, covered);
+        assert_eq!(store.gap_check(&rid).unwrap().unwrap().facts_digest, "d");
+
+        // Clearing removes the answer and its citation; signing freezes them.
+        store.set_report_answer(&rid, "somatik", "medikation", q, "", AnswerSource::Typed).unwrap();
+        assert!(store.section_drafts(&rid).unwrap()[0].sentences[0].answers.is_empty());
+        store.save_section(&rid, "symptomatik_befund", "<p>x</p>").unwrap();
+        store.sign_report(&rid, "M. Berger").unwrap();
+        assert!(store.set_report_answer(&rid, "somatik", "medikation", q, "keine", AnswerSource::Chip).is_err());
+        store.erase_patient(&p.id).unwrap();
+        let left: i64 = store.conn().query_row("SELECT COUNT(*) FROM report_answer", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn changing_the_kind_drops_the_gap_check_and_builtins_refresh() {
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let ep = store
+            .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Vt, age_group: AgeGroup::Adult, setting: Setting::Einzel })
+            .unwrap();
+        let app = store.create_application(&ep.id, ApplicationKind::Erstantrag).unwrap();
+        let rid = app.report_id.clone().unwrap();
+        let check = GapCheckMeta { provider: "local", model: "m", prompt_hash: "h", facts_digest: "d", asked: 1, dropped: 0 };
+        store.save_gap_check(&rid, &check, &[]).unwrap();
+        store.set_report_answer(&rid, "somatik", "medikation", "?", "keine", AnswerSource::Chip).unwrap();
+        store.change_application_kind(&app.id, ApplicationKind::Umwandlung).unwrap();
+        assert!(store.gap_check(&rid).unwrap().is_none());
+        assert_eq!(store.report_answers(&rid).unwrap().len(), 1);
+
+        // A database seeded by an older build gets the current built-in definition on open.
+        store.conn().execute("UPDATE template SET definition = '{}' WHERE key = 'ptv3-erst-umwandlung'", []).unwrap();
+        store.seed_builtin_templates().unwrap();
+        let t = store.template("ptv3-erst-umwandlung").unwrap();
+        assert!(t.sections.iter().any(|s| s.optional && !s.asks.is_empty()));
+    }
+
+    #[test]
     fn bericht_drafts_cite_episode_facts_and_apply_per_section() {
         use crate::draft::{DraftSentence, Parsed, SectionResult};
         let store = Store::open_in_memory().unwrap();
@@ -3338,7 +3433,7 @@ mod tests {
 
         let app = store.create_application(&ep.id, ApplicationKind::Erstantrag).unwrap();
         let report_id = app.report_id.clone().unwrap();
-        assert!(store.save_drafts(&first.id, &meta(), &[], &facts).is_err(), "only for Berichte");
+        assert!(store.save_drafts(&first.id, &meta(), &[], &facts, &[]).is_err(), "only for Berichte");
         let sentence = |t: &str, f: Vec<usize>| DraftSentence { text: t.into(), facts: f };
         let run = |sections: Vec<(&str, Vec<DraftSentence>)>| -> Vec<SectionResult> {
             sections
@@ -3354,15 +3449,15 @@ mod tests {
             .save_drafts(&report_id, &meta(), &run(vec![
                 ("symptomatik_befund", vec![sentence("Pat. wirkt gedrückt.", vec![0]), sentence("Panik im Bus, Suizidgedanken verneint.", vec![1, 2])]),
                 ("somatik", vec![]),
-            ]), &facts)
+            ]), &facts, &[])
             .unwrap();
         assert_eq!(drafts.len(), 2);
         assert_eq!((drafts[0].with_existing, drafts[1].with_existing), (false, true));
         assert_eq!(drafts[0].session_ids, None);
         assert_eq!(drafts[0].sentences[1].sources.iter().map(|f| f.session_no).collect::<Vec<_>>(), [2, 2]);
         assert_eq!(drafts[0].sentences[0].sources[0].note_id, first.id);
-        assert!(store.save_drafts(&report_id, &meta(), &run(vec![("diagnose_nope", vec![])]), &facts).is_err());
-        assert!(store.save_drafts(&report_id, &meta(), &run(vec![("somatik", vec![sentence("x", vec![9])])]), &facts).is_err(), "unknown fact");
+        assert!(store.save_drafts(&report_id, &meta(), &run(vec![("diagnose_nope", vec![])]), &facts, &[]).is_err());
+        assert!(store.save_drafts(&report_id, &meta(), &run(vec![("somatik", vec![sentence("x", vec![9])])]), &facts, &[]).is_err(), "unknown fact");
         assert_eq!(store.section_drafts(&report_id).unwrap().len(), 2, "a failed save changes nothing");
         assert!(store.apply_draft(&report_id, &drafts[1].id, ApplyMode::Replace).is_err(), "empty draft");
 
@@ -3383,13 +3478,13 @@ mod tests {
         // The therapist edits, then appends a second draft: mixed. A third one replaces everything.
         store.save_section(&report_id, "symptomatik_befund", "<p>Eigener Satz.</p>").unwrap();
         let chosen = DraftMeta { session_ids: Some(vec![facts[0].session_id.clone()]), ..meta() };
-        let d2 = store.save_drafts(&report_id, &chosen, &run(vec![("symptomatik_befund", vec![sentence("Zweiter <Entwurf>.", vec![0])])]), &facts).unwrap();
+        let d2 = store.save_drafts(&report_id, &chosen, &run(vec![("symptomatik_befund", vec![sentence("Zweiter <Entwurf>.", vec![0])])]), &facts, &[]).unwrap();
         let d2 = d2.iter().find(|d| d.status == DraftStatus::Proposed && d.section_key == "symptomatik_befund").unwrap();
         assert_eq!(d2.session_ids, Some(vec![facts[0].session_id.clone()]), "the chosen sessions are kept with the draft");
         let r = store.apply_draft(&report_id, &d2.id, ApplyMode::Append).unwrap();
         assert_eq!(section(&r, "symptomatik_befund").body, "<p>Eigener Satz.</p><p>Zweiter &lt;Entwurf&gt;.</p>");
         assert_eq!(section(&r, "symptomatik_befund").origin, SectionOrigin::Mixed);
-        let d3 = store.save_drafts(&report_id, &meta(), &run(vec![("symptomatik_befund", vec![sentence("Neu.", vec![2])])]), &facts).unwrap();
+        let d3 = store.save_drafts(&report_id, &meta(), &run(vec![("symptomatik_befund", vec![sentence("Neu.", vec![2])])]), &facts, &[]).unwrap();
         let d3 = d3.iter().find(|d| d.status == DraftStatus::Proposed && d.section_key == "symptomatik_befund").unwrap().id.clone();
         let r = store.apply_draft(&report_id, &d3, ApplyMode::Replace).unwrap();
         assert_eq!((section(&r, "symptomatik_befund").body.as_str(), section(&r, "symptomatik_befund").origin), ("<p>Neu.</p>", SectionOrigin::Ai));
@@ -3409,7 +3504,7 @@ mod tests {
         assert_eq!(audit::verify(store.conn()).unwrap(), None);
 
         store.sign_report(&report_id, "Dr. Test").unwrap();
-        assert!(store.save_drafts(&report_id, &meta(), &[], &facts).is_err(), "signed Berichte take no drafts");
+        assert!(store.save_drafts(&report_id, &meta(), &[], &facts, &[]).is_err(), "signed Berichte take no drafts");
 
         store.erase_patient(&p.id).unwrap();
         for table in ["section_draft", "draft_sentence", "report_citation"] {
@@ -3443,8 +3538,8 @@ mod tests {
             parsed: Parsed { sentences: vec![DraftSentence { text: "Pat. schläft schlecht.".into(), facts: vec![] }], dropped: 0 },
             with_existing: false,
         }];
-        assert!(store.save_drafts(&note.id, &meta(DraftSource::Facts), &run, &[]).is_err(), "fact drafts are for Berichte only");
-        let drafts = store.save_drafts(&note.id, &meta(DraftSource::Dictation), &run, &[]).unwrap();
+        assert!(store.save_drafts(&note.id, &meta(DraftSource::Facts), &run, &[], &[]).is_err(), "fact drafts are for Berichte only");
+        let drafts = store.save_drafts(&note.id, &meta(DraftSource::Dictation), &run, &[], &[]).unwrap();
         assert_eq!((drafts.len(), drafts[0].source, drafts[0].sentences[0].sources.len()), (1, DraftSource::Dictation, 0));
         let r = store.apply_draft(&note.id, &drafts[0].id, ApplyMode::Replace).unwrap();
         assert_eq!(r.sections[0].body, "<p>Pat. schläft schlecht.</p>");

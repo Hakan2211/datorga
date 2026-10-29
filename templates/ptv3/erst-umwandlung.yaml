@@ -28,6 +28,28 @@ sections:
           Angaben zur Lebenssituation, zu Kindergarten oder zu Schulart, ggf. Schulabschluss und Arbeitsstelle,
           Geschwisterzahl und -position, zum Alter und Beruf der Eltern und ggf. der primären Betreuungspersonen
         when: { age: [kjp] }
+    # Bericht-Lotse (slice 38): asked in step "Fragen" when the session facts don't answer them.
+    # Draft catalogue, to be reviewed by the therapist. Answers count as her own statements.
+    asks:
+      - key: alter_geschlecht
+        question: Alter und Geschlecht
+        record: age_gender
+      - key: beruf
+        question: Welchen Beruf übt Pat. aktuell aus?
+        chips: [arbeitssuchend, in Ausbildung, berentet, nicht bekannt]
+        when: { age: [adult] }
+      - key: familienstand
+        question: Familienstand und Zahl der Kinder?
+        chips: [ledig, verheiratet, in Partnerschaft, getrennt lebend, keine Kinder]
+        when: { age: [adult] }
+      - key: schule
+        question: Kindergarten oder Schulart, Klasse bzw. Abschluss?
+        chips: [nicht bekannt]
+        when: { age: [kjp] }
+      - key: familie
+        question: Geschwister (Zahl, Position) sowie Alter und Beruf der Eltern bzw. Betreuungspersonen?
+        chips: [Einzelkind, nicht bekannt]
+        when: { age: [kjp] }
 
   - key: symptomatik_befund
     number: "2"
@@ -44,6 +66,19 @@ sections:
       - text: Krankheitsverständnis der relevanten Bezugspersonen
         when: { age: [kjp] }
       - text: Ergebnisse psychodiagnostischer Testverfahren
+    asks:
+      - key: befund
+        question: Psychischer Befund (Bewusstsein, Orientierung, Stimmung, Antrieb, Denken, Suizidalität)?
+        chips: [wach und allseits orientiert, keine akute Suizidalität]
+      - key: tests
+        question: Welche Testverfahren wurden eingesetzt, mit welchem Ergebnis?
+        chips: [keine durchgeführt]
+      - key: krankheitsverstaendnis
+        question: Wie versteht Pat. die eigene Erkrankung?
+        when: { age: [adult] }
+      - key: krankheitsverstaendnis_bezug
+        question: Wie verstehen die Bezugspersonen die Erkrankung?
+        when: { age: [kjp] }
 
   - key: somatik
     number: "3"
@@ -56,6 +91,16 @@ sections:
       - text: >-
           Psychotherapeutische, psychosomatische sowie kinder- und jugendpsychiatrische bzw. psychiatrische
           Vorbehandlungen (falls vorhanden Berichte beifügen)
+    asks:
+      - key: somatisch
+        question: Somatische Befunde, Konsiliarbericht, Suchtmittelkonsum?
+        chips: [Konsiliarbericht ohne Befund, kein Suchtmittelkonsum, nicht bekannt]
+      - key: medikation
+        question: Nimmt Pat. aktuell Psychopharmaka (Präparat, Dosis, seit wann, verordnet von)?
+        chips: [keine, nicht bekannt]
+      - key: vorbehandlungen
+        question: Gab es psychotherapeutische, psychosomatische oder psychiatrische Vorbehandlungen?
+        chips: [keine, nicht bekannt]
 
   - key: lebensgeschichte_modell
     number: "4"
@@ -74,6 +119,17 @@ sections:
         when: { method: [TP, AP] }
       - text: Lebensgeschichte der Bezugspersonen, soweit behandlungsrelevant
         when: { age: [kjp] }
+    asks:
+      - key: biografie
+        question: Welche lebensgeschichtlichen Erfahrungen sind für die Störung bedeutsam?
+      - key: krankheitsanamnese
+        question: Wann und in welcher Situation begannen die Beschwerden, wie verliefen sie seitdem?
+      - key: bedingungsmodell
+        question: Was sind prädisponierende, auslösende und aufrechterhaltende Bedingungen (Makroanalyse)?
+        when: { method: [VT] }
+      - key: psychodynamik
+        question: Auslösende Situation, zentraler Konflikt, Abwehr, Strukturniveau und Beziehungsmuster?
+        when: { method: [TP, AP] }
 
   - key: diagnose
     number: "5"
@@ -110,6 +166,23 @@ sections:
           Veränderungshindernissen
       - text: Prognose auch bezüglich der Bezugspersonen
         when: { age: [kjp] }
+    asks:
+      - key: ziele
+        question: Welche Therapieziele haben Sie mit Pat. vereinbart?
+      - key: methoden
+        question: Welche Behandlungstechniken und -methoden planen Sie?
+      - key: setting
+        question: Setting, Sitzungszahl und Frequenz, und warum so?
+        chips: [Einzeltherapie, wöchentlich, 14-täglich]
+      - key: bezugspersonen
+        question: Wie werden die Bezugspersonen einbezogen?
+        when: { age: [kjp] }
+      - key: kooperation
+        question: Kooperation mit anderen Berufsgruppen?
+        chips: [keine, hausärztliche Praxis, psychiatrische Mitbehandlung]
+      - key: prognose
+        question: Wie schätzen Sie die Prognose ein, und woran machen Sie das fest (Motivation, Umstellungsfähigkeit, Hindernisse)?
+        chips: [günstig, eher günstig, eingeschränkt]
 
   - key: umwandlung
     number: "7"
@@ -124,3 +197,10 @@ sections:
         when: { age: [kjp] }
       - text: Begründung der Notwendigkeit der Umwandlung der Kurzzeittherapie in eine Langzeittherapie
       - text: Weitere Ergebnisse psychodiagnostischer Testverfahren
+    asks:
+      - key: verlauf
+        question: Wie verlief die Kurzzeittherapie, was hat sich an der Symptomatik verändert?
+      - key: zielerreichung
+        question: Welche Therapieziele wurden erreicht, welche noch nicht?
+      - key: begruendung
+        question: Warum reicht die Kurzzeittherapie nicht aus?
