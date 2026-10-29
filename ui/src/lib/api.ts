@@ -6,6 +6,7 @@ import { queryOptions } from '@tanstack/react-query'
 import type { Application } from '@/bindings/Application'
 import type { ApplicationKind } from '@/bindings/ApplicationKind'
 import type { AuditEvent } from '@/bindings/AuditEvent'
+import type { BerichtCandidate } from '@/bindings/BerichtCandidate'
 import type { CheckItem } from '@/bindings/CheckItem'
 import type { Consent } from '@/bindings/Consent'
 import type { ConsentKind } from '@/bindings/ConsentKind'
@@ -321,6 +322,9 @@ export const api = {
   applications: (episodeId: string) => invoke<Application[]>('applications_list', { episodeId }),
   createApplication: (episodeId: string, kind: ApplicationKind) =>
     invoke<Application>('application_create', { episodeId, kind }),
+  changeApplicationKind: (id: string, kind: ApplicationKind) => invoke<Application>('application_change_kind', { id, kind }),
+  berichtCandidates: (episodeId?: string) =>
+    invoke<BerichtCandidate[]>('bericht_candidates', { episodeId: episodeId ?? null }),
 
   sessions: (patientId?: string) => invoke<Session[]>('sessions_list', { patientId: patientId ?? null }),
   createSession: (input: SessionInput) => invoke<Session>('session_create', { input }),
@@ -481,6 +485,8 @@ export const api = {
   reports: (status?: ReportStatus) => invoke<ReportSummary[]>('reports_list', { status: status ?? null }),
   report: (id: string) => invoke<ReportView>('report_get', { id }),
   saveSection: (id: string, key: string, body: string) => invoke<void>('report_save_section', { id, key, body }),
+  setSectionNotRelevant: (id: string, key: string, on: boolean) =>
+    invoke<Report>('report_section_not_relevant', { id, key, on }),
   checklist: (id: string) => invoke<CheckItem[]>('report_checklist', { id }),
   sign: (id: string, signedBy: string) => invoke<Report>('report_sign', { id, signedBy }),
   addAddendum: (id: string, body: string, signedBy: string) =>
@@ -536,6 +542,8 @@ export const q = {
     queryOptions({ queryKey: ['episodes', patientId], queryFn: () => api.episodes(patientId) }),
   applications: (episodeId: string) =>
     queryOptions({ queryKey: ['applications', episodeId], queryFn: () => api.applications(episodeId) }),
+  berichtCandidates: (episodeId?: string) =>
+    queryOptions({ queryKey: ['berichtCandidates', episodeId ?? 'all'], queryFn: () => api.berichtCandidates(episodeId) }),
   sessions: (patientId?: string) =>
     queryOptions({ queryKey: ['sessions', patientId ?? 'all'], queryFn: () => api.sessions(patientId) }),
   // Polled so the colours follow a running recording or transcription elsewhere in the app.

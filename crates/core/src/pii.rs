@@ -114,7 +114,12 @@ pub fn checklist(report: &Report, template: &Template, patient: &Patient) -> Vec
     let mut total = 0usize;
 
     for def in &template.sections {
-        let body = report.sections.iter().find(|s| s.key == def.key).map(|s| s.body.as_str()).unwrap_or("");
+        let section = report.sections.iter().find(|s| s.key == def.key);
+        // Left out of the export, so nothing to check.
+        if def.optional && section.is_some_and(|s| s.not_relevant) {
+            continue;
+        }
+        let body = section.map(|s| s.body.as_str()).unwrap_or("");
         let text = section_text(def.field, body);
         total += text.chars().count();
         let label = def.number.clone().unwrap_or_else(|| def.key.clone());

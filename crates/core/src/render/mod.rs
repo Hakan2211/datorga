@@ -62,8 +62,10 @@ pub fn build_doc(
     let sections = template
         .sections
         .iter()
-        // Optional sections left empty are omitted (Sitzungsnotiz); PTV 3 sections always print.
+        // Optional sections left empty are omitted (Sitzungsnotiz); PTV 3 sections always print,
+        // except those marked "nicht relevant".
         .filter(|def| def.required || !crate::pii::section_text(def.field, body_of(&def.key)).is_empty())
+        .filter(|def| !(def.optional && report.sections.iter().any(|s| s.key == def.key && s.not_relevant)))
         .map(|def| {
             let body = body_of(&def.key);
             let (diagnoses, html) = match def.field {

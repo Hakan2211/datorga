@@ -49,6 +49,7 @@ sections:
     number: "3"
     heading: Somatischer Befund / Konsiliarbericht
     field: prose
+    optional: true
     hints:
       - text: Somatische Befunde (ggf. einschließlich Suchtmittelkonsum)
       - text: Ggf. aktuelle psychopharmakologische Medikation (nur von der Therapeutin bestätigte Angaben)

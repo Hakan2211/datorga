@@ -70,6 +70,9 @@ pub struct SectionDef {
     /// An empty required section blocks signing.
     #[serde(default = "yes")]
     pub required: bool,
+    /// May be marked "nicht relevant" in a report (PTV 3: "Unterpunkte nur bei Relevanz").
+    #[serde(default)]
+    pub optional: bool,
     /// Receives the therapist's confirmed dictation when the document is created.
     #[serde(default)]
     pub dictation: bool,

@@ -477,6 +477,9 @@ pub struct ReportSection {
     pub body: String,
     pub origin: SectionOrigin,
     pub edited_at: Option<String>,
+    /// An optional section marked "nicht relevant": no blocking, left out of the export.
+    #[serde(default)]
+    pub not_relevant: bool,
 }
 
 /// ICD-10 diagnosis, entered by the therapist only (never AI-filled; MDR boundary).

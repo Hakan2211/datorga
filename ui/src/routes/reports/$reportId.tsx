@@ -29,6 +29,7 @@ import { Addenda } from '@/components/addenda'
 import { FactDraftCard } from '@/components/fact-draft'
 import { DraftDialog, DraftProposal, DraftSources, ReportDraftCard } from '@/components/report-draft'
 import { AutoDraft } from '@/components/autopilot'
+import { StartStep } from '@/components/lotse/start-step'
 import { Page, PageHeader } from '@/components/app-shell'
 import { DiagnosisRows } from '@/components/diagnoses'
 import { StatusBadge, Stepper, StickyActionBar, formatDate, stepStates } from '@/components/bits'
@@ -48,19 +49,29 @@ import { api, errorMessage, q, type ReportView } from '@/lib/api'
 import { appendParagraph, estimatePages, isBlank, parseDiagnoses, sectionText } from '@/lib/report'
 import { cn } from '@/lib/utils'
 
+type ReportSearch = { autodraft?: boolean; step?: LotseStep }
+
 export const Route = createFileRoute('/reports/$reportId')({
   component: ReportEditorPage,
   // `autodraft`: opened from "Antrag anlegen" with autopilot on; drafts all AI sections once.
-  validateSearch: (s: Record<string, unknown>): { autodraft?: boolean } => (s.autodraft === true || s.autodraft === 'true' ? { autodraft: true } : {}),
+  // `step`: the Bericht-Lotse step shown (default: start for an untouched Bericht).
+  validateSearch: (s: Record<string, unknown>): ReportSearch => ({
+    ...(s.autodraft === true || s.autodraft === 'true' ? { autodraft: true } : {}),
+    ...(LOTSE_STEPS.includes(s.step as LotseStep) ? { step: s.step as LotseStep } : {}),
+  }),
 })
 
 function ReportEditorPage() {
   const { reportId } = Route.useParams()
   const view = useQuery({ ...q.report(reportId), staleTime: Infinity })
   if (!view.data) return null
-  // Keyed so local editor state resets when the report changes (e.g. after signing).
-  return <ReportEditor key={`${reportId}:${view.data.report.status}`} view={view.data} />
+  // Keyed so local editor state resets when the report changes (after signing, another Antragsart).
+  const { report, application } = view.data
+  return <ReportEditor key={`${reportId}:${report.status}:${report.template_key}:${application?.kind}`} view={view.data} />
 }
+
+const LOTSE_STEPS = ['start', 'abschnitte', 'pruefen', 'fertig'] as const
+type LotseStep = (typeof LOTSE_STEPS)[number]
 
 const SAVE_DELAY_MS = 700
 // View choices are per machine, like the theme (localStorage, not the encrypted settings).
@@ -91,6 +102,20 @@ function ReportEditor({ view }: { view: ReportView }) {
   const [bodies, setBodies] = useState<Record<string, string>>(() =>
     Object.fromEntries(report.sections.map((s) => [s.key, s.body])),
   )
+  const [notRelevant, setNotRelevant] = useState<ReadonlySet<string>>(
+    () => new Set(report.sections.filter((s) => s.not_relevant).map((s) => s.key)),
+  )
+  const setRelevance = (key: string, off: boolean) => {
+    api
+      .setSectionNotRelevant(report.id, key, off)
+      .then((r) => {
+        setNotRelevant(new Set(r.sections.filter((s) => s.not_relevant).map((s) => s.key)))
+        void qc.invalidateQueries({ queryKey: ['checklist', report.id] })
+        void qc.invalidateQueries({ queryKey: ['reports'] })
+      })
+      .catch((e) => toast.error(errorMessage(e)))
+  }
+  const relevantSections = useMemo(() => template.sections.filter((s) => !notRelevant.has(s.key)), [template.sections, notRelevant])
   // Debounced autosave per section. A section stays "dirty" until its latest edit is persisted.
   const [dirty, setDirty] = useState<ReadonlySet<string>>(new Set())
   const pending = dirty.size
@@ -174,16 +199,23 @@ function ReportEditor({ view }: { view: ReportView }) {
 
   // Bericht drafting from the episode's applied Sitzungsnotiz facts.
   const drafting = !isNote && !readOnly && !!application
-  const draftable = useMemo(() => template.sections.filter((s) => s.field === 'prose' && s.ai_allowed), [template.sections])
+  const draftable = useMemo(() => relevantSections.filter((s) => s.field === 'prose' && s.ai_allowed), [relevantSections])
   // A note has drafts only from its Werkstatt.
   const drafts = useQuery(q.reportDrafts(report.id))
   const templates = useQuery({ ...q.templates(), enabled: !isNote })
   const noteSections = templates.data?.find((tp) => tp.key === 'sitzungsnotiz')?.sections ?? []
   const [draftKeys, setDraftKeys] = useState<string[] | null>(null)
-  const autodraft = Route.useSearch().autodraft === true
+  const search = Route.useSearch()
+  const autodraft = search.autodraft === true
   const navigate = useNavigate()
   const endAutodraft = useCallback(
-    () => void navigate({ to: '/reports/$reportId', params: { reportId: report.id }, search: {}, replace: true }),
+    () =>
+      void navigate({
+        to: '/reports/$reportId',
+        params: { reportId: report.id },
+        search: (s: ReportSearch) => ({ step: s.step }),
+        replace: true,
+      }),
     [navigate, report.id],
   )
   // The draft may send the sections' current text along: save pending edits first.
@@ -225,6 +257,27 @@ function ReportEditor({ view }: { view: ReportView }) {
   ])
   const current = REPORT_FLOW.find((k) => states[k] === 'current')
   const emptyDraftable = draftable.filter((s) => isBlank(bodies[s.key] ?? '')).map((s) => s.key)
+
+  // Bericht-Lotse: an untouched Bericht opens on the start step, anything else on its sections.
+  const anyProse = template.sections.some((s) => s.field === 'prose' && !isBlank(bodies[s.key] ?? ''))
+  const touched = anyProse || (drafts.data?.length ?? 0) > 0
+  const viewing: LotseStep = search.step ?? (flowOn && !readOnly && !touched ? 'start' : 'abschnitte')
+  const lotse = stepStates<LotseStep>(
+    [
+      { key: 'start', done: readOnly || touched },
+      { key: 'abschnitte', done: readOnly || (!blocked && proposals.length === 0) },
+      { key: 'pruefen', done: readOnly },
+      { key: 'fertig', done: exported },
+    ],
+  )
+  const setStep = (step: LotseStep, replace = false) =>
+    void navigate({ to: '/reports/$reportId', params: { reportId: report.id }, search: (s: ReportSearch) => ({ ...s, step }), replace })
+  const openStep = (step: LotseStep) => {
+    setStep(step)
+    // Until slices 39–40 give them their own screens, Prüfen and Fertig are places on the editor page.
+    if (step === 'pruefen') jump('check')
+    else if (step === 'fertig') jump('export')
+  }
   // After a view switch the target exists only once React has rendered it.
   const scrollTo = (id: string) =>
     requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
@@ -316,11 +369,28 @@ function ReportEditor({ view }: { view: ReportView }) {
       <Page>
         {flowOn && (
           <Stepper
-            steps={REPORT_FLOW.map((k) => ({ key: k, label: t(`flow.report.${k}`), state: states[k] }))}
-            onSelect={jump}
+            steps={LOTSE_STEPS.map((k) => ({ key: k, label: t(`lotse.step.${k}`), state: lotse[k] }))}
+            viewing={viewing}
+            onSelect={openStep}
             className="mx-auto max-w-4xl"
           />
         )}
+        {flowOn && viewing === 'start' ? (
+          <>
+            {drafting && autodraft && <AutoDraft reportId={report.id} keys={emptyDraftable} onDone={endAutodraft} />}
+            <StartStep
+              view={view}
+              bodies={bodies}
+              notRelevant={notRelevant}
+              drafts={drafts.data ?? []}
+              sources={sources.data}
+              llmActive={!!llm.data?.config.active}
+              onRelevance={setRelevance}
+              onChange={update}
+            />
+          </>
+        ) : (
+        <>
         <div className="flex items-center justify-between gap-3">
           <ToggleGroup
             type="single"
@@ -358,13 +428,7 @@ function ReportEditor({ view }: { view: ReportView }) {
                 onApply={applyFacts}
               />
             )}
-            {drafting && autodraft && (
-              <AutoDraft
-                reportId={report.id}
-                keys={draftable.filter((s) => isBlank(bodies[s.key] ?? '')).map((s) => s.key)}
-                onDone={endAutodraft}
-              />
-            )}
+            {drafting && autodraft && <AutoDraft reportId={report.id} keys={emptyDraftable} onDone={endAutodraft} />}
             {drafting && (
               <div id="flow-draft" className="scroll-mt-6">
                 <ReportDraftCard
@@ -387,7 +451,7 @@ function ReportEditor({ view }: { view: ReportView }) {
             )}
             {mode === 'document' ? (
               <ReportDocument
-                sections={template.sections}
+                sections={relevantSections}
                 bodies={bodies}
                 readOnly={readOnly}
                 frame={frame}
@@ -410,6 +474,8 @@ function ReportEditor({ view }: { view: ReportView }) {
                   onFocus={() => setActiveKey(s.key)}
                   onChange={(b) => update(s.key, b)}
                   dictateFor={report.id}
+                  notRelevant={notRelevant.has(s.key)}
+                  onRelevance={flowOn && s.optional && !readOnly ? (off) => setRelevance(s.key, off) : undefined}
                   action={
                     canDraft && (
                       <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => openDraft([s.key])}>
@@ -489,6 +555,8 @@ function ReportEditor({ view }: { view: ReportView }) {
           </aside>
           )}
         </div>
+        </>
+        )}
       </Page>
       <ReportBar
         info={
@@ -502,11 +570,16 @@ function ReportEditor({ view }: { view: ReportView }) {
           </>
         }
         step={barStep}
+        start={flowOn && viewing === 'start' && !readOnly}
+        onStartNext={() => setStep('abschnitte')}
         canDraftEmpty={
           drafting && !!llm.data?.config.active && emptyDraftable.length > 0 && (sources.data?.facts.length ?? 0) > 0
         }
         proposals={proposals.length}
-        onDraftEmpty={() => openDraft(emptyDraftable)}
+        onDraftEmpty={() => {
+          if (viewing === 'start') setStep('abschnitte')
+          openDraft(emptyDraftable)
+        }}
         onJump={jump}
         onExport={() => exportAs.mutate('pdf')}
         exporting={exportAs.isPending}
@@ -529,6 +602,8 @@ const STEP_ANCHOR: Record<ReportStep, string> = {
 function ReportBar({
   info,
   step,
+  start,
+  onStartNext,
   canDraftEmpty,
   proposals,
   onDraftEmpty,
@@ -538,6 +613,9 @@ function ReportBar({
 }: {
   info: ReactNode
   step: ReportStep | null
+  /** The Lotse start step is shown: its one action leads on to the sections. */
+  start: boolean
+  onStartNext: () => void
   canDraftEmpty: boolean
   proposals: number
   onDraftEmpty: () => void
@@ -547,7 +625,18 @@ function ReportBar({
 }) {
   const { t } = useTranslation()
   let action: ReactNode = null
-  if (step === 'facts') {
+  if (start) {
+    action =
+      step === 'draft' && canDraftEmpty && proposals === 0 ? (
+        <Button onClick={onDraftEmpty} data-testid="lotse-next">
+          {t('lotse.nextDraft')} <ArrowRight />
+        </Button>
+      ) : (
+        <Button onClick={onStartNext} data-testid="lotse-next">
+          {t('lotse.next')} <ArrowRight />
+        </Button>
+      )
+  } else if (step === 'facts') {
     info = (
       <>
         {info}
@@ -597,10 +686,16 @@ function SectionEditor({
   above,
   below,
   dictateFor,
+  notRelevant = false,
+  onRelevance,
 }: {
   def: SectionDef
   body: string
   readOnly: boolean
+  /** Marked "nicht relevant": the editor collapses to a note. */
+  notRelevant?: boolean
+  /** Set for an optional section that may be marked "nicht relevant". */
+  onRelevance?: (notRelevant: boolean) => void
   /** Report id: voice mode in this section's toolbar. */
   dictateFor?: string
   active?: boolean
@@ -622,12 +717,30 @@ function SectionEditor({
       className={cn('scroll-mt-6 space-y-2 border-l-2 border-transparent pl-3 -ml-3.5', active && 'border-primary/60')}
     >
       <div className="flex items-start justify-between gap-3">
-        <h2 className="font-serif text-[17px] leading-snug font-semibold">
+        <h2 className={cn('font-serif text-[17px] leading-snug font-semibold', notRelevant && 'text-muted-foreground')}>
           {def.number && <span className="mr-1.5 text-primary">{def.number}.</span>}
           {def.heading}
         </h2>
-        {action}
+        <div className="flex shrink-0 items-center gap-1">
+          {onRelevance && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs text-muted-foreground"
+              title={t('lotse.notRelevantHint')}
+              onClick={() => onRelevance(!notRelevant)}
+              data-testid={`relevance-${def.key}`}
+            >
+              {notRelevant ? t('lotse.markRelevant') : t('lotse.markNotRelevant')}
+            </Button>
+          )}
+          {!notRelevant && action}
+        </div>
       </div>
+      {notRelevant ? (
+        <p className="rounded-md border border-dashed px-3 py-2 text-[13px] text-muted-foreground">{t('lotse.notRelevantHint')}</p>
+      ) : (
+      <>
       {def.hints.length > 0 && (
         <div className="rounded-md bg-muted/60 px-3 py-2 text-[13px] text-muted-foreground">
           <button
@@ -659,6 +772,8 @@ function SectionEditor({
         <DiagnosesEditor body={body} onChange={onChange} readOnly={readOnly} />
       )}
       {below}
+      </>
+      )}
     </section>
   )
 }

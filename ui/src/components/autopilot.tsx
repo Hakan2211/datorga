@@ -229,7 +229,7 @@ export function usePrepareApplication() {
       return { app, autopilot: await api.autopilotEnabled() }
     },
     onSuccess: ({ app, autopilot }) => {
-      for (const key of [['applications', app.episode_id], ['reports'], ['calendar'], ['contingent'], ['timeline']]) {
+      for (const key of [['applications', app.episode_id], ['reports'], ['berichtCandidates'], ['calendar'], ['contingent'], ['timeline']]) {
         void qc.invalidateQueries({ queryKey: key })
       }
       if (app.report_id) {

@@ -213,7 +213,7 @@ mod tests {
         }))
         .unwrap();
         for (key, body) in [("verlauf", verlauf), ("vereinbarungen", vereinbarungen), ("befund", "<p>Geheim.</p>")] {
-            r.sections.push(ReportSection { key: key.into(), body: body.into(), origin: SectionOrigin::Human, edited_at: None });
+            r.sections.push(ReportSection { key: key.into(), body: body.into(), origin: SectionOrigin::Human, edited_at: None, not_relevant: false });
         }
         (Some("2026-10-20T10:00:00Z".into()), r)
     }

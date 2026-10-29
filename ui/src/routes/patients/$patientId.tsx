@@ -6,7 +6,6 @@ import { toast } from 'sonner'
 import { FilePlus2, Gauge, History, LayoutGrid, Pencil, Plus, Stethoscope, Trash2 } from 'lucide-react'
 import type { Diagnosis } from '@/bindings/Diagnosis'
 import type { AgeGroup } from '@/bindings/AgeGroup'
-import type { ApplicationKind } from '@/bindings/ApplicationKind'
 import type { Episode } from '@/bindings/Episode'
 import type { Method } from '@/bindings/Method'
 import type { Setting } from '@/bindings/Setting'
@@ -20,6 +19,7 @@ import { PatientFormDialog } from '@/components/patient-form'
 import { PatientTimeline } from '@/components/patient-timeline'
 import { SessionDialog, type SessionDialogMode } from '@/components/session-dialog'
 import { usePrepareApplication } from '@/components/autopilot'
+import { useStartBericht } from '@/components/lotse/new-report'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -144,18 +144,10 @@ function PatientDetail() {
 
 function EpisodeCard({ episode }: { episode: Episode }) {
   const { t } = useTranslation()
-  const qc = useQueryClient()
-  const navigate = useNavigate()
   const apps = useQuery(q.applications(episode.id))
-  const create = useMutation({
-    mutationFn: (kind: ApplicationKind) => api.createApplication(episode.id, kind),
-    onSuccess: (a) => {
-      void qc.invalidateQueries({ queryKey: ['applications', episode.id] })
-      void qc.invalidateQueries({ queryKey: ['reports'] })
-      if (a.report_id) void navigate({ to: '/reports/$reportId', params: { reportId: a.report_id } })
-    },
-    onError: (e) => toast.error(errorMessage(e)),
-  })
+  // One entry: the Lotse picks the Antragsart (changeable on its start step) or the open draft.
+  const candidate = useQuery(q.berichtCandidates(episode.id)).data?.[0]
+  const start = useStartBericht()
 
   return (
     <Card>
@@ -167,13 +159,18 @@ function EpisodeCard({ episode }: { episode: Episode }) {
             {t('episodes.since')} {formatDate(episode.started_at)}
           </span>
         </CardTitle>
-        <div className="flex gap-2">
-          {(['erstantrag', 'umwandlung', 'fortfuehrung'] as const).map((k) => (
-            <Button key={k} size="sm" variant="outline" disabled={create.isPending} onClick={() => create.mutate(k)}>
-              <FilePlus2 /> {t(`enums.kind.${k}`)}
-            </Button>
-          ))}
-        </div>
+        {candidate && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={start.isPending}
+            onClick={() => start.mutate(candidate)}
+            title={candidate.open_report_id ? undefined : t('lotse.suggests', { kind: t(`enums.kind.${candidate.suggested}`) })}
+            data-testid="episode-bericht"
+          >
+            <FilePlus2 /> {candidate.open_report_id ? t('lotse.openDraftButton') : t('lotse.create')}
+          </Button>
+        )}
       </CardHeader>
       <CardContent className="space-y-4">
         <EpisodeStage episode={episode} />

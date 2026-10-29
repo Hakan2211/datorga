@@ -9,6 +9,10 @@ export type SectionDef = { key: string, number: string | null, heading: string, 
  */
 required: boolean, 
 /**
+ * May be marked "nicht relevant" in a report (PTV 3: "Unterpunkte nur bei Relevanz").
+ */
+optional: boolean, 
+/**
  * Receives the therapist's confirmed dictation when the document is created.
  */
 dictation: boolean, when: When, hints: Array<Hint>, };

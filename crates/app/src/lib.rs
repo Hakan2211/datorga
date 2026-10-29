@@ -1496,6 +1496,17 @@ fn application_create(state: State<'_, AppState>, episode_id: String, kind: Appl
 }
 
 #[tauri::command]
+fn application_change_kind(state: State<'_, AppState>, id: String, kind: ApplicationKind) -> CmdResult<Application> {
+    state.with(|s| s.change_application_kind(&id, kind))
+}
+
+/// Open Behandlungsfälle for "Neuer Bericht", with the suggested Antragsart (all, or one case).
+#[tauri::command]
+fn bericht_candidates(state: State<'_, AppState>, episode_id: Option<String>) -> CmdResult<Vec<thera_core::lotse::BerichtCandidate>> {
+    state.with(|s| s.bericht_candidates(episode_id.as_deref(), &thera_core::domain::now()))
+}
+
+#[tauri::command]
 fn sessions_list(state: State<'_, AppState>, patient_id: Option<String>) -> CmdResult<Vec<Session>> {
     state.with(|s| s.list_sessions(patient_id.as_deref()))
 }
@@ -1658,6 +1669,18 @@ fn report_get(state: State<'_, AppState>, id: String) -> CmdResult<ReportView> {
 #[tauri::command]
 fn report_save_section(state: State<'_, AppState>, id: String, key: String, body: String) -> CmdResult<()> {
     state.with(|s| s.save_section(&id, &key, &body))
+}
+
+/// "Nicht relevant" for a section the template marks optional.
+#[tauri::command]
+fn report_section_not_relevant(state: State<'_, AppState>, id: String, key: String, on: bool) -> CmdResult<Report> {
+    state.with(|s| {
+        let v = report_view(s, &id)?;
+        if !v.template.sections.iter().any(|d| d.key == key && d.optional) {
+            return Err(thera_core::Error::Invalid(format!("Abschnitt {key} kann nicht als nicht relevant markiert werden")));
+        }
+        s.set_section_not_relevant(&id, &key, on)
+    })
 }
 
 #[tauri::command]
@@ -2506,8 +2529,15 @@ fn prepare_draft(s: &Store, report_id: &str, choice: &DraftChoice) -> thera_core
     };
     let frame = draft::Frame { method: episode.method, age_group: episode.age_group, kind: application.kind };
     let dict = s.pseudo_dictionary(&view.patient.id)?;
+    // Sections marked "nicht relevant" are not drafted.
+    let keys: Vec<String> = choice
+        .sections
+        .iter()
+        .filter(|k| !view.report.sections.iter().any(|sec| &sec.key == *k && sec.not_relevant))
+        .cloned()
+        .collect();
     let req = draft::Request {
-        keys: &choice.sections,
+        keys: &keys,
         facts: &input,
         tag_keys: &tag_keys,
         existing: &existing,
@@ -3694,6 +3724,9 @@ pub fn run() {
             episode_diagnoses_set,
             applications_list,
             application_create,
+            application_change_kind,
+            bericht_candidates,
+            report_section_not_relevant,
             sessions_list,
             session_create,
             session_note_create,

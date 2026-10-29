@@ -57,6 +57,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V17__patient_profile.sql"),
     include_str!("migrations/V18__session_summary.sql"),
     include_str!("migrations/V19__autopilot.sql"),
+    include_str!("migrations/V20__lotse.sql"),
 ];
 
 /// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).
@@ -674,20 +675,7 @@ impl Store {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'bericht', ?7, ?7)",
             params![report_id, episode.patient_id, episode_id, app_id, template.key, template.version, ts],
         )?;
-        let ctx = templates::Context { method: episode.method, age_group: episode.age_group, kind: Some(kind) };
-        for s in template.resolve(&ctx).sections {
-            // The Diagnosen section starts from the Behandlungsfall's working diagnoses (therapist-entered).
-            let body = match s.field {
-                templates::FieldKind::Diagnoses if !episode.diagnoses.is_empty() => serde_json::to_string(
-                    &crate::pii::DiagnosesBody { diagnoses: episode.diagnoses.clone(), notes: String::new() },
-                )?,
-                _ => String::new(),
-            };
-            tx.execute(
-                "INSERT INTO report_section (id, report_id, key, body) VALUES (?1, ?2, ?3, ?4)",
-                params![new_id(), report_id, s.key, body],
-            )?;
-        }
+        insert_report_sections(&tx, &report_id, &template, &episode, kind, None)?;
         audit::append(&tx, Entry {
             actor: ACTOR, action: "application.create", entity_type: "application", entity_id: Some(&app_id),
             meta: json!({ "kind": kind.as_str(), "seq": seq, "report_id": report_id }),
@@ -700,6 +688,104 @@ impl Store {
                 row_to_application,
             )
             .map_err(Into::into)
+    }
+
+    /// Switches a still empty Bericht to another Antragsart (Lotse start step): new sections for
+    /// the other template, the Diagnosen kept. Refused once any section has text or a draft.
+    pub fn change_application_kind(&self, application_id: &str, kind: ApplicationKind) -> Result<Application> {
+        let app = self.conn.query_row(
+            "SELECT id, episode_id, kind, seq, status, report_id, created_at FROM application WHERE id = ?1",
+            [application_id],
+            row_to_application,
+        )?;
+        if app.kind == kind {
+            return Ok(app);
+        }
+        let report_id = app.report_id.clone().ok_or_else(|| Error::Invalid("Antrag ohne Bericht".into()))?;
+        let report = self.report(&report_id)?;
+        if !matches!(report.status, ReportStatus::Draft | ReportStatus::InReview) {
+            return Err(Error::Invalid("signed reports are read-only".into()));
+        }
+        let diagnoses = report.sections.iter().find(|s| serde_json::from_str::<crate::pii::DiagnosesBody>(&s.body).is_ok());
+        let has_text = report.sections.iter().any(|s| Some(&s.key) != diagnoses.map(|d| &d.key) && section_filled(&s.body));
+        let drafts: i64 = self.conn.query_row("SELECT COUNT(*) FROM section_draft WHERE report_id = ?1", [&report_id], |r| r.get(0))?;
+        if has_text || drafts > 0 {
+            return Err(Error::Invalid("Die Antragsart lässt sich nur ändern, solange der Bericht noch leer ist.".into()));
+        }
+        let episode = self.episode(&app.episode_id)?;
+        let template = self.template(templates::template_key_for(kind))?;
+        let tx = self.conn.unchecked_transaction()?;
+        let seq: i64 = if kind == ApplicationKind::Fortfuehrung {
+            tx.query_row(
+                "SELECT COUNT(*) + 1 FROM application WHERE episode_id = ?1 AND kind = 'fortfuehrung' AND id != ?2",
+                params![app.episode_id, application_id],
+                |r| r.get(0),
+            )?
+        } else {
+            1
+        };
+        tx.execute("UPDATE application SET kind = ?2, seq = ?3 WHERE id = ?1", params![application_id, kind.as_str(), seq])?;
+        tx.execute(
+            "UPDATE report SET template_key = ?2, template_version = ?3, updated_at = ?4 WHERE id = ?1",
+            params![report_id, template.key, template.version, now()],
+        )?;
+        tx.execute("DELETE FROM report_section WHERE report_id = ?1", [&report_id])?;
+        let kept = diagnoses.filter(|d| section_filled(&d.body)).map(|d| d.body.clone());
+        insert_report_sections(&tx, &report_id, &template, &episode, kind, kept)?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "application.kind_change", entity_type: "application", entity_id: Some(application_id),
+            meta: json!({ "from": app.kind.as_str(), "to": kind.as_str(), "seq": seq }),
+        })?;
+        tx.commit()?;
+        self.conn
+            .query_row(
+                "SELECT id, episode_id, kind, seq, status, report_id, created_at FROM application WHERE id = ?1",
+                [application_id],
+                row_to_application,
+            )
+            .map_err(Into::into)
+    }
+
+    /// Open Behandlungsfälle with the Antragsart the Lotse suggests and an open draft to resume,
+    /// for "Neuer Bericht" (`episode_id` limits it to one case). Cases with a due application first.
+    pub fn bericht_candidates(&self, episode_id: Option<&str>, now: &str) -> Result<Vec<crate::lotse::BerichtCandidate>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.id, p.id, p.first_name, p.last_name, p.chiffre,
+                    EXISTS (SELECT 1 FROM patient_photo ph WHERE ph.patient_id = p.id)
+             FROM episode e JOIN patient p ON p.id = e.patient_id
+             WHERE e.ended_at IS NULL AND (?1 IS NULL OR e.id = ?1)
+             ORDER BY p.last_name, p.first_name, e.started_at",
+        )?;
+        let rows: Vec<(String, String, String, String, Option<String>, bool)> = stmt
+            .query_map([episode_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?
+            .collect::<std::result::Result<_, _>>()?;
+        let mut open = self.conn.prepare(
+            "SELECT a.report_id FROM application a JOIN report r ON r.id = a.report_id
+             WHERE a.episode_id = ?1 AND a.kind = ?2 AND r.status IN ('draft', 'in_review')
+             ORDER BY a.created_at DESC LIMIT 1",
+        )?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (episode_id, patient_id, first_name, last_name, chiffre, has_photo) in rows {
+            let episode = self.episode(&episode_id)?;
+            let contingent = self.episode_contingent(&episode_id, now)?;
+            let suggested = crate::lotse::suggest_kind(&contingent);
+            let open_report_id: Option<String> =
+                open.query_row(params![episode_id, suggested.as_str()], |r| r.get(0)).optional()?;
+            out.push(crate::lotse::BerichtCandidate {
+                episode_id,
+                patient_id,
+                first_name,
+                last_name,
+                chiffre,
+                has_photo,
+                method: episode.method,
+                contingent,
+                suggested,
+                open_report_id,
+            });
+        }
+        out.sort_by_key(|c| c.contingent.due.is_none());
+        Ok(out)
     }
 
     // ---------- sessions ----------
@@ -1902,10 +1988,17 @@ impl Store {
             )
             .optional()?
             .ok_or_else(|| Error::NotFound(format!("report {id}")))?;
-        let mut stmt = self.conn.prepare("SELECT key, body, origin, edited_at FROM report_section WHERE report_id = ?1")?;
+        let mut stmt =
+            self.conn.prepare("SELECT key, body, origin, edited_at, not_relevant FROM report_section WHERE report_id = ?1")?;
         report.sections = stmt
             .query_map([id], |r| {
-                Ok(ReportSection { key: r.get(0)?, body: r.get(1)?, origin: parse_col(r, 2)?, edited_at: r.get(3)? })
+                Ok(ReportSection {
+                    key: r.get(0)?,
+                    body: r.get(1)?,
+                    origin: parse_col(r, 2)?,
+                    edited_at: r.get(3)?,
+                    not_relevant: r.get(4)?,
+                })
             })?
             .collect::<std::result::Result<_, _>>()?;
         let mut stmt = self
@@ -1956,12 +2049,14 @@ impl Store {
                 ))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        let mut bodies = self.conn.prepare("SELECT body FROM report_section WHERE report_id = ?1")?;
+        let mut bodies = self.conn.prepare("SELECT body, not_relevant FROM report_section WHERE report_id = ?1")?;
         let mut out = Vec::with_capacity(rows.len());
         for (mut summary, episode_id) in rows {
-            let sections: Vec<String> = bodies.query_map([&summary.id], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
+            let sections: Vec<(String, bool)> =
+                bodies.query_map([&summary.id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<std::result::Result<_, _>>()?;
             summary.sections_total = sections.len() as i64;
-            summary.sections_filled = sections.iter().filter(|b| section_filled(b)).count() as i64;
+            // A section marked "nicht relevant" is done.
+            summary.sections_filled = sections.iter().filter(|(b, nr)| *nr || section_filled(b)).count() as i64;
             let open = matches!(summary.status, ReportStatus::Draft | ReportStatus::InReview);
             if let (true, Some(episode_id), Some(kind)) = (open, episode_id, summary.kind) {
                 if let Some((left, due_by)) = self.application_deadline(&episode_id, kind, now)? {
@@ -1994,6 +2089,30 @@ impl Store {
         tx.execute("UPDATE report SET updated_at = ?2 WHERE id = ?1", params![report_id, ts])?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Marks an optional section "nicht relevant" (or not). The caller checks that the template
+    /// allows it; the text stays, so switching back loses nothing.
+    pub fn set_section_not_relevant(&self, report_id: &str, key: &str, on: bool) -> Result<Report> {
+        let tx = self.conn.unchecked_transaction()?;
+        let status: String = tx.query_row("SELECT status FROM report WHERE id = ?1", [report_id], |r| r.get(0))?;
+        if status == ReportStatus::Signed.as_str() || status == ReportStatus::Exported.as_str() {
+            return Err(Error::Invalid("signed reports are read-only".into()));
+        }
+        let n = tx.execute(
+            "UPDATE report_section SET not_relevant = ?3 WHERE report_id = ?1 AND key = ?2",
+            params![report_id, key, on],
+        )?;
+        if n == 0 {
+            return Err(Error::NotFound(format!("section {key}")));
+        }
+        tx.execute("UPDATE report SET updated_at = ?2 WHERE id = ?1", params![report_id, now()])?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "report.section_relevance", entity_type: "report", entity_id: Some(report_id),
+            meta: json!({ "section": key, "not_relevant": on }),
+        })?;
+        tx.commit()?;
+        self.report(report_id)
     }
 
     /// Sign-off. Content edits are blocked afterwards. The caller runs the checklist first.
@@ -2082,6 +2201,37 @@ impl Store {
         )?;
         Ok(())
     }
+}
+
+/// One empty section per section of `template` that applies to the case. The Diagnosen section
+/// starts from `diagnoses` when given, else from the Behandlungsfall's working diagnoses.
+fn insert_report_sections(
+    tx: &rusqlite::Transaction<'_>,
+    report_id: &str,
+    template: &templates::Template,
+    episode: &Episode,
+    kind: ApplicationKind,
+    diagnoses: Option<String>,
+) -> Result<()> {
+    let ctx = templates::Context { method: episode.method, age_group: episode.age_group, kind: Some(kind) };
+    for s in template.resolve(&ctx).sections {
+        let body = match s.field {
+            templates::FieldKind::Diagnoses => match &diagnoses {
+                Some(d) => d.clone(),
+                None if !episode.diagnoses.is_empty() => serde_json::to_string(&crate::pii::DiagnosesBody {
+                    diagnoses: episode.diagnoses.clone(),
+                    notes: String::new(),
+                })?,
+                None => String::new(),
+            },
+            _ => String::new(),
+        };
+        tx.execute(
+            "INSERT INTO report_section (id, report_id, key, body) VALUES (?1, ?2, ?3, ?4)",
+            params![new_id(), report_id, s.key, body],
+        )?;
+    }
+    Ok(())
 }
 
 /// Trims, drops empty rows, upper-cases the code and checks the certainty letter.
@@ -2412,6 +2562,90 @@ mod tests {
 
         let ev = audit::list(&store.conn, 100).unwrap().into_iter().find(|e| e.action == "episode.diagnoses").unwrap();
         assert!(!ev.meta_json.contains("F32"), "no codes in the audit log");
+    }
+
+    #[test]
+    fn an_empty_bericht_can_change_its_kind_and_keeps_the_diagnoses() {
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let ep = store
+            .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Vt, age_group: AgeGroup::Adult, setting: Setting::Einzel })
+            .unwrap();
+        store.create_application(&ep.id, ApplicationKind::Fortfuehrung).unwrap();
+        let app = store.create_application(&ep.id, ApplicationKind::Erstantrag).unwrap();
+        let rid = app.report_id.clone().unwrap();
+        let diag_body = serde_json::to_string(&crate::pii::DiagnosesBody { diagnoses: vec![diag("F32.1", "G")], notes: "Notiz".into() }).unwrap();
+        store.save_section(&rid, "diagnose", &diag_body).unwrap();
+
+        let umw = store.change_application_kind(&app.id, ApplicationKind::Umwandlung).unwrap();
+        assert_eq!((umw.kind, umw.seq), (ApplicationKind::Umwandlung, 1));
+        let r = store.report(&rid).unwrap();
+        assert!(r.sections.iter().any(|s| s.key == "umwandlung"), "the Umwandlung section was added");
+        assert_eq!(r.sections.iter().find(|s| s.key == "diagnose").unwrap().body, diag_body, "diagnoses kept");
+
+        let f = store.change_application_kind(&app.id, ApplicationKind::Fortfuehrung).unwrap();
+        assert_eq!(f.seq, 2, "numbered after the existing Fortführung");
+        let r = store.report(&rid).unwrap();
+        assert_eq!(r.template_key, "ptv3-fortfuehrung");
+        assert!(r.sections.iter().any(|s| s.key == "verlauf"));
+        assert_eq!(r.sections.iter().find(|s| s.key == "diagnose_befund").unwrap().body, diag_body);
+
+        store.save_section(&rid, "verlauf", "<p>Text</p>").unwrap();
+        assert!(store.change_application_kind(&app.id, ApplicationKind::Erstantrag).is_err(), "not once it has text");
+        assert!(audit::list(&store.conn, 100).unwrap().iter().any(|e| e.action == "application.kind_change"));
+    }
+
+    #[test]
+    fn a_section_marked_not_relevant_counts_as_done_and_is_left_out() {
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let ep = store
+            .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Vt, age_group: AgeGroup::Adult, setting: Setting::Einzel })
+            .unwrap();
+        let app = store.create_application(&ep.id, ApplicationKind::Erstantrag).unwrap();
+        let rid = app.report_id.clone().unwrap();
+        let filled = |store: &Store| store.list_reports(None, "2026-10-29T12:00:00Z").unwrap()[0].sections_filled;
+        assert_eq!(filled(&store), 0);
+        let r = store.set_section_not_relevant(&rid, "somatik", true).unwrap();
+        assert!(r.sections.iter().find(|s| s.key == "somatik").unwrap().not_relevant);
+        assert_eq!(filled(&store), 1);
+
+        let template = store.template("ptv3-erst-umwandlung").unwrap().resolve(&templates::Context {
+            method: Method::Vt,
+            age_group: AgeGroup::Adult,
+            kind: Some(ApplicationKind::Erstantrag),
+        });
+        let patient = store.patient(&p.id).unwrap();
+        let keys: Vec<String> = crate::pii::checklist(&r, &template, &patient).into_iter().map(|c| c.key).collect();
+        assert!(!keys.contains(&"filled:somatik".to_string()) && keys.contains(&"filled:soziodemographie".to_string()));
+        let doc = crate::render::build_doc(&r, &template, &patient, Some(&ep), Some(&app), None, None);
+        assert!(!doc.sections.iter().any(|s| s.heading.starts_with("Somatischer")), "left out of the export");
+
+        let r = store.set_section_not_relevant(&rid, "somatik", false).unwrap();
+        let doc = crate::render::build_doc(&r, &template, &patient, Some(&ep), Some(&app), None, None);
+        assert!(doc.sections.iter().any(|s| s.heading.starts_with("Somatischer")));
+        assert!(store.set_section_not_relevant(&rid, "fehlt", true).is_err());
+    }
+
+    #[test]
+    fn bericht_candidates_suggest_the_kind_and_the_open_draft() {
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let ep = store
+            .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Tp, age_group: AgeGroup::Adult, setting: Setting::Einzel })
+            .unwrap();
+        let now = "2026-10-29T12:00:00Z";
+        let c = store.bericht_candidates(None, now).unwrap();
+        assert_eq!(c.len(), 1);
+        assert_eq!((c[0].suggested, c[0].open_report_id.as_deref()), (ApplicationKind::Erstantrag, None));
+
+        store.set_episode_stage(&ep.id, Stage::Kzt1, Some("2026-09-01")).unwrap();
+        let c = store.bericht_candidates(Some(&ep.id), now).unwrap();
+        assert_eq!(c[0].suggested, ApplicationKind::Umwandlung);
+        let app = store.create_application(&ep.id, ApplicationKind::Umwandlung).unwrap();
+        let c = store.bericht_candidates(Some(&ep.id), now).unwrap();
+        assert_eq!(c[0].open_report_id, app.report_id);
+        assert!(store.bericht_candidates(Some("other"), now).unwrap().is_empty());
     }
 
     #[test]

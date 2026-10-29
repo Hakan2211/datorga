@@ -3,7 +3,7 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { addDays, format } from 'date-fns'
-import { CalendarClock, Columns3, FilePlus2, FileText, Rows3 } from 'lucide-react'
+import { CalendarClock, Columns3, FilePlus2, FileText, Plus, Rows3 } from 'lucide-react'
 import type { ApplicationKind } from '@/bindings/ApplicationKind'
 import type { DueItem } from '@/bindings/DueItem'
 import type { ReportSummary } from '@/bindings/ReportSummary'
@@ -17,6 +17,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { PatientLabel } from '@/components/patient-label'
+import { NewReportDialog } from '@/components/lotse/new-report'
 import { q } from '@/lib/api'
 import { BOARD_COLUMNS, boardColumn, matchesReport, noReportFilter, sortBoard, type ReportFilter } from '@/lib/queue'
 import { cn, storedChoice } from '@/lib/utils'
@@ -50,14 +51,23 @@ function Reports() {
       <PageHeader
         title={t('nav.reports')}
         actions={
-          <ToggleGroup type="single" variant="outline" value={view} onValueChange={(v) => v && setView(v as View)} aria-label={t('reports.view')}>
-            <ToggleGroupItem value="board" className="px-3" data-testid="reports-view-board">
-              <Columns3 /> {t('reports.board')}
-            </ToggleGroupItem>
-            <ToggleGroupItem value="table" className="px-3" data-testid="reports-view-table">
-              <Rows3 /> {t('patients.table')}
-            </ToggleGroupItem>
-          </ToggleGroup>
+          <>
+            <ToggleGroup type="single" variant="outline" value={view} onValueChange={(v) => v && setView(v as View)} aria-label={t('reports.view')}>
+              <ToggleGroupItem value="board" className="px-3" data-testid="reports-view-board">
+                <Columns3 /> {t('reports.board')}
+              </ToggleGroupItem>
+              <ToggleGroupItem value="table" className="px-3" data-testid="reports-view-table">
+                <Rows3 /> {t('patients.table')}
+              </ToggleGroupItem>
+            </ToggleGroup>
+            <NewReportDialog
+              trigger={
+                <Button data-testid="new-report">
+                  <Plus /> {t('reports.new')}
+                </Button>
+              }
+            />
+          </>
         }
       />
       <Page>
