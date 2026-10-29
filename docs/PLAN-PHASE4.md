@@ -142,7 +142,7 @@ The user generates mockups from the appendix prompts into `docs/mockups/10-…` 
 - **OpenRouter**, `llm::key_info` → `GET /api/v1/key` with the normal key. It returns `usage`, `usage_daily/weekly/monthly`, `limit`, `limit_remaining` and `is_free_tier`.
 - **Account balance**: `GET /api/v1/credits` needs a **management key**. Offer an optional "Management-Schlüssel (nur für Guthabenanzeige)" field in its own keychain entry `llm-openrouter-mgmt` → `total_credits - total_usage`. Without it, show "Guthaben im Browser ansehen" → https://openrouter.ai/settings/credits.
 - **OpenAI** has no balance endpoint for normal keys. `/v1/organization/costs` needs an Admin key (org owner), and asking for one is a needless power grant, so don't do it. Show app-side spend (audit log) plus a link to https://platform.openai.com/settings/organization/billing/overview.
-- **Requesty**: check its API for a balance endpoint during the slice; otherwise link only.
+- **Requesty**: check its API for a balance endpoint during the slice; otherwise link only. → Checked: only the management API (admin key) has it, so link only (PLAN-AMENDMENTS §19 K1).
 - **New Settings card "KI-Kosten & Guthaben"**:
   - balance/limit per provider (refresh button, cached 5 min)
   - this month / total

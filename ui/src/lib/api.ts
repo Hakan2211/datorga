@@ -41,6 +41,10 @@ import type { BackupSummary } from '@/bindings/BackupSummary'
 import type { CloudModel } from '@/bindings/CloudModel'
 import type { LlmConfig } from '@/bindings/LlmConfig'
 import type { LlmSpend } from '@/bindings/LlmSpend'
+import type { SpendReport } from '@/bindings/SpendReport'
+import type { DaySpend } from '@/bindings/DaySpend'
+import type { KeyInfo } from '@/bindings/KeyInfo'
+import type { Credits } from '@/bindings/Credits'
 import type { Tier } from '@/bindings/Tier'
 import type { ProviderId } from '@/bindings/ProviderId'
 import type { ProviderInfo } from '@/bindings/ProviderInfo'
@@ -143,6 +147,15 @@ export type LlmOverview = { config: LlmConfig; providers: (ProviderInfo & { has_
 export type LlmTestResult = { model: string; latency_ms: number; answer: string }
 export type LlmCatalog = { models: CloudModel[]; recommended: Tier }
 export type LlmSpendView = { month: LlmSpend; total: LlmSpend }
+export type LlmCostsView = LlmSpendView & { breakdown: SpendReport; days: DaySpend[] }
+export type BalanceView = {
+  key: KeyInfo
+  has_mgmt_key: boolean
+  /** The account balance; only with a management key. */
+  credits: Credits | null
+  credits_error: string | null
+  mgmt_key_url: string
+}
 export type TtsOverview = {
   config: TtsConfig
   voices: TtsVoice[]
@@ -383,6 +396,12 @@ export const api = {
   testLlm: (provider: ProviderId) => invoke<LlmTestResult>('llm_test', { provider }),
   llmCatalog: () => invoke<LlmCatalog>('llm_catalog'),
   llmSpend: () => invoke<LlmSpendView>('llm_spend'),
+  llmCosts: (all: boolean) => invoke<LlmCostsView>('llm_costs', { all }),
+  /** OpenRouter only. */
+  llmBalance: () => invoke<BalanceView>('llm_balance'),
+  setMgmtKey: (key: string | null) => invoke<void>('llm_mgmt_key_set', { key }),
+  /** Checks the stored key without a model and without sending text (key guide). */
+  checkLlmKey: (provider: ProviderId) => invoke<{ free_tier: boolean }>('llm_key_check', { provider }),
   tts: () => invoke<TtsOverview>('tts_overview'),
   setTtsConfig: (config: TtsConfig) => invoke<void>('tts_config_set', { config }),
   /** MP3 of a fixed sample sentence with the saved read-aloud settings. */
@@ -539,6 +558,10 @@ export const q = {
   llm: () => queryOptions({ queryKey: ['llm'], queryFn: api.llm }),
   llmCatalog: () => queryOptions({ queryKey: ['llmCatalog'], queryFn: api.llmCatalog, staleTime: Infinity }),
   llmSpend: () => queryOptions({ queryKey: ['llm', 'spend'], queryFn: api.llmSpend }),
+  llmCosts: (all: boolean) => queryOptions({ queryKey: ['llm', 'spend', 'costs', all], queryFn: () => api.llmCosts(all) }),
+  /** Cached 5 min (Settings and the low-balance banner share it); the refresh button refetches. */
+  llmBalance: (enabled: boolean) =>
+    queryOptions({ queryKey: ['balance'], queryFn: api.llmBalance, enabled, staleTime: 5 * 60_000, retry: false }),
   tts: () => queryOptions({ queryKey: ['llm', 'tts'], queryFn: api.tts }),
   live: () => queryOptions({ queryKey: ['llm', 'live'], queryFn: api.live }),
   prep: (sessionId: string) => queryOptions({ queryKey: ['prep', sessionId], queryFn: () => api.prep(sessionId) }),

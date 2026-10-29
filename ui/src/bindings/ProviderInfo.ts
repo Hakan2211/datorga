@@ -10,6 +10,18 @@ export type ProviderInfo = { id: ProviderId, label: string, default_base_url: st
  */
 key_url: string | null, 
 /**
+ * Where she opens an account (key guide, step 1).
+ */
+signup_url: string | null, 
+/**
+ * Where she tops up credit and sees the balance.
+ */
+credits_url: string | null, 
+/**
+ * The balance can be read with the normal key ([`key_info`]; only OpenRouter).
+ */
+balance_api: boolean, 
+/**
  * A US company sits between the app and the model: shown as a warning (PLAN-AMENDMENTS A6).
  */
 us_intermediary: boolean, needs_key: boolean, 

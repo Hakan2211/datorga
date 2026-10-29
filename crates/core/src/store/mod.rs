@@ -21,11 +21,13 @@ mod autopilot;
 mod calendar;
 mod contingent;
 mod speakers;
+mod spend;
 mod summary;
 mod timeline;
 pub use agent::{TextMode, TextProposal};
 pub use autopilot::{AutopilotRun, AutopilotStep};
 pub use calendar::normalize_ts;
+pub use spend::{day_before, DaySpend, LlmSpend, ModelSpend, SpendReport, SpendTask, TaskSpend};
 pub use summary::{SessionSummary, SummaryInput, SummaryMeta, SummaryPointView};
 pub use timeline::{TimelineGroup, TimelineItem};
 
@@ -300,25 +302,6 @@ impl Store {
             params![report_id, body, now()],
         )?;
         Ok(())
-    }
-
-    /// What the LLM calls since `since` (RFC 3339 prefix, e.g. "2026-10") cost, from the audit
-    /// log, cloud transcription included. Calls without a reported cost (local, Requesty, custom)
-    /// count as requests only.
-    pub fn llm_spend(&self, since: &str) -> Result<LlmSpend> {
-        let mut stmt = self.conn.prepare(
-            "SELECT meta_json FROM audit_event WHERE (action LIKE 'llm.%' OR action IN ('transcription.cloud', 'prep.live', 'dictation.cloud')) AND at >= ?1",
-        )?;
-        let mut spend = LlmSpend::default();
-        for meta in stmt.query_map([since], |r| r.get::<_, String>(0))? {
-            let meta: serde_json::Value = serde_json::from_str(&meta?)?;
-            if meta.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
-                continue;
-            }
-            spend.requests += 1;
-            spend.usd += meta.get("cost_usd").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
-        }
-        Ok(spend)
     }
 
     // ---------- recovery key ----------
@@ -2336,14 +2319,6 @@ fn parse_col<T: std::str::FromStr<Err = Error>>(r: &rusqlite::Row<'_>, idx: usiz
     })
 }
 
-/// Billed LLM cost over a period ([`Store::llm_spend`]).
-#[derive(Debug, Clone, Default, serde::Serialize, ts_rs::TS)]
-#[ts(export)]
-pub struct LlmSpend {
-    pub requests: u32,
-    pub usd: f64,
-}
-
 fn log_prep_live(conn: &Connection, session_id: &str, model: &str, seconds: Option<f64>, turns: usize, reason: &str) -> Result<()> {
     let cost = seconds.map(|s| (s / 60.0 * crate::live::USD_PER_MINUTE * 10000.0).round() / 10000.0);
     audit::append(conn, Entry {
@@ -2477,29 +2452,6 @@ mod tests {
         assert_eq!(card.open_items, 3, "two past sessions without a note + the draft Bericht");
         assert!(card.has_photo);
         assert!(store.patient_cards(Some("niemand"), "2026-10-29T12:00:00Z").unwrap().is_empty());
-    }
-
-    #[test]
-    fn llm_spend_sums_billed_cost_of_successful_calls() {
-        let store = Store::open_in_memory().unwrap();
-        let call = |cost: Option<f64>| crate::llm::Completion {
-            text: "OK".into(),
-            model: "m".into(),
-            prompt_tokens: Some(10),
-            completion_tokens: Some(5),
-            reasoning_tokens: None,
-            cost,
-            latency_ms: 1,
-            tool_calls: vec![],
-        };
-        store.log_llm_call("llm.extract", crate::llm::ProviderId::Openrouter, "m", Ok(&call(Some(0.012)))).unwrap();
-        store.log_llm_call("llm.draft", crate::llm::ProviderId::Openrouter, "m", Ok(&call(Some(0.003)))).unwrap();
-        store.log_llm_call("llm.draft", crate::llm::ProviderId::Local, "m", Ok(&call(None))).unwrap();
-        store.log_llm_call("llm.draft", crate::llm::ProviderId::Openrouter, "m", Err("x")).unwrap();
-        let s = store.llm_spend("2000").unwrap();
-        assert_eq!(s.requests, 3);
-        assert!((s.usd - 0.015).abs() < 1e-12);
-        assert_eq!(store.llm_spend("9999").unwrap().requests, 0);
     }
 
     #[test]

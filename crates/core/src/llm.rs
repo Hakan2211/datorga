@@ -47,6 +47,12 @@ pub struct ProviderInfo {
     pub default_base_url: String,
     /// Where the therapist creates a key.
     pub key_url: Option<String>,
+    /// Where she opens an account (key guide, step 1).
+    pub signup_url: Option<String>,
+    /// Where she tops up credit and sees the balance.
+    pub credits_url: Option<String>,
+    /// The balance can be read with the normal key ([`key_info`]; only OpenRouter).
+    pub balance_api: bool,
     /// A US company sits between the app and the model: shown as a warning (PLAN-AMENDMENTS A6).
     pub us_intermediary: bool,
     pub needs_key: bool,
@@ -61,6 +67,9 @@ pub fn providers() -> Vec<ProviderInfo> {
             label: "OpenRouter".into(),
             default_base_url: "https://openrouter.ai/api/v1".into(),
             key_url: Some("https://openrouter.ai/settings/keys".into()),
+            signup_url: Some("https://openrouter.ai/sign-up".into()),
+            credits_url: Some("https://openrouter.ai/settings/credits".into()),
+            balance_api: true,
             us_intermediary: true,
             needs_key: true,
             drafting: true,
@@ -71,6 +80,10 @@ pub fn providers() -> Vec<ProviderInfo> {
             // Frankfurt gateway. Inference stays in the EU only with an EU-region model.
             default_base_url: "https://router.eu.requesty.ai/v1".into(),
             key_url: Some("https://app.requesty.ai/api-keys".into()),
+            signup_url: Some("https://app.requesty.ai/sign-up".into()),
+            // The balance is only readable with an admin key (management API): link only.
+            credits_url: Some("https://app.requesty.ai/settings/billing".into()),
+            balance_api: false,
             us_intermediary: true,
             needs_key: true,
             drafting: true,
@@ -80,6 +93,9 @@ pub fn providers() -> Vec<ProviderInfo> {
             label: "Eigener Endpunkt (OpenAI-kompatibel)".into(),
             default_base_url: String::new(),
             key_url: None,
+            signup_url: None,
+            credits_url: None,
+            balance_api: false,
             us_intermediary: false,
             needs_key: false,
             drafting: true,
@@ -89,6 +105,9 @@ pub fn providers() -> Vec<ProviderInfo> {
             label: "Lokales Modell (auf diesem Computer)".into(),
             default_base_url: String::new(),
             key_url: None,
+            signup_url: None,
+            credits_url: None,
+            balance_api: false,
             us_intermediary: false,
             needs_key: false,
             drafting: true,
@@ -98,6 +117,10 @@ pub fn providers() -> Vec<ProviderInfo> {
             label: "OpenAI (direkt)".into(),
             default_base_url: "https://api.openai.com/v1".into(),
             key_url: Some("https://platform.openai.com/api-keys".into()),
+            signup_url: Some("https://platform.openai.com/signup".into()),
+            // No balance endpoint for normal keys (costs need an org admin key): link only.
+            credits_url: Some("https://platform.openai.com/settings/organization/billing/overview".into()),
+            balance_api: false,
             // Not an intermediary but the US provider itself; Settings warns separately.
             us_intermediary: false,
             needs_key: true,
@@ -248,6 +271,73 @@ pub fn list_models(ep: &Endpoint) -> Result<Vec<RemoteModel>> {
         .collect();
     models.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(models)
+}
+
+// ---------- balance (OpenRouter) ----------
+
+/// Where OpenRouter's management keys are created (only needed to show the account balance).
+pub const OPENROUTER_MGMT_KEY_URL: &str = "https://openrouter.ai/settings/management-keys";
+
+/// `GET /key`: usage and limit of the key itself, in USD.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
+pub struct KeyInfo {
+    pub usage: f64,
+    pub usage_daily: f64,
+    pub usage_monthly: f64,
+    /// The key's own spending limit; `None` = unlimited (then only the account balance stops it).
+    pub limit: Option<f64>,
+    pub limit_remaining: Option<f64>,
+    /// `daily`, `weekly`, `monthly` or `None`.
+    pub limit_reset: Option<String>,
+    pub is_free_tier: bool,
+}
+
+/// `GET /credits` (management key only): the account balance is `total_credits - total_usage`.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
+pub struct Credits {
+    pub total_credits: f64,
+    pub total_usage: f64,
+    pub remaining: f64,
+}
+
+/// Usage and limit of the endpoint's key. Sends no patient data. A wrong key gives 401.
+pub fn key_info(ep: &Endpoint) -> Result<KeyInfo> {
+    let v = get_data(ep, "/key")?;
+    let num = |k: &str| v.get(k).and_then(Value::as_f64);
+    Ok(KeyInfo {
+        usage: num("usage").unwrap_or(0.0),
+        usage_daily: num("usage_daily").unwrap_or(0.0),
+        usage_monthly: num("usage_monthly").unwrap_or(0.0),
+        limit: num("limit"),
+        limit_remaining: num("limit_remaining"),
+        limit_reset: v.get("limit_reset").and_then(Value::as_str).map(str::to_string),
+        is_free_tier: v.get("is_free_tier").and_then(Value::as_bool).unwrap_or(false),
+    })
+}
+
+/// The account balance. `ep.api_key` must be a management key; a normal one gives 403.
+pub fn credits(ep: &Endpoint) -> Result<Credits> {
+    let v = get_data(ep, "/credits")?;
+    let num = |k: &str| v.get(k).and_then(Value::as_f64).ok_or_else(|| Error::Llm(format!("Unerwartete Antwort (kein {k})")));
+    let (total_credits, total_usage) = (num("total_credits")?, num("total_usage")?);
+    Ok(Credits { total_credits, total_usage, remaining: total_credits - total_usage })
+}
+
+/// `GET path` and its `data` object.
+fn get_data(ep: &Endpoint, path: &str) -> Result<Value> {
+    let mut resp = ep.auth(ep.agent(Duration::from_secs(20)).get(&ep.url(path)?)).call().map_err(net)?;
+    let status = resp.status().as_u16();
+    let body = resp.body_mut().read_to_string().map_err(net)?;
+    if status != 200 {
+        return Err(Error::Llm(api_error(status, &body)));
+    }
+    let mut v: Value = serde_json::from_str(&body)?;
+    match v.get_mut("data").map(Value::take) {
+        Some(d) if d.is_object() => Ok(d),
+        _ => Err(Error::Llm("Unerwartete Antwort (kein data-Feld)".into())),
+    }
 }
 
 // ---------- chat ----------
@@ -714,6 +804,62 @@ mod tests {
     fn errors_are_short_and_german() {
         assert_eq!(api_error(401, r#"{"error":{"message":"No auth"}}"#), "API-Schlüssel ungültig oder ohne Berechtigung (HTTP 401): No auth");
         assert_eq!(api_error(500, "<html>"), "Fehler beim Anbieter (HTTP 500)");
+    }
+
+    /// Answers one request with `status` and `body`; the result is the request head.
+    fn serve_once(status: u16, body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let base = format!("http://127.0.0.1:{}/api/v1", listener.local_addr().unwrap().port());
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut head = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = sock.read(&mut buf).unwrap();
+                head.extend_from_slice(&buf[..n]);
+            }
+            let reply = format!("HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            sock.write_all(reply.as_bytes()).unwrap();
+            String::from_utf8_lossy(&head).into_owned()
+        });
+        (base, handle)
+    }
+
+    #[test]
+    fn key_info_reads_usage_and_limit() {
+        let (base, server) = serve_once(200, r#"{"data":{"label":"sk-or-v1-abc","usage":3.5,"usage_daily":0.25,"usage_weekly":1,"usage_monthly":1.37,"limit":10,"limit_remaining":6.5,"limit_reset":"monthly","is_free_tier":false}}"#);
+        let info = key_info(&ep(ProviderId::Openrouter, &base)).unwrap();
+        assert_eq!(info, KeyInfo { usage: 3.5, usage_daily: 0.25, usage_monthly: 1.37, limit: Some(10.0), limit_remaining: Some(6.5), limit_reset: Some("monthly".into()), is_free_tier: false });
+        let head = server.join().unwrap();
+        assert!(head.starts_with("GET /api/v1/key "), "{head}");
+        assert!(head.to_lowercase().contains("authorization: bearer sk-test"));
+
+        let (base, server) = serve_once(200, r#"{"data":{"usage":0,"limit":null,"limit_remaining":null,"is_free_tier":true}}"#);
+        let info = key_info(&ep(ProviderId::Openrouter, &base)).unwrap();
+        assert_eq!((info.limit, info.limit_remaining, info.is_free_tier), (None, None, true));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn credits_need_a_management_key() {
+        let (base, server) = serve_once(200, r#"{"data":{"total_credits":20.5,"total_usage":12.08}}"#);
+        let c = credits(&ep(ProviderId::Openrouter, &base)).unwrap();
+        assert!((c.remaining - 8.42).abs() < 1e-9);
+        assert!(server.join().unwrap().starts_with("GET /api/v1/credits "));
+
+        let (base, server) = serve_once(403, r#"{"error":{"code":403,"message":"Only management keys can perform this operation"}}"#);
+        let e = credits(&ep(ProviderId::Openrouter, &base)).unwrap_err().to_string();
+        assert!(e.contains("HTTP 403") && e.contains("management keys"), "{e}");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn only_openrouter_has_a_balance_api() {
+        for p in providers() {
+            assert_eq!(p.balance_api, p.id == ProviderId::Openrouter, "{:?}", p.id);
+            assert_eq!(p.credits_url.is_some(), p.needs_key, "{:?}", p.id);
+        }
     }
 
     #[test]

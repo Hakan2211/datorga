@@ -37,6 +37,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ModelPicker } from "@/components/model-picker";
 import { ModelRow } from "@/components/model-row";
+import { KeyGuideButton } from "@/components/key-guide";
 import { api, errorMessage, q, type LlmOverview } from "@/lib/api";
 
 const OFF = "off";
@@ -135,6 +136,7 @@ function ProviderForm({
     onSuccess: (_, k) => {
       setKey("");
       refresh();
+      void qc.invalidateQueries({ queryKey: ["balance"] });
       toast.success(
         k ? t("settings.llm.keySaved") : t("settings.llm.keyRemoved"),
       );
@@ -219,6 +221,12 @@ function ProviderForm({
                 {t("settings.llm.keyCreate")}{" "}
                 <ExternalLink className="size-3" />
               </button>
+            </>
+          )}
+          {(id === "openrouter" || id === "requesty") && (
+            <>
+              {" · "}
+              <KeyGuideButton provider={id} />
             </>
           )}
         </p>

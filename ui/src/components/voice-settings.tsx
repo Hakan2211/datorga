@@ -27,6 +27,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { KeyGuideButton } from "@/components/key-guide";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -161,6 +162,8 @@ function OpenaiKey({ data }: { data: LlmOverview }) {
           >
             {t("settings.llm.keyCreate")} <ExternalLink className="size-3" />
           </button>
+          {" · "}
+          <KeyGuideButton provider="openai" />
         </p>
       </div>
       <div className="flex items-end gap-2">

@@ -21,6 +21,7 @@ import { api, q } from '@/lib/api'
 import { formatDuration } from '@/lib/capture'
 import { AssistantPanel } from '@/components/assistant'
 import { BackupReminder } from '@/components/backup-reminder'
+import { BalanceReminder } from '@/components/balance-reminder'
 import { CommandPalette } from '@/components/command-palette'
 import { useAutopilotEvents } from '@/components/autopilot'
 import { Button } from '@/components/ui/button'
@@ -195,6 +196,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="flex min-h-0 flex-1">
             <main className="min-w-0 flex-1 overflow-y-auto">
               <BackupReminder />
+              <BalanceReminder />
               {children}
             </main>
             {panel && (

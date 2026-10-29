@@ -20,13 +20,13 @@ use thera_core::domain::*;
 use thera_core::catalog::{self, CloudModel, Tier};
 use thera_core::draft;
 use thera_core::extract;
-use thera_core::llm::{self, Endpoint, LlmConfig, ProviderId, ProviderInfo, RemoteModel};
+use thera_core::llm::{self, Credits, Endpoint, KeyInfo, LlmConfig, ProviderId, ProviderInfo, RemoteModel};
 use thera_core::local::{self, Fit, Gpu, Hardware, LlamaServer, Recommendation};
 use thera_core::models::ModelInfo;
 use thera_core::pii::{self, CheckItem};
 use thera_core::pseudo::EntityKind;
 use thera_core::render;
-use thera_core::store::{AutopilotRun, SessionSummary, Store, TimelineGroup};
+use thera_core::store::{day_before, AutopilotRun, DaySpend, LlmSpend, SessionSummary, SpendReport, Store, TimelineGroup};
 use thera_core::summary;
 use thera_core::stt::{self, CloudStt, CloudSttModel, SttConfig, SttEngine, WhisperCli};
 use thera_core::templates::{Context, Template};
@@ -1789,8 +1789,8 @@ fn llm_catalog() -> LlmCatalog {
 
 #[derive(Serialize)]
 struct LlmSpendView {
-    month: thera_core::store::LlmSpend,
-    total: thera_core::store::LlmSpend,
+    month: LlmSpend,
+    total: LlmSpend,
 }
 
 /// Billed cost of AI calls this month (UTC) and overall, from the audit log.
@@ -1798,6 +1798,120 @@ struct LlmSpendView {
 fn llm_spend(state: State<'_, AppState>) -> CmdResult<LlmSpendView> {
     let month: String = now().chars().take(7).collect();
     Ok(state.with(|s| Ok(LlmSpendView { month: s.llm_spend(&month)?, total: s.llm_spend("")? }))?)
+}
+
+// ---------- costs + balance (slice 33) ----------
+
+#[derive(Serialize)]
+struct LlmCostsView {
+    month: LlmSpend,
+    total: LlmSpend,
+    /// Per task and model over this month or (`all`) everything.
+    breakdown: SpendReport,
+    /// Per UTC day over the last 30 days (days without requests are left out).
+    days: Vec<DaySpend>,
+}
+
+#[tauri::command]
+fn llm_costs(state: State<'_, AppState>, all: bool) -> CmdResult<LlmCostsView> {
+    let now = now();
+    let month: String = now.chars().take(7).collect();
+    state.with(|s| {
+        let month_report = s.llm_spend_report(&month)?;
+        let breakdown = if all { s.llm_spend_report("")? } else { month_report.clone() };
+        Ok(LlmCostsView {
+            month: month_report.total,
+            total: s.llm_spend("")?,
+            breakdown,
+            days: s.llm_spend_report(&day_before(&now, 29))?.days,
+        })
+    })
+}
+
+/// OpenRouter's management key, only for reading the account balance. Its own keychain entry
+/// next to the normal key; never used for model calls.
+fn mgmt_key_entry(state: &AppState) -> CmdResult<keyring::Entry> {
+    let user = if state.keyring_user == KEYRING_USER { "llm-openrouter-mgmt".to_string() } else { format!("{}-llm-openrouter-mgmt", state.keyring_user) };
+    keyring::Entry::new(KEYRING_SERVICE, &user).map_err(|e| kr(e).into())
+}
+
+fn mgmt_key(state: &AppState) -> CmdResult<Option<String>> {
+    match mgmt_key_entry(state)?.get_password() {
+        Ok(k) => Ok(Some(k)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(kr(e).into()),
+    }
+}
+
+#[tauri::command]
+fn llm_mgmt_key_set(state: State<'_, AppState>, key: Option<String>) -> CmdResult<()> {
+    let entry = mgmt_key_entry(&state)?;
+    match key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
+        Some(k) => entry.set_password(&k).map_err(kr)?,
+        None => match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(e) => return Err(kr(e).into()),
+        },
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct BalanceView {
+    key: KeyInfo,
+    has_mgmt_key: bool,
+    /// The account balance (only with a management key).
+    credits: Option<Credits>,
+    /// Why the balance couldn't be read with the stored management key.
+    credits_error: Option<String>,
+    mgmt_key_url: &'static str,
+}
+
+/// OpenRouter: the key's usage and limit, plus the account balance when a management key is
+/// stored. No patient data; audited without amounts. The UI caches it for 5 minutes.
+#[tauri::command]
+async fn llm_balance(app: AppHandle) -> CmdResult<BalanceView> {
+    blocking(app, move |state| {
+        let provider = ProviderId::Openrouter;
+        let (ep, _) = llm_endpoint(state, provider, &AtomicBool::new(false))?;
+        let key = llm::key_info(&ep);
+        let mgmt = mgmt_key(state)?;
+        let credits = match (&key, &mgmt) {
+            (Ok(_), Some(m)) => Some(llm::credits(&Endpoint { api_key: Some(m.clone()), ..ep.clone() })),
+            _ => None,
+        };
+        let read_credits = matches!(credits, Some(Ok(_)));
+        state.with(|s| s.log_balance_check(provider, key.is_ok(), read_credits))?;
+        let (credits, credits_error) = match credits {
+            Some(Ok(c)) => (Some(c), None),
+            Some(Err(e)) => (None, Some(e.to_string())),
+            None => (None, None),
+        };
+        Ok(BalanceView { key: key?, has_mgmt_key: mgmt.is_some(), credits, credits_error, mgmt_key_url: llm::OPENROUTER_MGMT_KEY_URL })
+    })
+    .await
+}
+
+#[derive(Serialize)]
+struct KeyCheck {
+    /// OpenRouter: the account has never bought credit (only free models work).
+    free_tier: bool,
+}
+
+/// "Verbindung testen" in the key guide: checks the stored key without a model and without
+/// sending text. OpenRouter answers `/key` only for a valid key; the others list their models.
+#[tauri::command]
+async fn llm_key_check(app: AppHandle, provider: ProviderId) -> CmdResult<KeyCheck> {
+    blocking(app, move |state| {
+        let (ep, _) = llm_endpoint(state, provider, &AtomicBool::new(false))?;
+        if provider == ProviderId::Openrouter {
+            let info = llm::key_info(&ep)?;
+            return Ok(KeyCheck { free_tier: info.is_free_tier });
+        }
+        llm::list_models(&ep)?;
+        Ok(KeyCheck { free_tier: false })
+    })
+    .await
 }
 
 // ---------- read-aloud (slice 18) ----------
@@ -3496,6 +3610,10 @@ pub fn run() {
             llm_test,
             llm_catalog,
             llm_spend,
+            llm_costs,
+            llm_mgmt_key_set,
+            llm_balance,
+            llm_key_check,
             extract_preview,
             extract_run,
             llm_cancel,

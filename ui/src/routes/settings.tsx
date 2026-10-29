@@ -10,6 +10,7 @@ import { RecoveryKitPanel } from '@/components/recovery-kit'
 import { RestoreBackup } from '@/components/backup-restore'
 import { LlmCard } from '@/components/llm-settings'
 import { VoiceCard } from '@/components/voice-settings'
+import { CostsCard } from '@/components/costs-card'
 import { SpeakerCard } from '@/components/speaker-settings'
 import { ModelRow } from '@/components/model-row'
 import { formatDate, SectionCard } from '@/components/bits'
@@ -64,6 +65,9 @@ function Settings() {
         <SpeakerCard />
         <LlmCard />
         <VoiceCard />
+        <div id="costs" className="scroll-mt-4">
+          <CostsCard />
+        </div>
         <BackupCard />
         <Card className="max-w-2xl">
           <CardHeader>
