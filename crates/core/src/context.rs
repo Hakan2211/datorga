@@ -1,5 +1,7 @@
 //! Context about a patient from earlier sessions, for the voice prep (slice 26) and later the
-//! agent. Built from signed Sitzungsnotizen and applied facts only (what the therapist approved).
+//! agent. Built from signed Sitzungsnotizen and applied facts (what the therapist approved) and,
+//! since slice 30, the sessions' key points: where a session has them, they stand in for the
+//! note's longer Verlauf.
 //!
 //! The patient is written "Pat."; sentences naming anyone or anything else identifying (a person,
 //! place or employer, by the patient record, the per-patient terms or the rules) are dropped, not
@@ -14,11 +16,12 @@ use crate::draft::patient_as_pat;
 use crate::extract::{sha256, Preview, TokenView};
 use crate::pii::plain_text;
 use crate::pseudo::{Dictionary, EntityKind, Pseudonymized, Pseudonymizer, TokenMap};
+use crate::store::SessionSummary;
 use crate::Result;
 
 /// Sitzungsnotiz sections that go into the brief, with the label used there.
 pub const NOTE_SECTIONS: &[(&str, &str)] = &[("verlauf", "Verlauf"), ("vereinbarungen", "Vereinbarungen und Planung")];
-/// How many earlier notes are read.
+/// How many earlier sessions are read.
 pub const MAX_NOTES: usize = 3;
 /// Newest applied facts of the episode.
 pub const MAX_FACTS: usize = 40;
@@ -61,9 +64,36 @@ impl Brief {
 
 const ORDINALS: &[&str] = &["Letzte Sitzung", "Vorletzte Sitzung", "Drittletzte Sitzung"];
 
-/// `notes`: newest first (as [`crate::store::Store::prior_session_notes`] returns them).
-/// `facts`: in session order (as `episode_facts` returns them).
-pub fn prep_brief(patient: &Patient, dict: Dictionary, notes: &[(Option<String>, Report)], facts: &[EpisodeFact]) -> Result<Brief> {
+/// An earlier session as context: its signed note and/or its key points.
+#[derive(Debug, Clone, Default)]
+pub struct PriorSession {
+    pub at: Option<String>,
+    pub note: Option<Report>,
+    pub points: Vec<String>,
+}
+
+/// The newest `limit` sessions that have a signed note or key points, newest first. Both inputs
+/// newest first (as `prior_session_notes` and `recent_summaries` return them).
+pub fn prior_sessions(notes: Vec<(Option<String>, Report)>, summaries: Vec<(Option<String>, SessionSummary)>, limit: usize) -> Vec<PriorSession> {
+    let mut out: Vec<(String, PriorSession)> = Vec::new();
+    for (at, note) in notes {
+        let id = note.session_id.clone().unwrap_or_else(|| note.id.clone());
+        out.push((id, PriorSession { at, note: Some(note), points: Vec::new() }));
+    }
+    for (at, s) in summaries {
+        let points = s.points.into_iter().map(|p| p.text).collect();
+        match out.iter_mut().find(|(id, _)| *id == s.session_id) {
+            Some((_, p)) => p.points = points,
+            None => out.push((s.session_id, PriorSession { at, note: None, points })),
+        }
+    }
+    out.sort_by(|a, b| b.1.at.cmp(&a.1.at));
+    out.into_iter().take(limit).map(|(_, p)| p).collect()
+}
+
+/// `sessions`: newest first ([`prior_sessions`]). `facts`: in session order (as `episode_facts`
+/// returns them).
+pub fn prep_brief(patient: &Patient, dict: Dictionary, sessions: &[PriorSession], facts: &[EpisodeFact]) -> Result<Brief> {
     let mut p = Pseudonymizer::new(dict);
     let mut stats = BriefStats::default();
     let mut out = String::new();
@@ -86,10 +116,18 @@ pub fn prep_brief(patient: &Patient, dict: Dictionary, notes: &[(Option<String>,
         kept.trim_end().to_string()
     };
 
-    for (i, (_, note)) in notes.iter().take(MAX_NOTES).enumerate() {
+    for (i, prior) in sessions.iter().take(MAX_NOTES).enumerate() {
         let mut block = String::new();
+        let points: Vec<String> = prior.points.iter().map(|p| keep(p, &mut stats, &mut budget)).filter(|t| !t.is_empty()).collect();
+        if !points.is_empty() {
+            block.push_str(&format!("Kernpunkte (KI-Zusammenfassung): {}\n", points.join(" ")));
+        }
         for (key, label) in NOTE_SECTIONS {
-            let Some(section) = note.sections.iter().find(|s| s.key == *key) else { continue };
+            // The key points cover the Verlauf more briefly; the agreements still come from the note.
+            if *key == "verlauf" && !points.is_empty() {
+                continue;
+            }
+            let Some(section) = prior.note.as_ref().and_then(|n| n.sections.iter().find(|s| s.key == *key)) else { continue };
             let text = keep(&html_text(&section.body), &mut stats, &mut budget);
             if !text.is_empty() {
                 block.push_str(&format!("{label}: {text}\n"));
@@ -161,7 +199,12 @@ mod tests {
         .unwrap()
     }
 
-    fn note(verlauf: &str, vereinbarungen: &str) -> (Option<String>, Report) {
+    fn note(verlauf: &str, vereinbarungen: &str) -> PriorSession {
+        let (at, r) = note_row(verlauf, vereinbarungen);
+        PriorSession { at, note: Some(r), points: Vec::new() }
+    }
+
+    fn note_row(verlauf: &str, vereinbarungen: &str) -> (Option<String>, Report) {
         let mut r: Report = serde_json::from_value(serde_json::json!({
             "id": "r1", "patient_id": "p1", "episode_id": null, "application_id": null, "session_id": "s0",
             "template_key": "sitzungsnotiz", "template_version": "2026.1", "kind": "sitzungsnotiz", "status": "signed",
@@ -209,6 +252,29 @@ mod tests {
         assert!(b.stats.cut > 0);
         let e = prep_brief(&patient(), Dictionary::new(), &[], &[]).unwrap();
         assert!(e.empty() && e.text.get().is_empty());
+    }
+
+    #[test]
+    fn key_points_stand_in_for_the_verlauf() {
+        let summary = |id: &str, texts: &[&str]| -> SessionSummary {
+            serde_json::from_value(serde_json::json!({
+                "session_id": id, "status": "draft", "provider": "p", "model": "m", "created_at": "x", "updated_at": "x",
+                "points": texts.iter().map(|t| serde_json::json!({ "text": t, "citations": [], "note": [] })).collect::<Vec<_>>(),
+            }))
+            .unwrap()
+        };
+        let (at, r) = note_row("<p>Langer Verlauf.</p>", "<p>Expositionsübung planen.</p>");
+        let older = (Some("2026-10-13T10:00:00Z".to_string()), summary("s9", &["Pat. berichtet Panik im Bus."]));
+        let sessions = prior_sessions(vec![(at.clone(), r)], vec![(at, summary("s0", &["Pat. schläft besser.", "Mit Karl gestritten."])), older], 3);
+        assert_eq!(sessions.len(), 2);
+        let mut dict = Dictionary::from_patient(&patient());
+        dict.add(EntityKind::Person, "Karl");
+        let b = prep_brief(&patient(), dict, &sessions, &[]).unwrap();
+        let t = b.text.get();
+        assert!(t.starts_with("Letzte Sitzung:\nKernpunkte (KI-Zusammenfassung): Pat. schläft besser.\nVereinbarungen und Planung: Expositionsübung planen."), "{t}");
+        assert!(t.contains("Vorletzte Sitzung:\nKernpunkte (KI-Zusammenfassung): Pat. berichtet Panik im Bus."), "{t}");
+        assert!(!t.contains("Langer Verlauf") && !t.contains("Karl"), "{t}");
+        assert_eq!(b.stats.notes, 2);
     }
 
     #[test]

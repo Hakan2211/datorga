@@ -23,6 +23,9 @@ import type { ReportSummary } from '@/bindings/ReportSummary'
 import type { Session } from '@/bindings/Session'
 import type { SessionInput } from '@/bindings/SessionInput'
 import type { SessionSource } from '@/bindings/SessionSource'
+import type { SessionSummary } from '@/bindings/SessionSummary'
+import type { SummaryPoint } from '@/bindings/SummaryPoint'
+import type { TimelineGroup } from '@/bindings/TimelineGroup'
 import type { SourceKind } from '@/bindings/SourceKind'
 import type { SourceSegment } from '@/bindings/SourceSegment'
 import type { Template } from '@/bindings/Template'
@@ -198,6 +201,7 @@ export type DraftPreview = ExtractPreview & { skipped: string[]; untagged: numbe
 export type DraftSources = { facts: EpisodeFact[]; since: string | null }
 /** `chunks` < `total` when cancelled: facts from the finished chunks were kept. */
 export type ExtractResult = { facts: NoteFact[]; dropped: number; chunks: number; total: number; cancelled: boolean }
+export type SummaryResult = { summary: SessionSummary | null; dropped: number; cancelled: boolean }
 /** `done` < `total` when cancelled: the sections drafted before were kept. */
 export type DraftResult = {
   drafts: SectionDraft[]
@@ -396,6 +400,12 @@ export const api = {
     invoke<PseudoTerm>('pseudo_term_add', { patientId, kind, text }),
   removePseudoTerm: (id: string) => invoke<void>('pseudo_term_remove', { id }),
   noteFacts: (reportId: string) => invoke<NoteFact[]>('note_facts', { reportId }),
+  sessionSummary: (sessionId: string) => invoke<SessionSummary | null>('session_summary', { sessionId }),
+  summaryPreview: (sessionId: string) => invoke<ExtractPreview>('summary_preview', { sessionId }),
+  summaryRun: (sessionId: string, digest: string, requestId: string) =>
+    invoke<SummaryResult>('summary_run', { sessionId, digest, requestId }),
+  summaryEdit: (sessionId: string, points: SummaryPoint[]) => invoke<SessionSummary>('summary_edit', { sessionId, points }),
+  patientTimeline: (patientId: string) => invoke<TimelineGroup[]>('patient_timeline', { patientId }),
   rejectFacts: (reportId: string, ids: string[]) => invoke<NoteFact[]>('note_facts_reject', { reportId, ids }),
   applyFacts: (reportId: string, facts: FactEdit[]) => invoke<Report>('note_facts_apply', { reportId, facts }),
   factTagSections: (reportId: string) => invoke<SectionDef[]>('fact_tag_sections', { reportId }),
@@ -512,6 +522,9 @@ export const q = {
   live: () => queryOptions({ queryKey: ['llm', 'live'], queryFn: api.live }),
   prep: (sessionId: string) => queryOptions({ queryKey: ['prep', sessionId], queryFn: () => api.prep(sessionId) }),
   noteFacts: (reportId: string) => queryOptions({ queryKey: ['noteFacts', reportId], queryFn: () => api.noteFacts(reportId) }),
+  sessionSummary: (sessionId: string) =>
+    queryOptions({ queryKey: ['sessionSummary', sessionId], queryFn: () => api.sessionSummary(sessionId) }),
+  timeline: (patientId: string) => queryOptions({ queryKey: ['timeline', patientId], queryFn: () => api.patientTimeline(patientId) }),
   factTagSections: (reportId: string) =>
     queryOptions({ queryKey: ['factTagSections', reportId], queryFn: () => api.factTagSections(reportId), staleTime: Infinity }),
   draftSources: (reportId: string) =>

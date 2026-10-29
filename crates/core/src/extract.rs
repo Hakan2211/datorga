@@ -220,7 +220,7 @@ pub fn chunks(segments: &[SourceSegment], budget: usize) -> Vec<Range<usize>> {
     out
 }
 
-fn line(i: usize, s: &SourceSegment) -> String {
+pub(crate) fn line(i: usize, s: &SourceSegment) -> String {
     let (kind, who) = match (s.kind, s.role) {
         (SourceKind::Dictation, _) => ("Diktat", ""),
         (SourceKind::SessionAudio, Speaker::Therapist) => ("Sitzung", "T: "),

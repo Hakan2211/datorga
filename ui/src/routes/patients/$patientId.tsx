@@ -3,7 +3,7 @@ import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { FilePlus2, Pencil, Plus, Stethoscope, Trash2 } from 'lucide-react'
+import { FilePlus2, History, LayoutGrid, Pencil, Plus, Stethoscope, Trash2 } from 'lucide-react'
 import type { Diagnosis } from '@/bindings/Diagnosis'
 import type { AgeGroup } from '@/bindings/AgeGroup'
 import type { ApplicationKind } from '@/bindings/ApplicationKind'
@@ -16,6 +16,7 @@ import { ConsentCard } from '@/components/consent-card'
 import { DiagnosisRows } from '@/components/diagnoses'
 import { PatientAvatar } from '@/components/patient-avatar'
 import { PatientFormDialog } from '@/components/patient-form'
+import { PatientTimeline } from '@/components/patient-timeline'
 import { SessionDialog, type SessionDialogMode } from '@/components/session-dialog'
 import {
   AlertDialog,
@@ -34,6 +35,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { api, errorMessage, q } from '@/lib/api'
 
 export const Route = createFileRoute('/patients/$patientId')({ component: PatientDetail })
@@ -46,6 +48,7 @@ function PatientDetail() {
   const patient = useQuery(q.patient(patientId))
   const photo = useQuery(q.patientPhoto(patientId))
   const episodes = useQuery(q.episodes(patientId))
+  const [tab, setTab] = useState('overview')
 
   const erase = useMutation({
     mutationFn: () => api.erasePatient(patientId),
@@ -107,15 +110,30 @@ function PatientDetail() {
         }
       />
       <Page>
-        <ConsentCard patientId={patientId} kind="recording" />
-        <ConsentCard patientId={patientId} kind="cloud_transcription" />
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold">{t('episodes.title')}</h2>
-          <NewEpisodeDialog patientId={patientId} />
-        </div>
-        {episodes.data?.length === 0 && <p className="text-sm text-muted-foreground">{t('episodes.none')}</p>}
-        {episodes.data?.map((e) => <EpisodeCard key={e.id} episode={e} />)}
-        <SessionsCard patientId={patientId} />
+        <Tabs value={tab} onValueChange={setTab} className="gap-6">
+          <TabsList>
+            <TabsTrigger value="overview" className="px-3" data-testid="tab-overview">
+              <LayoutGrid /> {t('timeline.tabOverview')}
+            </TabsTrigger>
+            <TabsTrigger value="timeline" className="px-3" data-testid="tab-timeline">
+              <History /> {t('timeline.tab')}
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="overview" className="space-y-6">
+            <ConsentCard patientId={patientId} kind="recording" />
+            <ConsentCard patientId={patientId} kind="cloud_transcription" />
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-semibold">{t('episodes.title')}</h2>
+              <NewEpisodeDialog patientId={patientId} />
+            </div>
+            {episodes.data?.length === 0 && <p className="text-sm text-muted-foreground">{t('episodes.none')}</p>}
+            {episodes.data?.map((e) => <EpisodeCard key={e.id} episode={e} />)}
+            <SessionsCard patientId={patientId} />
+          </TabsContent>
+          <TabsContent value="timeline">
+            <PatientTimeline patientId={patientId} />
+          </TabsContent>
+        </Tabs>
       </Page>
     </>
   )

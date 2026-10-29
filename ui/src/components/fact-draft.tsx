@@ -509,7 +509,7 @@ export function RedactionDialog({
   patientId: string;
   previewKey: readonly unknown[];
   loadPreview: () => Promise<ExtractPreview>;
-  progressEvent: "extract-progress" | "draft-progress";
+  progressEvent: "extract-progress" | "draft-progress" | "summary-progress";
   labels: RedactionLabels;
   onRun: (digest: string, requestId: string) => Promise<void>;
   onClose: () => void;

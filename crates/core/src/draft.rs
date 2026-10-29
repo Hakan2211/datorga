@@ -432,9 +432,15 @@ static GROUNDED: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     .collect()
 });
 
+/// `text` states something of the [`GROUNDED`] kind that none of `sources` states.
+pub(crate) fn unsupported(text: &str, sources: &[&str]) -> bool {
+    GROUNDED.iter().any(|r| r.is_match(text) && !sources.iter().any(|s| r.is_match(s)))
+}
+
 /// A sentence states something of the [`GROUNDED`] kind that none of its cited facts states.
 fn ungrounded(text: &str, cited: &[usize], facts: &[InputFact]) -> bool {
-    GROUNDED.iter().any(|r| r.is_match(text) && !cited.iter().any(|&i| facts.get(i).is_some_and(|f| r.is_match(&f.text))))
+    let sources: Vec<&str> = cited.iter().filter_map(|&i| facts.get(i)).map(|f| f.text.as_str()).collect();
+    unsupported(text, &sources)
 }
 
 /// Checks a model answer for `section` (one of the prepared requests over `facts`). Fails only

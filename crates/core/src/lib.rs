@@ -24,6 +24,7 @@ pub mod pseudo;
 pub mod render;
 pub mod store;
 pub mod stt;
+pub mod summary;
 pub mod templates;
 pub mod tts;
 pub mod workshop;

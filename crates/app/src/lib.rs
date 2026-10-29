@@ -26,7 +26,8 @@ use thera_core::models::ModelInfo;
 use thera_core::pii::{self, CheckItem};
 use thera_core::pseudo::EntityKind;
 use thera_core::render;
-use thera_core::store::Store;
+use thera_core::store::{SessionSummary, Store, SummaryInput, SummaryMeta, TimelineGroup};
+use thera_core::summary;
 use thera_core::stt::{self, CloudStt, CloudSttModel, SttConfig, SttEngine, WhisperCli};
 use thera_core::templates::{Context, Template};
 use thera_core::tts::{self, TtsConfig};
@@ -2037,6 +2038,105 @@ fn note_facts_apply(state: State<'_, AppState>, report_id: String, facts: Vec<Fa
     state.with(|s| s.apply_facts(&report_id, &facts))
 }
 
+// ---------- session summary (Phase 4, slice 30) ----------
+
+/// Exactly what summarizing this session would send, from its confirmed transcript and note.
+fn prepare_summary(s: &Store, session_id: &str) -> thera_core::Result<(extract::Prepared, SummaryInput)> {
+    let input = s.summary_input(session_id)?;
+    let dict = s.pseudo_dictionary(&input.patient.id)?;
+    let prepared = summary::prepare(&input.patient, &input.segments, &input.note, dict, extract::CHUNK_CHARS)?;
+    Ok((prepared, input))
+}
+
+#[tauri::command]
+fn session_summary(state: State<'_, AppState>, session_id: String) -> CmdResult<Option<SessionSummary>> {
+    state.with(|s| s.session_summary(&session_id))
+}
+
+/// The redaction preview for a summary, like `extract_preview`.
+#[tauri::command]
+fn summary_preview(state: State<'_, AppState>, session_id: String) -> CmdResult<ExtractPreview> {
+    let (prepared, input) = state.with(|s| prepare_summary(s, &session_id))?;
+    let terms = state.with(|s| s.pseudo_terms(&input.patient.id))?;
+    let config = state.with(|s| s.llm_config())?;
+    let provider = config.active.map(llm::provider);
+    let model = config.active.and_then(|id| config.settings(id).model).filter(|m| !m.is_empty());
+    Ok(ExtractPreview { preview: prepared.preview(), terms, provider, model })
+}
+
+#[derive(Serialize)]
+struct SummaryResult {
+    summary: Option<SessionSummary>,
+    dropped: usize,
+    cancelled: bool,
+}
+
+/// Sends the previewed text, one request per chunk, and replaces the session's summary with the
+/// checked points. Progress goes out as `summary-progress` with the session id in `report_id`.
+/// Cancelled or failed: the earlier summary stays.
+#[tauri::command]
+async fn summary_run(app: AppHandle, session_id: String, digest: String, request_id: String) -> CmdResult<SummaryResult> {
+    let events = app.clone();
+    blocking(app, move |state| {
+        let run = LlmRun::start(state, &request_id)?;
+        let (provider, model) = active_llm(state)?;
+        let (prepared, input) = state.with(|s| prepare_summary(s, &session_id))?;
+        if prepared.digest != digest {
+            return Err(CmdError::Other("Der Text hat sich seit der Vorschau geändert. Bitte die Vorschau erneut prüfen.".into()));
+        }
+        let total = prepared.chunks.len();
+        let progress = |stage, done| {
+            let _ = events.emit("summary-progress", ExtractProgress { report_id: session_id.clone(), stage, done, total });
+        };
+        if provider == ProviderId::Local {
+            progress("loading", 0);
+        }
+        let unchanged = |state: &AppState| -> CmdResult<SummaryResult> {
+            Ok(SummaryResult { summary: state.with(|s| s.session_summary(&session_id))?, dropped: 0, cancelled: true })
+        };
+        let ep = match llm_endpoint(state, provider, &run.cancel) {
+            Err(_) if run.cancelled() => return unchanged(state),
+            r => r?.0,
+        };
+        let opts = summary::chat_options();
+        let quota = summary::quota(total);
+        let (mut points, mut dropped, mut answered_by) = (Vec::new(), 0, model.clone());
+        for (i, chunk) in prepared.chunks.iter().enumerate() {
+            progress("running", i);
+            let messages = [(llm::Role::System, &prepared.system), (llm::Role::User, &chunk.user)];
+            let Some(completion) = stream_call(state, &events, &run, "llm.summary", (provider, &model), &ep, &messages, &opts)? else {
+                return unchanged(state);
+            };
+            let scope = summary::Scope {
+                range: &chunk.range,
+                notes: if i == 0 { input.note.len() } else { 0 },
+                segments: &input.segments,
+                note: &input.note,
+            };
+            let parsed = summary::parse(&completion.text, &scope, quota, &prepared.map, &input.patient)?;
+            points.extend(parsed.points);
+            dropped += parsed.dropped;
+            answered_by = completion.model;
+        }
+        progress("running", total);
+        let meta = SummaryMeta { provider: provider_str(provider), model: answered_by, prompt_hash: prepared.prompt_hash.clone(), chunks: total, dropped };
+        let stored = summary::to_stored(&points, &input.segments, &input.note);
+        let saved = state.with(|s| s.save_summary(&session_id, &meta, &stored))?;
+        Ok(SummaryResult { summary: Some(saved), dropped, cancelled: false })
+    })
+    .await
+}
+
+#[tauri::command]
+fn summary_edit(state: State<'_, AppState>, session_id: String, points: Vec<summary::SummaryPoint>) -> CmdResult<SessionSummary> {
+    state.with(|s| s.edit_summary(&session_id, points))
+}
+
+#[tauri::command]
+fn patient_timeline(state: State<'_, AppState>, patient_id: String) -> CmdResult<Vec<TimelineGroup>> {
+    state.with(|s| s.patient_timeline(&patient_id, &thera_core::domain::now()))
+}
+
 // ---------- Bericht drafting (Phase 2) ----------
 
 /// What the therapist chose in the draft dialog.
@@ -2721,16 +2821,18 @@ fn live_config_set(state: State<'_, AppState>, config: LiveConfig) -> CmdResult<
     state.with(|s| s.set_live_config(&config))
 }
 
-/// The brief for a session's prep, from the patient's earlier signed notes and applied facts.
+/// The brief for a session's prep, from the patient's earlier signed notes, key points and applied facts.
 fn prep_brief(s: &Store, session_id: &str) -> thera_core::Result<context::Brief> {
     let session = s.session(session_id)?;
     let patient = s.patient(&session.patient_id)?;
     let notes = s.prior_session_notes(session_id, context::MAX_NOTES)?;
+    let summaries = s.recent_summaries(&patient.id, Some(session_id), context::MAX_NOTES)?;
+    let prior = context::prior_sessions(notes, summaries, context::MAX_NOTES);
     let facts: Vec<EpisodeFact> = match &session.episode_id {
         Some(e) => s.episode_facts(e)?.into_iter().filter(|f| f.session_id != session_id).collect(),
         None => Vec::new(),
     };
-    context::prep_brief(&patient, s.pseudo_dictionary(&patient.id)?, &notes, &facts)
+    context::prep_brief(&patient, s.pseudo_dictionary(&patient.id)?, &prior, &facts)
 }
 
 #[derive(Serialize)]
@@ -3304,6 +3406,11 @@ pub fn run() {
             note_facts,
             note_facts_reject,
             note_facts_apply,
+            session_summary,
+            summary_preview,
+            summary_run,
+            summary_edit,
+            patient_timeline,
             fact_tag_sections,
             draft_preview,
             draft_sources,

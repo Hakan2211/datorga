@@ -227,7 +227,7 @@ fn s(description: &str) -> Value {
 
 /// Names of the read tools.
 pub const READ_TOOLS: &[&str] =
-    &["search_patients", "get_patient_overview", "list_sessions", "get_session_note", "get_facts", "get_report", "calendar_day", "due_items"];
+    &["search_patients", "get_patient_overview", "list_sessions", "get_session_note", "get_facts", "get_session_summaries", "get_report", "calendar_day", "due_items"];
 /// Names of the tools that create a proposal.
 pub const PROPOSE_TOOLS: &[&str] =
     &["propose_session", "propose_reschedule", "propose_task", "propose_section_text", "propose_note_text", "propose_day_plan"];
@@ -254,6 +254,12 @@ pub fn tools() -> Value {
             "get_facts",
             "Übernommene Fakten aus den Sitzungsnotizen einer Behandlung, neueste zuerst.",
             json!({ "patient_id": s("patient_id"), "episode_id": s("optional; Standard: die neueste Behandlung") }),
+            &["patient_id"],
+        ),
+        tool(
+            "get_session_summaries",
+            "KI-Kernpunkte der letzten Sitzungen einer Person (kürzer als die Notizen), neueste zuerst.",
+            json!({ "patient_id": s("patient_id"), "limit": { "type": "integer", "description": "Anzahl Sitzungen (Standard 3, höchstens 10)" } }),
             &["patient_id"],
         ),
         tool("get_report", "Ein Bericht oder eine Sitzungsnotiz mit allen Abschnitten (ohne Diagnosen).", json!({ "report_id": s("report_id") }), &["report_id"]),
@@ -446,6 +452,24 @@ impl ToolCtx<'_> {
                 for f in facts.iter().rev().take(80) {
                     let when = f.session_at.as_deref().map(|w| self.clock.when(w)).unwrap_or_default();
                     t.push_str(&format!("- [{}. Sitzung, {when}; {}] {}\n", f.session_no, f.section_key, f.text));
+                }
+                read(t, vec![p.id])
+            }
+            "get_session_summaries" => {
+                let p = self.patient(need(args, "patient_id")?)?;
+                let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(3).clamp(1, 10) as usize;
+                let found = self.store.recent_summaries(&p.id, None, limit)?;
+                let mut t = format!("Kernpunkte der letzten {} Sitzungen von {} (KI-Zusammenfassung, neueste zuerst):\n", found.len(), name(&p));
+                for (at, s) in &found {
+                    let when = at.as_deref().map(|w| self.clock.when(w)).unwrap_or_default();
+                    let edited = if s.status == "edited" { ", von der Therapeutin bearbeitet" } else { "" };
+                    t.push_str(&format!("Sitzung session_id {}, {when}{edited}:\n", s.session_id));
+                    for point in &s.points {
+                        t.push_str(&format!("- {}\n", point.text));
+                    }
+                }
+                if found.is_empty() {
+                    t.push_str("keine\n");
                 }
                 read(t, vec![p.id])
             }
@@ -791,6 +815,7 @@ pub fn step_label(name: &str, args: &Value) -> String {
         "list_sessions" => "Sitzungen aufgelistet".into(),
         "get_session_note" => "Sitzungsnotiz gelesen".into(),
         "get_facts" => "Fakten aus den Notizen gelesen".into(),
+        "get_session_summaries" => "Kernpunkte der letzten Sitzungen gelesen".into(),
         "get_report" => "Bericht gelesen".into(),
         "calendar_day" => {
             let d = a("date");

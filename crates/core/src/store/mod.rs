@@ -19,8 +19,12 @@ use crate::{Error, Result};
 mod agent;
 mod calendar;
 mod speakers;
+mod summary;
+mod timeline;
 pub use agent::{TextMode, TextProposal};
 pub use calendar::normalize_ts;
+pub use summary::{SessionSummary, SummaryInput, SummaryMeta, SummaryPointView};
+pub use timeline::{TimelineGroup, TimelineItem};
 
 const ACTOR: &str = "therapist";
 /// Setting: the therapist confirmed the current recovery key is stored. Absent or false means the
@@ -46,6 +50,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V15__speakers.sql"),
     include_str!("migrations/V16__speaker_count.sql"),
     include_str!("migrations/V17__patient_profile.sql"),
+    include_str!("migrations/V18__session_summary.sql"),
 ];
 
 /// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).
@@ -3391,5 +3396,130 @@ mod tests {
         let bytes = std::fs::read(&path).unwrap();
         assert!(!bytes.windows(8).any(|w| w == b"Beispiel"), "plaintext must not appear on disk");
     }
-}
 
+    // ---------- session summary + timeline (slice 30) ----------
+
+    fn planned(store: &Store, p: &Patient, episode: Option<&Episode>, at: &str) -> Session {
+        store
+            .create_session(SessionInput {
+                patient_id: p.id.clone(),
+                episode_id: episode.map(|e| e.id.clone()),
+                scheduled_at: Some(at.into()),
+                modality: None,
+                planned_minutes: None,
+            })
+            .unwrap()
+    }
+
+    fn confirmed_dictation(store: &Store, s: &Session, dir: &Path, texts: &[&str]) -> Vec<SourceSegment> {
+        let src = recorded_dictation(store, s, dir);
+        let job = store.enqueue_transcription(&src.id, None).unwrap();
+        store.claim_next_job().unwrap();
+        let segs: Vec<stt::Segment> = texts.iter().enumerate().map(|(i, t)| seg(i as i64 * 1000, t)).collect();
+        let t = store.finish_transcription(&job.id, "e", "m", &segs).unwrap();
+        store.confirm_transcript(&t.id).unwrap();
+        store.source_segments(&s.id).unwrap()
+    }
+
+    fn summary_meta() -> SummaryMeta {
+        SummaryMeta { provider: "local".into(), model: "m".into(), prompt_hash: "h".into(), chunks: 1, dropped: 0 }
+    }
+
+    fn point(text: &str, segments: Vec<String>, note: &[&str]) -> crate::summary::SummaryPoint {
+        crate::summary::SummaryPoint { text: text.into(), segments, note: note.iter().map(|n| n.to_string()).collect() }
+    }
+
+    #[test]
+    fn summary_is_saved_edited_replaced_and_erased_without_text_in_the_audit() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let s = planned(&store, &p, None, "2026-10-20T09:00:00Z");
+        assert!(store.session_summary(&s.id).unwrap().is_none());
+        let segs = confirmed_dictation(&store, &s, dir.path(), &["Schlaf besser.", "Streit mit der Schwester."]);
+        let note = store.create_session_note(&s.id).unwrap();
+        store.save_section(&note.id, "vereinbarungen", "<p>Schlaftagebuch weiterführen.</p>").unwrap();
+        let input = store.summary_input(&s.id).unwrap();
+        assert_eq!(input.segments.len(), 2);
+        assert!(input.note.iter().any(|n| n.key == "vereinbarungen" && n.text == "Schlaftagebuch weiterführen."), "{:?}", input.note);
+        assert!(!input.note.iter().any(|n| n.key == "diagnosen"), "never the diagnoses");
+
+        let points = vec![point("Pat. schläft besser.", vec![segs[0].segment_id.clone()], &[]), point("Schlaftagebuch geht weiter.", vec![], &["vereinbarungen"])];
+        let saved = store.save_summary(&s.id, &summary_meta(), &points).unwrap();
+        assert_eq!(saved.status, "draft");
+        assert_eq!(saved.points[0].citations[0].text, "Schlaf besser.");
+        assert_eq!(saved.points[1].note, vec!["vereinbarungen".to_string()]);
+
+        let edited = store
+            .edit_summary(&s.id, vec![point("  Pat. schläft   deutlich besser. ", vec![segs[0].segment_id.clone(), "fremd".into()], &[]), point(" ", vec![], &[])])
+            .unwrap();
+        assert_eq!(edited.status, "edited");
+        assert_eq!(edited.points.len(), 1);
+        assert_eq!(edited.points[0].text, "Pat. schläft deutlich besser.");
+        assert_eq!(edited.points[0].citations.len(), 1, "unknown segment ids are dropped");
+        assert!(store.edit_summary(&s.id, vec![point(&"x".repeat(700), vec![], &[])]).is_err());
+        let again = store.save_summary(&s.id, &summary_meta(), &points[..1]).unwrap();
+        assert_eq!((again.status.as_str(), again.points.len()), ("draft", 1), "a new run replaces the edit");
+
+        let later = planned(&store, &p, None, "2026-10-27T09:00:00Z");
+        assert_eq!(store.recent_summaries(&p.id, Some(&later.id), 3).unwrap().len(), 1);
+        assert!(store.recent_summaries(&p.id, Some(&s.id), 3).unwrap().is_empty(), "not the session itself");
+
+        let log = audit::list(&store.conn, 100).unwrap();
+        for e in log.iter().filter(|e| e.action.starts_with("summary.")) {
+            let m = &e.meta_json;
+            assert!(!m.contains("schläft") && !m.contains("Schlaftagebuch"), "{m}");
+        }
+        assert_eq!(log.iter().filter(|e| e.action == "summary.create").count(), 2);
+        assert_eq!(audit::verify(store.conn()).unwrap(), None);
+        let cancelled = planned(&store, &p, None, "2026-10-21T09:00:00Z");
+        store.cancel_session(&cancelled.id, None).unwrap();
+        assert!(store.summary_input(&cancelled.id).is_err());
+
+        store.erase_patient(&p.id).unwrap();
+        let n: i64 = store.conn.query_row("SELECT count(*) FROM session_summary", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0, "erasure cascades to the summaries");
+    }
+
+    #[test]
+    fn timeline_groups_by_case_numbers_held_sessions_and_places_consents() {
+        let store = Store::open_in_memory().unwrap();
+        let p = patient(&store);
+        let ep = store
+            .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Vt, age_group: AgeGroup::Adult, setting: Setting::Einzel })
+            .unwrap();
+        store.conn.execute("UPDATE episode SET started_at = '2026-09-01T00:00:00Z' WHERE id = ?1", [&ep.id]).unwrap();
+        let first = planned(&store, &p, Some(&ep), "2026-09-08T09:00:00Z");
+        let off = planned(&store, &p, Some(&ep), "2026-09-15T09:00:00Z");
+        store.cancel_session(&off.id, Some("krank")).unwrap();
+        let second = planned(&store, &p, Some(&ep), "2026-09-22T09:00:00Z");
+        planned(&store, &p, Some(&ep), "2099-12-01T09:00:00Z"); // still ahead: not in the timeline yet
+        let loose = planned(&store, &p, None, "2026-08-01T09:00:00Z");
+        store.create_application(&ep.id, ApplicationKind::Erstantrag).unwrap();
+        let c = store.grant_consent(&p.id, ConsentKind::Recording, None).unwrap();
+        store.revoke_consent(&c.id).unwrap();
+        store.save_summary(&second.id, &summary_meta(), &[point("Punkt.", vec![], &[])]).unwrap();
+
+        let groups = store.patient_timeline(&p.id, &now()).unwrap();
+        assert_eq!(groups.len(), 2);
+        let case = &groups[0];
+        assert_eq!(case.episode.as_ref().map(|e| e.id.as_str()), Some(ep.id.as_str()));
+        assert_eq!(case.sessions, 2);
+        let sessions: Vec<(String, Option<usize>, bool)> = case
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                TimelineItem::Session { session, number, summary, .. } => Some((session.id.clone(), *number, summary.is_some())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sessions, vec![(second.id.clone(), Some(2), true), (off.id.clone(), None, false), (first.id.clone(), Some(1), false)]);
+        assert!(case.items.iter().any(|i| matches!(i, TimelineItem::Application { report_status: Some(ReportStatus::Draft), .. })));
+        // Granted and revoked just now: both in the running case.
+        assert_eq!(case.items.iter().filter(|i| matches!(i, TimelineItem::Consent { .. })).count(), 2);
+        let ats: Vec<&str> = case.items.iter().map(|i| i.at()).collect();
+        assert!(ats.windows(2).all(|w| w[0] >= w[1]), "newest first: {ats:?}");
+        assert!(groups[1].episode.is_none());
+        assert!(matches!(&groups[1].items[..], [TimelineItem::Session { session, number: Some(1), .. }] if session.id == loose.id));
+    }
+}

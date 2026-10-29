@@ -42,6 +42,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { TranscriptView } from '@/components/transcript-view'
 import { PrepCard } from '@/components/voice-prep'
+import { SummaryCard } from '@/components/session-summary'
 import { api, errorMessage, jobActive, q, type RecordingStatus, type SessionView, type SourceView } from '@/lib/api'
 import { SESSION_FLOW, flowStates, type FlowStep } from '@/lib/calendar'
 import { formatDuration, useCaptureDevice } from '@/lib/capture'
@@ -69,6 +70,11 @@ function sessionFlow(view: SessionView, recording: RecordingStatus | null | unde
   })
   const current = FLOW.find((k) => states[k] === 'current')
   return { states, current, unreviewed, finished: finished.length }
+}
+
+/** A summary needs a confirmed transcript or a note to read. */
+function summaryReady({ session, sources }: SessionView) {
+  return !!session.note_id || sources.some((s) => s.transcript?.status === 'confirmed')
 }
 
 function SessionPage() {
@@ -122,6 +128,9 @@ function SessionPage() {
           {shown === 'review' && <ReviewStep view={view.data} onCapture={() => setViewing('capture')} />}
           {shown === 'note' && <NoteCard view={view.data} unreviewed={flow.unreviewed} />}
           {shown === 'finish' && <FinishStep view={view.data} />}
+          {(shown === 'note' || shown === 'finish') && session.status !== 'cancelled' && (
+            <SummaryCard sessionId={session.id} patientId={patient.id} ready={summaryReady(view.data)} />
+          )}
         </div>
       </Page>
       <FlowBar shown={shown} flow={flow} recordingHere={recording.data?.session_id === session.id} onNext={setViewing} />
