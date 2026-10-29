@@ -23,3 +23,6 @@ fixtures/
 # sherpa-onnx runtime + speaker models, fetched by scripts/fetch-sherpa.ps1
 /crates/app/diarize/*
 !/crates/app/diarize/.gitkeep
+
+# explainer video recordings (scripts/video/record.mjs)
+/scripts/video/out

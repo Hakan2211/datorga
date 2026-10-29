@@ -92,8 +92,9 @@ export function ReportDocument({
     },
   })
 
+  // No update event: it would save the (unchanged) text into a report that was just signed.
   useEffect(() => {
-    editor?.setEditable(!readOnly)
+    editor?.setEditable(!readOnly, false)
   }, [editor, readOnly])
 
   // Text written from outside (AI draft applied, transcript inserted) replaces that section only.

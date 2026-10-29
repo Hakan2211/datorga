@@ -210,8 +210,9 @@ impl AppState {
     fn audio_root(&self) -> PathBuf {
         self.data_dir.join("audio")
     }
+    /// Speech and local AI models hold no patient data; the Demo-Praxis uses the real ones.
     fn models_dir(&self) -> PathBuf {
-        self.data_dir.join("models")
+        self.home_dir.join("models")
     }
     /// Plaintext WAV/JSON while the sidecar runs. Wiped on every unlock (crash leftovers).
     fn stt_tmp(&self) -> PathBuf {

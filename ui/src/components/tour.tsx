@@ -4,8 +4,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
+import { openUrl } from '@tauri-apps/plugin-opener'
+import { PlayCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
+import { VIDEO_URL } from '@/lib/help'
 
 /** `fallback` is pointed at when `target` doesn't show up, e.g. a list that is still empty. */
 type Step = { id: string; to: string; target: string; fallback?: string; side: 'right' | 'bottom' }
@@ -158,6 +161,11 @@ function TourStep({ index, onBack, onNext, onEnd }: { index: number; onBack: () 
           </div>
           <p className="text-sm leading-relaxed">{t(`tour.steps.${step.id}.body`)}</p>
           {last && <p className="text-xs text-muted-foreground">{t('tour.restartHint')}</p>}
+          {last && VIDEO_URL && (
+            <button type="button" className="flex items-center gap-1.5 text-sm text-primary hover:underline" onClick={() => void openUrl(VIDEO_URL!)} data-testid="tour-video">
+              <PlayCircle className="size-4" /> {t('tour.video')}
+            </button>
+          )}
           <div className="flex items-center justify-between gap-2 border-t pt-3">
             <Button variant="outline" size="sm" onClick={onBack} disabled={index === 0} data-testid="tour-back">
               {t('common.back')}

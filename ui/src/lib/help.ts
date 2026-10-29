@@ -2,7 +2,8 @@
 // parser covers what the articles use (headings, paragraphs, lists, notes, bold, keys, links),
 // so no Markdown library and no raw HTML.
 
-/** The online explainer video (slice 35). `null` until it is published. */
+/** The explainer video (slice 35, `docs/video/skript.md`), hosted on bunny.net. `null` until
+ * it is published: the Hilfe card then says "erscheint in Kürze" and the tour shows no link. */
 export const VIDEO_URL: string | null = null
 
 export type Block =

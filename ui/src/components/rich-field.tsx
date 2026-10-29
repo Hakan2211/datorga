@@ -31,8 +31,9 @@ export function RichField({
     onUpdate: ({ editor }) => onChangeRef.current(editor.isEmpty ? '' : editor.getHTML()),
   })
 
+  // No update event: it would save the (unchanged) text into a report that was just signed.
   useEffect(() => {
-    editor?.setEditable(!readOnly)
+    editor?.setEditable(!readOnly, false)
   }, [editor, readOnly])
 
   // Text inserted from outside (e.g. from a transcript). Own edits already match `value`.

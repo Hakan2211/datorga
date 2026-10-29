@@ -1,0 +1,12 @@
+{
+  "name": "thera-video",
+  "private": true,
+  "type": "module",
+  "description": "Records the explainer video (slice 35) on the Demo-Praxis: docs/video/skript.md",
+  "scripts": {
+    "record": "node record.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.64.1"
+  }
+}

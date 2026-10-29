@@ -1312,6 +1312,7 @@ export const de = {
     finish: 'Fertig',
     end: 'Rundgang beenden',
     restartHint: 'Den Rundgang starten Sie jederzeit neu unter Hilfe oder Einstellungen.',
+    video: 'Video ansehen: thera in 5 Minuten',
     steps: {
       heute: {
         title: 'Heute',
