@@ -51,6 +51,14 @@ User decisions (2026-10-29):
 ### Step 0: Mockups (user)
 The user generates mockups from the appendix prompts into `docs/mockups/10-…` and following. They're needed before slices 29 and 32. Slices 31 and 33 don't depend on them and can go first.
 
+**Done (2026-10-29):** `docs/mockups/10-…` to `18-…`. How to read them:
+- Take the content area of each screen.
+- Keep the existing shell from slice 21 (sidebar, top bar, Strg+K) and the tokens from slice 20.
+- Ignore the sidebar entries the mockups invent (Statistik, Abrechnung, Wissen, Papierkorb, Integrationen, user profile footer).
+- Ignore the mockups' placeholder model names. The real list is the curated catalog, never Mistral.
+- `14-berichte-board-verfehlt.jpg` missed the prompt: it shows a note document, not a board. Slice 32 builds the board from the prompt text and the column/card style of #13.
+- #16 has garbled text in its privacy box. Use the plan wording.
+
 ### Slice 29: Patient profile + card view
 - Migration V-next on `patient`:
   - `gender` (`w | m | d | x`/keine Angabe)
@@ -166,6 +174,8 @@ The user generates mockups from the appendix prompts into `docs/mockups/10-…` 
 ## Appendix: GPT-image prompts
 
 Prepend the existing `[style]` block from `docs/PLAN-PHASE3.md:250` (#F7F5F2 background, teal #2F7A78, German UI text, 1440×900, shadcn/Tailwind-realistic). Make 2–3 variants each. Use fictional faces only: illustrated or blurred portrait placeholders.
+
+High-fidelity desktop app UI screenshot, 1440×900, Windows 11 app window, for "thera", a calm, private documentation app for German psychotherapists. Visual style: quiet, warm, trustworthy, clinical but not cold; soft warm-neutral background (#F7F5F2), white cards with subtle 1px borders and very soft shadows, muted teal accent (#2F7A78), a secondary warm sand accent, rounded corners 10px, generous whitespace, Inter-like sans-serif for UI and an elegant serif for document text, small lucide-style line icons. All UI text in German. No stock photos, no illustrations of people, no clutter, no gradients. Realistic and implementable with shadcn/ui + Tailwind.
 
 10. **Patienten (Karten)**: [style] Patient overview "Patienten", toggle "Karten | Tabelle", search "Patient suchen…", button "Neuer Patient". Filter chips row: "Alle", "Erwachsene", "Kinder & Jugendliche", "weiblich", "männlich", "divers", "F3 Affektive Störungen", "F4 Angst-/Belastungsstörungen", "VT", "TP". Grid of 4 columns of white cards: round portrait placeholder (soft illustrated avatar, or initials circle for some), name "Anna K.", Chiffre "K120385" in monospace, "38 J. · weiblich", badges "VT" and "F32.1", line "Nächster Termin: Do 31.10., 10:00", small amber dot "2 offen". Sort select "Nächster Termin".
 11. **Patient: Verlauf (timeline)**: [style] Patient page header with portrait, name, Chiffre, tabs "Übersicht | Verlauf | Dokumente". Tab "Verlauf": vertical timeline, left date column, teal line with nodes. Group header "Behandlungsfall VT · KZT 1 · Sitzung 9 von 12". Session node "Di 22.10.2026 · Sitzung 9" with 4 short bullet key points marked "KI-Zusammenfassung" and a small "bearbeiten" link, badge "Notiz signiert". Application node "Umwandlungsantrag · Bericht Entwurf". Consent node "Einwilligung Tonaufnahme erteilt". Filter "Nur Sitzungen".
