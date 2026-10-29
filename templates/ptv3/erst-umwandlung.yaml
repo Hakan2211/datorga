@@ -189,6 +189,8 @@ sections:
     heading: Zusätzlich erforderliche Angaben bei einem Umwandlungsantrag
     field: prose
     when: { kind: [umwandlung] }
+    # Bericht-Lotse (slice 40): the goals of the Erstantrag, to measure the course against.
+    prior: [behandlungsplan_prognose]
     hints:
       - text: >-
           Bisheriger Behandlungsverlauf, Veränderung der Symptomatik und Ergebnis in Bezug auf die Erreichung

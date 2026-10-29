@@ -67,12 +67,12 @@ Bild: „Berichte“ als Board, Hinweis „bald fällig“ oben, die Karte von L
 > Unter Berichte sehen Sie alle Anträge als Board, vom Entwurf bis zum Export. thera rechnet mit, wann das Kontingent endet, und erinnert Sie rechtzeitig.
 
 ### entwurf · KI-Entwurf
-Bild: Umwandlungsantrag von Lena Sommer öffnen, „Leere Abschnitte entwerfen“, die Vorschau des ausgehenden Texts, „Senden und entwerfen“, einen Vorschlag übernehmen.
-> Im Bericht entwirft die KI leere Abschnitte aus Ihren signierten Notizen. Vorher zeigt thera, welcher Text den Rechner verlässt. Die Vorschläge übernehmen Sie einzeln. Diagnosen und Medikation trägt die KI nie ein, das bleibt Ihre Entscheidung.
+Bild: Umwandlungsantrag von Lena Sommer öffnen (Schritt „Abschnitte“), „Leere Abschnitte entwerfen“, die Vorschau des ausgehenden Texts, „Senden und entwerfen“, zwei Sätze übernehmen.
+> Der Bericht-Lotse führt Sie Schritt für Schritt. Die KI entwirft leere Abschnitte aus Ihren signierten Notizen; vorher zeigt thera, welcher Text den Rechner verlässt. Sie gehen die Vorschläge Satz für Satz durch. Diagnosen und Medikation trägt die KI nie ein.
 
-### vorschau · Vorschau und Export
-Bild: „Vorschau“ öffnen, durch die Seiten blättern, Maus über „PDF exportieren“.
-> Sie überarbeiten den Text wie in einer Textverarbeitung, sehen die Vorschau im Format des Musters PTV 3 und exportieren als PDF oder Word.
+### gutachter · Prüfen und Export
+Bild: Schritt „Prüfen“, „Mit KI prüfen“, „Bericht prüfen lassen“, ein Hinweis „Ein Gutachter würde fragen …“, dann „Weiter: Unterschreiben“, Maus über den PDF-Export.
+> Beim Prüfen liest die KI den Bericht wie ein Gutachter und nennt, was nachgefragt würde. Den Text ändert sie nicht. Zum Schluss sehen Sie den Bericht im Format des Musters PTV 3, unterschreiben und exportieren als PDF oder Word.
 
 ## 6 · Datenschutz
 

@@ -99,22 +99,35 @@ export const SHOTS = {
   },
 
   async entwurf(d) {
+    // The Bericht-Lotse opens a half-written Bericht on "Abschnitte", one section at a time.
     await d.click(d.page.getByText('Lena Sommer').first())
     await d.wait(800)
-    await d.click(d.page.getByRole('button', { name: 'Leere Abschnitte entwerfen…' }))
+    await d.click(d.page.getByTestId('lotse-draft-empty'))
     await d.wait(1500)
     await d.hover(d.page.getByText('Platzhalter (nur lokal)', { exact: false }).first(), 1200)
     await d.click(d.page.getByRole('button', { name: 'Senden und entwerfen' }))
-    await d.wait(3500)
-    await d.click(d.page.getByRole('button', { name: /Zu den \d+ Vorschlägen/ }))
-    await d.wait(600)
-    await d.click(d.page.getByRole('button', { name: 'Übernehmen', exact: true }).first(), { before: 1500 })
+    await d.wait(3000)
+    // Somatik has no facts in the demo (its proposal is empty): show the Umwandlung section.
+    await d.click(d.page.locator('[data-testid="focus-rail"] [data-section="umwandlung"]'))
+    await d.hover(d.page.locator('[data-testid="sentence"][data-state="current"]').first(), 1000)
+    await d.click(d.page.getByTestId('sentence-accept').first(), { before: 800 })
+    await d.wait(700)
+    await d.press('Enter')
+    await d.wait(700)
   },
 
-  async vorschau(d) {
-    await d.click(d.page.getByRole('button', { name: 'Vorschau' }))
-    await d.wait(1500)
-    await d.scroll(700, 2500)
+  async gutachter(d) {
+    await d.click(d.page.getByRole('button', { name: /Prüfen$/ }).first())
+    await d.wait(1200)
+    await d.click(d.page.getByTestId('check-run'))
+    await d.wait(800)
+    await d.click(d.page.getByRole('button', { name: 'Bericht prüfen lassen' }))
+    await d.wait(2500)
+    await d.hover(d.page.getByTestId('check-entry').filter({ hasText: 'Gutachter würde fragen' }).first(), 1500)
+    // The toast sits over the bottom bar at video size: on via the stepper.
+    await d.click(d.page.getByRole('button', { name: /Fertig$/ }).first())
+    await d.wait(1000)
+    await d.hover(d.page.getByTestId('finish-pdf'), 1200)
   },
 
   async gesendet(d) {

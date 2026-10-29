@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 
 use crate::contingent;
 use crate::domain::{EpisodeFact, Gender, Patient};
-use crate::draft::{fact_list, patient_as_pat, section_facts, InputFact, FACT_CHARS};
+use crate::draft::{fact_list, patient_as_pat, section_facts, short_heading, InputFact, FACT_CHARS};
 use crate::extract::{citation_number, json_list, sha256, Preview, TokenView};
 use crate::llm::{ChatOptions, Effort};
 use crate::pseudo::{Dictionary, Pseudonymized, Pseudonymizer, TokenMap};
@@ -167,12 +167,6 @@ pub fn prepare(questions: &[Question], facts: &[InputFact], tag_keys: &[String],
     Ok(Prepared { system, user, asks, subsets, map: p.into_map(), prompt_hash, digest: hex::encode(h.finalize()) })
 }
 
-/// The heading up to its first comma or parenthesis: the long PTV 3 headings are noise here.
-fn short_heading(heading: &str) -> &str {
-    let h = heading.trim();
-    h.find([',', '(']).map_or(h, |i| h[..i].trim_end())
-}
-
 /// A question the facts answer: its keys and the facts (indices into the check's facts).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Covered {
@@ -252,7 +246,7 @@ mod tests {
     }
 
     fn tagged(session_no: usize, text: &str, tags: &[&str]) -> InputFact {
-        InputFact { session_no, label: "Verlauf".into(), text: text.into(), bericht: Some(tags.iter().map(|t| t.to_string()).collect()), own: false }
+        InputFact { session_no, label: "Verlauf".into(), text: text.into(), bericht: Some(tags.iter().map(|t| t.to_string()).collect()), own: false, prior: false }
     }
 
     #[test]

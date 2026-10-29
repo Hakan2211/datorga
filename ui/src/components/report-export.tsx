@@ -15,7 +15,8 @@ export function useReportExport(view: ReportView | undefined) {
       if (!view) return false
       const chiffre = view.patient.chiffre ?? 'ohne-Chiffre'
       const day = (view.session?.scheduled_at ?? view.session?.started_at ?? view.report.created_at).slice(0, 10)
-      const base = view.session ? `Sitzungsnotiz-${chiffre}-${day}` : `Bericht-${chiffre}-${view.application?.kind ?? 'bericht'}`
+      const unsigned = view.report.status === 'draft' || view.report.status === 'in_review'
+      const base = `${view.session ? `Sitzungsnotiz-${chiffre}-${day}` : `Bericht-${chiffre}-${view.application?.kind ?? 'bericht'}`}${unsigned ? '-unsigniert' : ''}`
       const path = await save({
         defaultPath: `${base}.${format}`,
         filters: [{ name: format.toUpperCase(), extensions: [format] }],

@@ -83,6 +83,10 @@ pub struct SectionDef {
     /// Questions the Bericht-Lotse asks when the sessions don't answer them (slice 38).
     #[serde(default)]
     pub asks: Vec<Ask>,
+    /// Sections of the Vorbericht a draft of this one sees besides the one with the same key
+    /// (slice 40): the earlier goals for the Verlauf of a Fortführung.
+    #[serde(default)]
+    pub prior: Vec<String>,
 }
 
 /// A question for the "Fragen" step. Her answer counts as her own statement in the draft.

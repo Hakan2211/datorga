@@ -629,10 +629,30 @@ pub struct DraftSentenceView {
     pub sources: Vec<EpisodeFact>,
     /// Her answers to Lotse questions it rests on ("Ihre Angabe").
     pub answers: Vec<ReportAnswer>,
+    /// Sections of the Vorbericht it rests on ("Vorbericht (Datum)").
+    pub prior: Vec<PriorSource>,
     /// Taken over or discarded one by one in the focus mode; `None` while undecided.
     pub decision: Option<SentenceDecision>,
     /// Taken over in her own wording.
     pub edited: bool,
+}
+
+/// A section of the Vorbericht a draft sentence cites (slice 40).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PriorSource {
+    pub report_id: String,
+    pub section_key: String,
+    pub signed_at: Option<String>,
+    /// The start of the section's text.
+    pub excerpt: String,
+}
+
+/// A Vorbericht section a draft run offered, in the order of its input (see `Store::save_drafts`).
+#[derive(Debug, Clone)]
+pub struct PriorRef {
+    pub report_id: String,
+    pub section_key: String,
 }
 
 /// The therapist's answer to one Lotse question of a Bericht (slice 38).

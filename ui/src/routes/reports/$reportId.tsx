@@ -31,6 +31,8 @@ import { AutoDraft } from '@/components/autopilot'
 import { StartStep } from '@/components/lotse/start-step'
 import { QuestionsStep, openQuestions } from '@/components/lotse/questions-step'
 import { SectionsStep } from '@/components/lotse/sections-step'
+import { CheckStep } from '@/components/lotse/check-step'
+import { FinishStep } from '@/components/lotse/finish-step'
 import { Page, PageHeader } from '@/components/app-shell'
 import { StatusBadge, Stepper, StickyActionBar, formatDate, stepStates } from '@/components/bits'
 import { useReportExport, type ExportFormat } from '@/components/report-export'
@@ -270,18 +272,8 @@ function ReportEditor({ view }: { view: ReportView }) {
   const llm = useQuery({ ...q.llm(), enabled: flowOn && !readOnly })
   const checklist = useQuery(q.checklist(report.id))
   const exportAs = useReportExport(view)
-  const anyFilled = template.sections.some((s) => !isBlank(bodies[s.key] ?? ''))
   const proposals = drafts.data?.filter((d) => d.status === 'proposed') ?? []
-  const blocked = checklist.data?.some((c) => !c.ok && c.severity === 'block') ?? true
   const exported = report.status === 'exported' && !report.export_outdated
-  const states = stepStates<ReportStep>([
-    { key: 'facts', done: readOnly || anyFilled || (sources.data?.facts.length ?? 0) > 0 },
-    { key: 'draft', done: readOnly || (anyFilled && proposals.length === 0) },
-    { key: 'edit', done: readOnly || !blocked },
-    { key: 'check', done: readOnly },
-    { key: 'export', done: exported },
-  ])
-  const current = REPORT_FLOW.find((k) => states[k] === 'current')
   const emptyDraftable = draftable.filter((s) => isBlank(bodies[s.key] ?? '')).map((s) => s.key)
 
   // Focus mode: each section taken over, waiting for a proposal decision, empty, or left out.
@@ -304,17 +296,21 @@ function ReportEditor({ view }: { view: ReportView }) {
   const firstOpen = sectionKeys.find((k) => sectionStates[k] === 'proposal' || sectionStates[k] === 'open') ?? sectionKeys[0]
   const focusKey = search.section && sectionKeys.includes(search.section) ? search.section : firstOpen
 
-  // Bericht-Lotse: an untouched Bericht opens on the start step, anything else on its sections.
+  // Bericht-Lotse: an untouched Bericht opens on the start step, a signed one on "Fertig",
+  // anything else on its sections.
   const anyProse = template.sections.some((s) => s.field === 'prose' && !isBlank(bodies[s.key] ?? ''))
   const touched = anyProse || (drafts.data?.length ?? 0) > 0
-  const viewing: LotseStep = search.step ?? (flowOn && !readOnly && !touched ? 'start' : 'abschnitte')
+  const viewing: LotseStep = search.step ?? (flowOn && readOnly ? 'fertig' : flowOn && !touched ? 'start' : 'abschnitte')
+  // "Ganzes Dokument" replaces whichever step is open.
+  const stepOn = flowOn && !search.doc
   const lotse = stepStates<LotseStep>(
     [
       { key: 'start', done: readOnly || touched },
       // Done once nothing is open or the drafting has started; text alone doesn't answer them.
       { key: 'fragen', done: readOnly || (drafts.data?.length ?? 0) > 0 || (!!questions.data && open === 0) },
       { key: 'abschnitte', done: readOnly || sectionsDone },
-      { key: 'pruefen', done: readOnly },
+      // Done once nothing blocks the signature; the Gutachter-Check is optional.
+      { key: 'pruefen', done: readOnly || (sectionsDone && !!checklist.data && !checklist.data.some((c) => !c.ok && c.severity === 'block')) },
       { key: 'fertig', done: exported },
     ],
   )
@@ -325,13 +321,8 @@ function ReportEditor({ view }: { view: ReportView }) {
   // "Ganzes Dokument": today's editor as a view, from every step; back to the focus mode from there.
   const showDocument = (on: boolean) =>
     void navigate({ to: '/reports/$reportId', params: { reportId: report.id }, search: (s: ReportSearch) => ({ ...s, step: on ? s.step : 'abschnitte', doc: on || undefined }) })
-  const focusOn = flowOn && viewing === 'abschnitte' && !search.doc
-  const openStep = (step: LotseStep) => {
-    setStep(step)
-    // Until slices 39–40 give them their own screens, Prüfen and Fertig are places on the editor page.
-    if (step === 'pruefen') jump('check')
-    else if (step === 'fertig') jump('export')
-  }
+  const focusOn = stepOn && viewing === 'abschnitte'
+  const openStep = (step: LotseStep) => setStep(step)
   // After a view switch the target exists only once React has rendered it.
   const scrollTo = (id: string) =>
     requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
@@ -348,7 +339,9 @@ function ReportEditor({ view }: { view: ReportView }) {
     } else scrollTo(STEP_ANCHOR[step])
   }
   // A note's bar only leads to signing and exporting; the rest of its flow is on the session page.
-  const barStep: ReportStep | null = flowOn ? (current ?? null) : isNote ? (readOnly ? (exported ? null : 'export') : 'check') : null
+  // A Bericht's steps are the Lotse's.
+  const barStep: ReportStep | null = flowOn ? null : isNote ? (readOnly ? (exported ? null : 'export') : 'check') : null
+  const content = `${report.status}:${JSON.stringify(bodies)}`
 
   const editLocked = (key: string) => {
     setMode('sections')
@@ -429,7 +422,7 @@ function ReportEditor({ view }: { view: ReportView }) {
             className="mx-auto max-w-4xl"
           />
         )}
-        {flowOn && viewing === 'start' ? (
+        {stepOn && viewing === 'start' ? (
           <>
             {drafting && autodraft && <AutoDraft reportId={report.id} keys={emptyDraftable} onDone={endAutodraft} />}
             <StartStep
@@ -464,7 +457,7 @@ function ReportEditor({ view }: { view: ReportView }) {
             onReject={rejectDraft}
             onDraft={openDraft}
           />
-        ) : flowOn && viewing === 'fragen' ? (
+        ) : stepOn && viewing === 'fragen' ? (
           <QuestionsStep
             reportId={report.id}
             patientId={patient.id}
@@ -472,6 +465,19 @@ function ReportEditor({ view }: { view: ReportView }) {
             readOnly={readOnly}
             llmActive={!!llm.data?.config.active}
           />
+        ) : stepOn && viewing === 'pruefen' ? (
+          <CheckStep
+            view={view}
+            bodies={bodies}
+            content={content}
+            flush={flush}
+            readOnly={readOnly}
+            llmActive={!!llm.data?.config.active}
+            onSection={selectSection}
+            onChange={update}
+          />
+        ) : stepOn && viewing === 'fertig' ? (
+          <FinishStep view={view} content={content} flush={flush} busy={pending > 0} onCheck={() => setStep('pruefen')} />
         ) : (
         <>
         <div className="flex items-center justify-between gap-3">
@@ -570,12 +576,7 @@ function ReportEditor({ view }: { view: ReportView }) {
           </div>
           {preview ? (
             <div className="sticky top-4 h-[calc(100vh-12rem)] min-h-96 self-start">
-              <ReportPreview
-                reportId={report.id}
-                content={`${report.status}:${JSON.stringify(bodies)}`}
-                flush={flush}
-                onClose={() => setPreview(false)}
-              />
+              <ReportPreview reportId={report.id} content={content} flush={flush} onClose={() => setPreview(false)} />
             </div>
           ) : (
           <aside className="space-y-4">
@@ -595,7 +596,8 @@ function ReportEditor({ view }: { view: ReportView }) {
                 </Card>
               )}
               <LengthMeter pages={pages} target={template.rules.target_pages} />
-              <ChecklistCard reportId={report.id} readOnly={readOnly} busy={pending > 0} primary={barStep === 'check'} />
+              {/* A Bericht is checked, signed and exported in the Lotse steps 4 and 5. */}
+              {!flowOn && <ChecklistCard reportId={report.id} readOnly={readOnly} busy={pending > 0} primary={barStep === 'check'} />}
               {isNote && !readOnly && (
                 <TranscriptPicker
                   segments={view.segments}
@@ -605,7 +607,7 @@ function ReportEditor({ view }: { view: ReportView }) {
                   onInsert={(key, text) => update(key, appendParagraph(bodies[key] ?? '', text))}
                 />
               )}
-              <ExportCard view={view} exportAs={exportAs} />
+              {!flowOn && <ExportCard view={view} exportAs={exportAs} />}
             </div>
           </aside>
           )}
@@ -641,7 +643,7 @@ function ReportEditor({ view }: { view: ReportView }) {
                 })}
               </span>
             )}
-            {flowOn && (viewing === 'start' || viewing === 'fragen' || viewing === 'abschnitte') && (
+            {flowOn && (
               <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => showDocument(!search.doc)} data-testid="lotse-document">
                 {search.doc ? t('lotse.focus.backToFocus') : t('lotse.focus.document')}
               </Button>
@@ -649,7 +651,7 @@ function ReportEditor({ view }: { view: ReportView }) {
           </>
         }
         step={barStep}
-        lotseStep={flowOn && !readOnly && (viewing === 'start' || viewing === 'fragen') ? viewing : null}
+        lotseStep={stepOn && !readOnly && viewing !== 'abschnitte' ? viewing : null}
         focus={
           focusOn && !readOnly
             ? {
@@ -703,8 +705,11 @@ function ReportBar({
 }: {
   info: ReactNode
   step: ReportStep | null
-  /** A Lotse step with its own bar: start leads to the questions (if any are open), the questions to the draft. */
-  lotseStep: 'start' | 'fragen' | null
+  /**
+   * A Lotse step with its own bar: start leads to the questions (if any are open), the questions to
+   * the draft, Prüfen back to the sections or on to Fertig, Fertig back to Prüfen.
+   */
+  lotseStep: Exclude<LotseStep, 'abschnitte'> | null
   /** Lotse step 3 (focus mode): onward to Prüfen once every section is done, else to the next open one. */
   focus: { done: boolean; next: string | null; onNext: () => void; onSection: (key: string) => void } | null
   openQuestions: number
@@ -719,7 +724,7 @@ function ReportBar({
   const { t } = useTranslation()
   let action: ReactNode = null
   // After the questions, drafting the empty sections is the next thing even in a half-written Bericht.
-  const toDraft = canDraftEmpty && proposals === 0 && (step === 'draft' || lotseStep === 'fragen')
+  const toDraft = canDraftEmpty && proposals === 0 && lotseStep === 'fragen'
   if (focus) {
     action = focus.done ? (
       <Button onClick={focus.onNext} data-testid="lotse-next">
@@ -735,6 +740,23 @@ function ReportBar({
           {t('lotse.focus.nextOpen')} <ArrowRight />
         </Button>
       )
+    )
+  } else if (lotseStep === 'pruefen') {
+    action = (
+      <>
+        <Button variant="ghost" onClick={() => onLotseNext('abschnitte')} data-testid="lotse-back">
+          {t('lotse.back')}
+        </Button>
+        <Button onClick={() => onLotseNext('fertig')} data-testid="lotse-next">
+          {t('lotse.check.next')} <ArrowRight />
+        </Button>
+      </>
+    )
+  } else if (lotseStep === 'fertig') {
+    action = (
+      <Button variant="ghost" onClick={() => onLotseNext('pruefen')} data-testid="lotse-back">
+        {t('lotse.back')}
+      </Button>
     )
   } else if (lotseStep === 'start' && openQuestions > 0) {
     action = (
@@ -761,28 +783,10 @@ function ReportBar({
         )}
       </>
     )
-  } else if (step === 'facts') {
-    info = (
-      <>
-        {info}
-        <span>{t('flow.report.noFacts')}</span>
-      </>
-    )
-  } else if (step === 'draft' && proposals > 0) {
+  } else if (step === 'check') {
+    // A Sitzungsnotiz: on to its checklist and signature.
     action = (
-      <Button onClick={() => onJump('draft')}>
-        {t('flow.report.toProposal', { count: proposals })} <ArrowRight />
-      </Button>
-    )
-  } else if (step === 'draft' && canDraftEmpty) {
-    action = (
-      <Button onClick={onDraftEmpty}>
-        <Sparkles /> {t('draft.draftEmpty')}
-      </Button>
-    )
-  } else if (step === 'draft' || step === 'edit' || step === 'check') {
-    action = (
-      <Button onClick={() => onJump('check')} variant={step === 'draft' ? 'outline' : 'default'} data-testid="flow-next">
+      <Button onClick={() => onJump('check')} data-testid="flow-next">
         {t('flow.report.toCheck')} <ArrowRight />
       </Button>
     )

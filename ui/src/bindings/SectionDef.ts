@@ -20,4 +20,9 @@ dictation: boolean, when: When, hints: Array<Hint>,
 /**
  * Questions the Bericht-Lotse asks when the sessions don't answer them (slice 38).
  */
-asks: Array<Ask>, };
+asks: Array<Ask>, 
+/**
+ * Sections of the Vorbericht a draft of this one sees besides the one with the same key
+ * (slice 40): the earlier goals for the Verlauf of a Fortführung.
+ */
+prior: Array<string>, };

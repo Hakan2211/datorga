@@ -15,6 +15,10 @@
 //! Slice 38: the therapist's answers to the Lotse questions go along as her own statements
 //! ("Angaben der Therapeutin"), numbered and cited like facts but offered only to their section.
 //! A sentence citing one may state prognosis, goals or setting when her question was about that.
+//!
+//! Slice 40: the last signed Bericht of the episode ("Vorbericht") goes along too, one entry per
+//! section with text, offered to the same section and the ones the template maps to it (`prior:`),
+//! numbered and cited like facts. A Fortführung draft is told to describe the change since then.
 
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -32,7 +36,7 @@ use crate::templates::{FieldKind, SectionDef, Template};
 use crate::{Error, Result};
 
 /// Bump on any change to the prompt or the answer format.
-pub const PROMPT_VERSION: &str = "draft-2026.4";
+pub const PROMPT_VERSION: &str = "draft-2026.5";
 
 /// Fact characters per request, like `extract::CHUNK_CHARS` (fits a 16k-context local model).
 pub const FACT_CHARS: usize = 24_000;
@@ -51,6 +55,9 @@ pub const MAX_INSTRUCTION_CHARS: usize = 500;
 /// Longest existing section text sent along on "ergänzen".
 pub const MAX_EXISTING_CHARS: usize = 8_000;
 
+/// Longest Vorbericht section sent along (cut at a word, marked with "…").
+pub const MAX_PRIOR_CHARS: usize = 6_000;
+
 /// An applied Sitzungsnotiz fact as input to a draft.
 #[derive(Debug, Clone)]
 pub struct InputFact {
@@ -65,13 +72,45 @@ pub struct InputFact {
     /// The therapist's answer to a Lotse question (`label` is the question, `bericht` its one
     /// section, `session_no` 0): offered only to that section, whatever the tags.
     pub own: bool,
+    /// A section of the Vorbericht (`label` is its heading, `bericht` the sections it is offered
+    /// to, `session_no` 0): offered only to those, whatever the tags.
+    pub prior: bool,
 }
 
 impl InputFact {
     /// Her answer to `question` for section `key`.
     pub fn answer(key: &str, question: &str, text: &str) -> Self {
-        InputFact { session_no: 0, label: question.to_string(), text: text.to_string(), bericht: Some(vec![key.to_string()]), own: true }
+        InputFact { session_no: 0, label: question.to_string(), text: text.to_string(), bericht: Some(vec![key.to_string()]), own: true, prior: false }
     }
+
+    /// The Vorbericht's section `def` (plain text), offered to the sections `keys`.
+    pub fn prior(keys: Vec<String>, def: &SectionDef, text: &str) -> Self {
+        let number = def.number.as_deref().map(|n| format!("{n}. ")).unwrap_or_default();
+        let label = format!("Abschnitt {number}{}", short_heading(&def.heading));
+        InputFact { session_no: 0, label, text: cut(text.trim(), MAX_PRIOR_CHARS), bericht: Some(keys), own: false, prior: true }
+    }
+}
+
+/// The heading up to its first comma or parenthesis: the long PTV 3 headings are noise in a label.
+pub(crate) fn short_heading(heading: &str) -> &str {
+    let h = heading.trim();
+    h.find([',', '(']).map_or(h, |i| h[..i].trim_end())
+}
+
+/// `text` cut to at most `max` characters at a word boundary, with "…" when cut.
+fn cut(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(max).collect();
+    let head = head.rfind(char::is_whitespace).map_or(head.as_str(), |i| &head[..i]);
+    format!("{} …", head.trim_end())
+}
+
+/// The sections of the new Bericht (`targets`) that see the Vorbericht's section `prior_key`: the
+/// one with the same key, and those that name it in `prior:`.
+pub fn prior_targets<'a>(prior_key: &str, targets: impl IntoIterator<Item = &'a SectionDef>) -> Vec<String> {
+    targets.into_iter().filter(|d| d.key == prior_key || d.prior.iter().any(|k| k == prior_key)).map(|d| d.key.clone()).collect()
 }
 
 /// The facts (indices) a draft of section `key` sees: her answers for it, and the session facts
@@ -79,7 +118,7 @@ impl InputFact {
 pub fn section_facts(facts: &[InputFact], key: &str, tag_keys: &[String]) -> Vec<usize> {
     let tagged = tag_keys.iter().any(|k| k == key);
     let of_key = |f: &InputFact| f.bericht.as_ref().is_none_or(|b| b.iter().any(|k| k == key));
-    (0..facts.len()).filter(|&i| if facts[i].own { of_key(&facts[i]) } else { !tagged || of_key(&facts[i]) }).collect()
+    (0..facts.len()).filter(|&i| if facts[i].own || facts[i].prior { of_key(&facts[i]) } else { !tagged || of_key(&facts[i]) }).collect()
 }
 
 /// What to draft and from what.
@@ -178,8 +217,9 @@ pub(crate) fn kind_name(k: ApplicationKind) -> &'static str {
     }
 }
 
-/// The system prompt for a (resolved) Bericht template. Holds no patient data.
-pub fn system_prompt(template: &Template, frame: &Frame) -> String {
+/// The system prompt for a (resolved) Bericht template; `prior`: a Vorbericht goes along. Holds no
+/// patient data.
+pub fn system_prompt(template: &Template, frame: &Frame, prior: bool) -> String {
     let age = if frame.age_group == AgeGroup::Kjp { "Kinder und Jugendliche" } else { "Erwachsene" };
     let style = if template.rules.keyword_style_allowed {
         "Sachlich und knapp; Stichworte sind erlaubt, ganze Sätze sind besser lesbar."
@@ -187,6 +227,20 @@ pub fn system_prompt(template: &Template, frame: &Frame) -> String {
         "Sachlich und knapp, in ganzen Sätzen."
     };
     let length = template.rules.target_pages.map(|p| format!(" Der ganze Bericht umfasst etwa {p} Seiten, ein Abschnitt also meist nur wenige Sätze.")).unwrap_or_default();
+    let prior = match (prior, frame.kind) {
+        (false, _) => "",
+        (true, ApplicationKind::Fortfuehrung) => {
+            "Unter \"Vorbericht\" stehen Abschnitte ihres letzten unterschriebenen Berichts zu diesem Fall; sie werden \
+             zitiert wie Fakten. Beschreibe die Veränderung seit dem Vorbericht: was erreicht wurde, was sich an \
+             Symptomatik und Zielen geändert hat, was noch aussteht. Den Vorbericht nicht nacherzählen; was dort \
+             steht, nur aufgreifen, wenn Fakten der Sitzungen es fortschreiben. Bei Widerspruch gilt der neuere Fakt.\n\n"
+        }
+        (true, _) => {
+            "Unter \"Vorbericht\" stehen Abschnitte ihres letzten unterschriebenen Berichts zu diesem Fall; sie werden \
+             zitiert wie Fakten. Was weiter gilt, darf übernommen werden; was sich seither geändert hat, steht in den \
+             Fakten der Sitzungen. Bei Widerspruch gilt der neuere Fakt.\n\n"
+        }
+    };
     format!(
         "Du unterstützt eine Psychotherapeutin beim Entwurf eines Berichts an die Gutachterin oder den \
          Gutachter ({title}; {kind}, {method}, {age}).\n\
@@ -195,7 +249,7 @@ pub fn system_prompt(template: &Template, frame: &Frame) -> String {
          aus den Sitzungsnotizen, die die Therapeutin geprüft hat. Sitzung 1 ist die erste dokumentierte Sitzung. \
          Unter \"Angaben der Therapeutin\" stehen ihre eigenen Antworten auf Fragen zum Bericht, die Frage in \
          Klammern; sie gelten wie Fakten und werden genauso zitiert.\n\n\
-         Aufgabe: Schreibe den Entwurf für diesen einen Abschnitt. Die anderen Abschnitte des Berichts \
+         {prior}Aufgabe: Schreibe den Entwurf für diesen einen Abschnitt. Die anderen Abschnitte des Berichts \
          werden getrennt entworfen.\n\
          Vorgehen: Prüfe zuerst jeden Fakt an der Überschrift und den Hinweisen. Verwende nur Fakten, \
          die inhaltlich zu genau diesem Abschnitt gehören; alle anderen weglassen. Die meisten Fakten \
@@ -310,13 +364,16 @@ fn section_message(def: &SectionDef, instruction: Option<&str>, existing: Option
 pub(crate) fn fact_list(facts: &[InputFact], subset: &[usize], patient: &Patient) -> String {
     let mut list = String::new();
     let mut session = 0;
-    let mut own = false;
+    let (mut own, mut prior) = (false, false);
     for &i in subset {
         let f = &facts[i];
         if f.own && !own {
             own = true;
             list.push_str("Angaben der Therapeutin:\n");
-        } else if !f.own && f.session_no != session {
+        } else if f.prior && !prior {
+            prior = true;
+            list.push_str("Vorbericht:\n");
+        } else if !f.own && !f.prior && f.session_no != session {
             session = f.session_no;
             list.push_str(&format!("Sitzung {session}:\n"));
         }
@@ -376,14 +433,15 @@ pub fn prepare(template: &Template, frame: &Frame, req: &Request, patient: &Pati
     }
     let instruction = clean_instruction(req.instruction)?.map(|i| patient_as_pat(&i, patient));
 
-    let all: Vec<usize> = (0..facts.len()).collect();
+    // Vorbericht sections are capped one by one; the budget is for what grows with the sessions.
+    let all: Vec<usize> = (0..facts.len()).filter(|&i| !facts[i].prior).collect();
     let chars = fact_list(facts, &all, patient).chars().count();
     if chars > FACT_CHARS {
         return Err(Error::Invalid(format!("Zu viele Fakten für einen Entwurf ({chars} Zeichen, höchstens {FACT_CHARS})")));
     }
 
     let mut p = Pseudonymizer::new(dict);
-    let system_raw = system_prompt(template, frame);
+    let system_raw = system_prompt(template, frame, facts.iter().any(|f| f.prior));
     let prompt_hash = sha256(&format!("{PROMPT_VERSION}\n{system_raw}"));
     let system = p.pseudonymize(&system_raw)?;
     let (mut sections, mut skipped) = (Vec::new(), Vec::new());
@@ -415,7 +473,7 @@ pub fn prepare(template: &Template, frame: &Frame, req: &Request, patient: &Pati
         h.update([1]);
         h.update(k);
     }
-    let untagged = facts.iter().filter(|f| !f.own && f.bericht.is_none()).count();
+    let untagged = facts.iter().filter(|f| !f.own && !f.prior && f.bericht.is_none()).count();
     Ok(Prepared { system, sections, skipped, untagged, map: p.into_map(), prompt_hash, digest: hex::encode(h.finalize()) })
 }
 
@@ -596,7 +654,7 @@ mod tests {
     }
 
     fn fact(session_no: usize, label: &str, text: &str) -> InputFact {
-        InputFact { session_no, label: label.into(), text: text.into(), bericht: None, own: false }
+        InputFact { session_no, label: label.into(), text: text.into(), bericht: None, own: false, prior: false }
     }
 
     fn tagged(session_no: usize, label: &str, text: &str, tags: &[&str]) -> InputFact {
@@ -619,7 +677,8 @@ mod tests {
 
     #[test]
     fn prompt_has_frame_and_no_tokens() {
-        let p = system_prompt(&bericht(), &frame());
+        let p = system_prompt(&bericht(), &frame(), false);
+        assert!(!p.contains("Vorbericht"));
         assert!(p.contains("Erstantrag") && p.contains("Verhaltenstherapie") && p.contains("Erwachsene"));
         assert!(p.contains("etwa 2 Seiten"));
         assert!(Pseudonymizer::new(Dictionary::new()).pseudonymize(&p).is_ok());
@@ -801,6 +860,40 @@ mod tests {
         // With `facts` given, inline markers are only stripped.
         let out = parse(r#"[{"text": "A [F1]. B [F2].", "facts": [3]}]"#, &p.sections[0], &facts, &p.map).unwrap();
         assert_eq!(out.sentences, vec![DraftSentence { text: "A. B.".into(), facts: vec![2] }]);
+    }
+
+    #[test]
+    fn the_vorbericht_goes_to_its_sections_and_is_cited() {
+        let t = templates::builtin().unwrap().into_iter().find(|t| t.key == "ptv3-fortfuehrung").unwrap();
+        let t = t.resolve(&Context { method: Method::Vt, age_group: AgeGroup::Adult, kind: Some(ApplicationKind::Fortfuehrung) });
+        let old = bericht();
+        let def = |k: &str| old.sections.iter().find(|d| d.key == k).unwrap();
+        let targets = target_sections(&t);
+        assert_eq!(prior_targets("behandlungsplan_prognose", targets.iter().copied()), ["verlauf", "begruendung_planung"]);
+        assert_eq!(prior_targets("verlauf", targets.iter().copied()), ["verlauf"], "same key");
+        assert!(prior_targets("soziodemographie", targets.iter().copied()).is_empty());
+
+        let long = format!("Ziel: Anna fährt wieder allein Bus. {}", "Exposition geplant. ".repeat(400));
+        let facts = vec![
+            fact(1, "Verlauf", "Fährt wieder Bus"),
+            InputFact::prior(prior_targets("behandlungsplan_prognose", targets.iter().copied()), def("behandlungsplan_prognose"), &long),
+        ];
+        assert!(facts[1].text.ends_with(" …") && facts[1].text.chars().count() <= MAX_PRIOR_CHARS + 2);
+        let frame = Frame { method: Method::Vt, age_group: AgeGroup::Adult, kind: ApplicationKind::Fortfuehrung };
+        let k = keys(&["verlauf", "begruendung_planung"]);
+        let req = Request { keys: &k, facts: &facts, tag_keys: &[], existing: &[], instruction: None };
+        let p = prepare(&t, &frame, &req, &patient(), Dictionary::from_patient(&patient())).unwrap();
+        assert!(p.system.get().contains("Veränderung seit dem Vorbericht"));
+        assert_eq!(p.untagged, 1, "the Vorbericht is no untagged fact");
+        assert_eq!(p.sections[0].facts, vec![0, 1]);
+        let m = p.sections[0].user.get();
+        assert!(m.contains("Sitzung 1:\n[F1] (Verlauf) Fährt wieder Bus\nVorbericht:\n[F2] (Abschnitt 6. Behandlungsplan und Prognose) Ziel: Pat. fährt"), "{m}");
+        assert!(!m.contains("Anna"));
+        let out = parse(r#"[{"text": "Das Ziel aus dem Vorbericht ist erreicht.", "facts": [1, 2]}]"#, &p.sections[0], &facts, &p.map).unwrap();
+        assert_eq!(out.sentences[0].facts, vec![0, 1], "its text grounds the goal");
+        // Without a Vorbericht the prompt doesn't mention one; an Umwandlung may carry text over.
+        assert!(!system_prompt(&t, &frame, false).contains("Vorbericht"));
+        assert!(system_prompt(&bericht(), &Frame { kind: ApplicationKind::Umwandlung, ..frame }, true).contains("Was weiter gilt"));
     }
 
     #[test]

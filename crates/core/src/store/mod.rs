@@ -22,6 +22,7 @@ mod autopilot;
 mod calendar;
 mod contingent;
 mod focus;
+mod review;
 mod speakers;
 mod spend;
 mod summary;
@@ -31,6 +32,7 @@ pub use answers::{CoveredAsk, GapCheck, GapCheckMeta};
 pub use autopilot::{AutopilotRun, AutopilotStep};
 pub use calendar::normalize_ts;
 pub use focus::SentenceChoice;
+pub use review::{ReportReview, ReviewHint, ReviewMeta};
 pub use spend::{day_before, DaySpend, LlmSpend, ModelSpend, SpendReport, SpendTask, TaskSpend};
 pub use summary::{SessionSummary, SummaryInput, SummaryMeta, SummaryPointView};
 pub use timeline::{TimelineGroup, TimelineItem};
@@ -64,6 +66,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V20__lotse.sql"),
     include_str!("migrations/V21__answers.sql"),
     include_str!("migrations/V22__focus.sql"),
+    include_str!("migrations/V23__review.sql"),
 ];
 
 /// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).
@@ -1820,6 +1823,9 @@ impl Store {
         let mut sentences = self.conn.prepare("SELECT id, text, decision, edited FROM draft_sentence WHERE draft_id = ?1 ORDER BY seq")?;
         let mut cites = self.conn.prepare("SELECT fact_id FROM report_citation WHERE sentence_id = ?1")?;
         let mut answer_cites = self.conn.prepare("SELECT answer_id FROM answer_citation WHERE sentence_id = ?1")?;
+        let mut prior_cites = self.conn.prepare("SELECT report_id, section_key FROM prior_citation WHERE sentence_id = ?1 ORDER BY rowid")?;
+        // Vorberichte are signed: read each once.
+        let mut priors: Vec<Report> = Vec::new();
         for d in &mut drafts {
             let rows: Vec<(String, String, Option<String>, bool)> = sentences
                 .query_map([&d.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
@@ -1830,14 +1836,25 @@ impl Store {
                 let sources = facts.iter().filter(|f| ids.contains(&f.fact_id)).cloned().collect();
                 let ids: Vec<String> = answer_cites.query_map([&id], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
                 let answers = answers.iter().filter(|a| ids.contains(&a.id)).cloned().collect();
-                d.sentences.push(DraftSentenceView { id, text, sources, answers, decision, edited });
+                let refs: Vec<(String, String)> = prior_cites.query_map([&id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<std::result::Result<_, _>>()?;
+                let mut prior = Vec::new();
+                for (prior_id, key) in refs {
+                    if !priors.iter().any(|p| p.id == prior_id) {
+                        priors.push(self.report(&prior_id)?);
+                    }
+                    let p = priors.iter().find(|p| p.id == prior_id).expect("loaded above");
+                    let body = p.sections.iter().find(|s| s.key == key).map(|s| s.body.as_str()).unwrap_or("");
+                    prior.push(PriorSource { report_id: prior_id, section_key: key, signed_at: p.signed_at.clone(), excerpt: excerpt(&crate::pii::plain_text(body)) });
+                }
+                d.sentences.push(DraftSentenceView { id, text, sources, answers, prior, decision, edited });
             }
         }
         Ok(drafts)
     }
 
     /// Stores one run's drafts, one per section. An open proposal for the same section is replaced.
-    /// `facts` and then `answers` are what the run saw: `DraftSentence::facts` index into them.
+    /// `facts`, then `answers`, then the Vorbericht sections `priors` are what the run saw:
+    /// `DraftSentence::facts` index into them in that order.
     pub fn save_drafts(
         &self,
         report_id: &str,
@@ -1845,6 +1862,7 @@ impl Store {
         drafts: &[crate::draft::SectionResult],
         facts: &[EpisodeFact],
         answers: &[ReportAnswer],
+        priors: &[PriorRef],
     ) -> Result<Vec<SectionDraft>> {
         let report = self.editable_for_drafts(report_id, Some(meta.source))?;
         let ts = now();
@@ -1880,9 +1898,14 @@ impl Store {
                 for &i in &sentence.facts {
                     if let Some(f) = facts.get(i) {
                         tx.execute("INSERT OR IGNORE INTO report_citation (sentence_id, fact_id) VALUES (?1, ?2)", params![sid, f.fact_id])?;
-                    } else {
-                        let a = answers.get(i - facts.len()).ok_or_else(|| Error::Invalid(format!("Beleg auf unbekannten Fakt {i}")))?;
+                    } else if let Some(a) = answers.get(i - facts.len()) {
                         tx.execute("INSERT OR IGNORE INTO answer_citation (sentence_id, answer_id) VALUES (?1, ?2)", params![sid, a.id])?;
+                    } else {
+                        let p = priors.get(i - facts.len() - answers.len()).ok_or_else(|| Error::Invalid(format!("Beleg auf unbekannten Fakt {i}")))?;
+                        tx.execute(
+                            "INSERT OR IGNORE INTO prior_citation (sentence_id, report_id, section_key) VALUES (?1, ?2, ?3)",
+                            params![sid, p.report_id, p.section_key],
+                        )?;
                     }
                 }
             }
@@ -1895,7 +1918,7 @@ impl Store {
                 "provider": meta.provider, "model": meta.model,
                 "prompt_version": prompt_version, "prompt_hash": meta.prompt_hash, "source": meta.source.as_str(),
                 "sections": drafts.iter().map(|d| d.key.as_str()).collect::<Vec<_>>(),
-                "facts": facts.len(), "answers": answers.len(), "sentences": sentences, "dropped": dropped, "instructed": meta.instructed,
+                "facts": facts.len(), "answers": answers.len(), "prior": priors.len(), "sentences": sentences, "dropped": dropped, "instructed": meta.instructed,
                 "sessions": meta.session_ids.as_ref().map(Vec::len),
                 "with_existing": drafts.iter().filter(|d| d.with_existing).count(),
             }),
@@ -2486,6 +2509,15 @@ fn dictation_html(segments: &[SourceSegment]) -> String {
         .filter(|t| !t.is_empty())
         .map(|t| format!("<p>{}</p>", escape_html(t)))
         .collect()
+}
+
+/// The start of a Vorbericht section, for a tooltip.
+fn excerpt(text: &str) -> String {
+    const MAX: usize = 300;
+    if text.chars().count() <= MAX {
+        return text.to_string();
+    }
+    format!("{} …", text.chars().take(MAX).collect::<String>().trim_end())
 }
 
 fn escape_html(t: &str) -> String {
@@ -3371,12 +3403,12 @@ mod tests {
             parsed: Parsed { sentences: vec![DraftSentence { text: "Pat. nimmt Sertralin 50 mg.".into(), facts: vec![0, 1] }], dropped: 0 },
             with_existing: false,
         }];
-        let drafts = store.save_drafts(&rid, &meta, &run, &facts, &answers).unwrap();
+        let drafts = store.save_drafts(&rid, &meta, &run, &facts, &answers, &[]).unwrap();
         let s = &drafts[0].sentences[0];
         assert_eq!((s.sources.len(), s.answers.len()), (1, 1));
         assert_eq!(s.answers[0].question, q);
         let bad = vec![SectionResult { key: "somatik".into(), parsed: Parsed { sentences: vec![DraftSentence { text: "x".into(), facts: vec![3] }], dropped: 0 }, with_existing: false }];
-        assert!(store.save_drafts(&rid, &meta, &bad, &facts, &answers).is_err(), "unknown index");
+        assert!(store.save_drafts(&rid, &meta, &bad, &facts, &answers, &[]).is_err(), "unknown index");
 
         let covered = vec![CoveredAsk { section: "symptomatik_befund".into(), ask: "befund".into(), facts: vec![facts[0].fact_id.clone()] }];
         let check = GapCheckMeta { provider: "local", model: "m", prompt_hash: "h", facts_digest: "d", asked: 9, dropped: 0 };
@@ -3435,7 +3467,7 @@ mod tests {
         let choice = |id: &str, accept: bool, text: Option<&str>| SentenceChoice { sentence_id: id.into(), accept, text: text.map(Into::into) };
         let body = |r: &Report, k: &str| r.sections.iter().find(|s| s.key == k).unwrap().body.clone();
 
-        let d = store.save_drafts(&rid, &meta, &run("symptomatik_befund", vec![sentence("A."), sentence("B."), sentence("C."), sentence("D.")]), &facts, &[]).unwrap();
+        let d = store.save_drafts(&rid, &meta, &run("symptomatik_befund", vec![sentence("A."), sentence("B."), sentence("C."), sentence("D.")]), &facts, &[], &[]).unwrap();
         let d = d.into_iter().find(|d| d.section_key == "symptomatik_befund").unwrap();
         let ids: Vec<String> = d.sentences.iter().map(|s| s.id.clone()).collect();
         let r = store.decide_sentences(&rid, &d.id, &[choice(&ids[0], true, None)]).unwrap();
@@ -3457,7 +3489,7 @@ mod tests {
         assert_eq!(body(&r, "symptomatik_befund"), "<p>A. C in ihren Worten.</p><p>D.</p>");
 
         // The last decision closes the draft: rejected when nothing was taken over.
-        let d = store.save_drafts(&rid, &meta, &run("somatik", vec![sentence("X.")]), &facts, &[]).unwrap();
+        let d = store.save_drafts(&rid, &meta, &run("somatik", vec![sentence("X.")]), &facts, &[], &[]).unwrap();
         let d = d.into_iter().find(|d| d.section_key == "somatik").unwrap();
         store.decide_sentences(&rid, &d.id, &[choice(&d.sentences[0].id, false, None)]).unwrap();
         assert!(store.section_drafts(&rid).unwrap().iter().all(|x| x.id != d.id));
@@ -3471,10 +3503,10 @@ mod tests {
             }
         }
         assert_eq!(status(&store), ReportStatus::Draft, "Somatik is still empty");
-        store.save_drafts(&rid, &meta, &run("somatik", vec![]), &facts, &[]).unwrap();
+        store.save_drafts(&rid, &meta, &run("somatik", vec![]), &facts, &[], &[]).unwrap();
         store.set_section_not_relevant(&rid, "somatik", true).unwrap();
         assert_eq!(status(&store), ReportStatus::InReview, "its waiting proposal doesn't count");
-        let d = store.save_drafts(&rid, &meta, &run("symptomatik_befund", vec![sentence("Neu.")]), &facts, &[]).unwrap();
+        let d = store.save_drafts(&rid, &meta, &run("symptomatik_befund", vec![sentence("Neu.")]), &facts, &[], &[]).unwrap();
         assert_eq!(status(&store), ReportStatus::Draft, "a new proposal waits");
         let d = d.into_iter().find(|x| x.status == DraftStatus::Proposed && x.section_key == "symptomatik_befund").unwrap();
         store.decide_sentences(&rid, &d.id, &[choice(&d.sentences[0].id, true, None)]).unwrap();
@@ -3554,7 +3586,7 @@ mod tests {
 
         let app = store.create_application(&ep.id, ApplicationKind::Erstantrag).unwrap();
         let report_id = app.report_id.clone().unwrap();
-        assert!(store.save_drafts(&first.id, &meta(), &[], &facts, &[]).is_err(), "only for Berichte");
+        assert!(store.save_drafts(&first.id, &meta(), &[], &facts, &[], &[]).is_err(), "only for Berichte");
         let sentence = |t: &str, f: Vec<usize>| DraftSentence { text: t.into(), facts: f };
         let run = |sections: Vec<(&str, Vec<DraftSentence>)>| -> Vec<SectionResult> {
             sections
@@ -3570,15 +3602,15 @@ mod tests {
             .save_drafts(&report_id, &meta(), &run(vec![
                 ("symptomatik_befund", vec![sentence("Pat. wirkt gedrückt.", vec![0]), sentence("Panik im Bus, Suizidgedanken verneint.", vec![1, 2])]),
                 ("somatik", vec![]),
-            ]), &facts, &[])
+            ]), &facts, &[], &[])
             .unwrap();
         assert_eq!(drafts.len(), 2);
         assert_eq!((drafts[0].with_existing, drafts[1].with_existing), (false, true));
         assert_eq!(drafts[0].session_ids, None);
         assert_eq!(drafts[0].sentences[1].sources.iter().map(|f| f.session_no).collect::<Vec<_>>(), [2, 2]);
         assert_eq!(drafts[0].sentences[0].sources[0].note_id, first.id);
-        assert!(store.save_drafts(&report_id, &meta(), &run(vec![("diagnose_nope", vec![])]), &facts, &[]).is_err());
-        assert!(store.save_drafts(&report_id, &meta(), &run(vec![("somatik", vec![sentence("x", vec![9])])]), &facts, &[]).is_err(), "unknown fact");
+        assert!(store.save_drafts(&report_id, &meta(), &run(vec![("diagnose_nope", vec![])]), &facts, &[], &[]).is_err());
+        assert!(store.save_drafts(&report_id, &meta(), &run(vec![("somatik", vec![sentence("x", vec![9])])]), &facts, &[], &[]).is_err(), "unknown fact");
         assert_eq!(store.section_drafts(&report_id).unwrap().len(), 2, "a failed save changes nothing");
         assert!(store.apply_draft(&report_id, &drafts[1].id, ApplyMode::Replace).is_err(), "empty draft");
 
@@ -3599,13 +3631,13 @@ mod tests {
         // The therapist edits, then appends a second draft: mixed. A third one replaces everything.
         store.save_section(&report_id, "symptomatik_befund", "<p>Eigener Satz.</p>").unwrap();
         let chosen = DraftMeta { session_ids: Some(vec![facts[0].session_id.clone()]), ..meta() };
-        let d2 = store.save_drafts(&report_id, &chosen, &run(vec![("symptomatik_befund", vec![sentence("Zweiter <Entwurf>.", vec![0])])]), &facts, &[]).unwrap();
+        let d2 = store.save_drafts(&report_id, &chosen, &run(vec![("symptomatik_befund", vec![sentence("Zweiter <Entwurf>.", vec![0])])]), &facts, &[], &[]).unwrap();
         let d2 = d2.iter().find(|d| d.status == DraftStatus::Proposed && d.section_key == "symptomatik_befund").unwrap();
         assert_eq!(d2.session_ids, Some(vec![facts[0].session_id.clone()]), "the chosen sessions are kept with the draft");
         let r = store.apply_draft(&report_id, &d2.id, ApplyMode::Append).unwrap();
         assert_eq!(section(&r, "symptomatik_befund").body, "<p>Eigener Satz.</p><p>Zweiter &lt;Entwurf&gt;.</p>");
         assert_eq!(section(&r, "symptomatik_befund").origin, SectionOrigin::Mixed);
-        let d3 = store.save_drafts(&report_id, &meta(), &run(vec![("symptomatik_befund", vec![sentence("Neu.", vec![2])])]), &facts, &[]).unwrap();
+        let d3 = store.save_drafts(&report_id, &meta(), &run(vec![("symptomatik_befund", vec![sentence("Neu.", vec![2])])]), &facts, &[], &[]).unwrap();
         let d3 = d3.iter().find(|d| d.status == DraftStatus::Proposed && d.section_key == "symptomatik_befund").unwrap().id.clone();
         let r = store.apply_draft(&report_id, &d3, ApplyMode::Replace).unwrap();
         assert_eq!((section(&r, "symptomatik_befund").body.as_str(), section(&r, "symptomatik_befund").origin), ("<p>Neu.</p>", SectionOrigin::Ai));
@@ -3625,7 +3657,7 @@ mod tests {
         assert_eq!(audit::verify(store.conn()).unwrap(), None);
 
         store.sign_report(&report_id, "Dr. Test").unwrap();
-        assert!(store.save_drafts(&report_id, &meta(), &[], &facts, &[]).is_err(), "signed Berichte take no drafts");
+        assert!(store.save_drafts(&report_id, &meta(), &[], &facts, &[], &[]).is_err(), "signed Berichte take no drafts");
 
         store.erase_patient(&p.id).unwrap();
         for table in ["section_draft", "draft_sentence", "report_citation"] {
@@ -3659,8 +3691,8 @@ mod tests {
             parsed: Parsed { sentences: vec![DraftSentence { text: "Pat. schläft schlecht.".into(), facts: vec![] }], dropped: 0 },
             with_existing: false,
         }];
-        assert!(store.save_drafts(&note.id, &meta(DraftSource::Facts), &run, &[], &[]).is_err(), "fact drafts are for Berichte only");
-        let drafts = store.save_drafts(&note.id, &meta(DraftSource::Dictation), &run, &[], &[]).unwrap();
+        assert!(store.save_drafts(&note.id, &meta(DraftSource::Facts), &run, &[], &[], &[]).is_err(), "fact drafts are for Berichte only");
+        let drafts = store.save_drafts(&note.id, &meta(DraftSource::Dictation), &run, &[], &[], &[]).unwrap();
         assert_eq!((drafts.len(), drafts[0].source, drafts[0].sentences[0].sources.len()), (1, DraftSource::Dictation, 0));
         let r = store.apply_draft(&note.id, &drafts[0].id, ApplyMode::Replace).unwrap();
         assert_eq!(r.sections[0].body, "<p>Pat. schläft schlecht.</p>");

@@ -2,9 +2,10 @@ import { Link } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { AlertTriangle, ArrowLeftRight, FileText, LineChart, RefreshCw } from 'lucide-react'
+import { AlertTriangle, ArrowLeftRight, FileText, History, LineChart, RefreshCw } from 'lucide-react'
 import type { ApplicationKind } from '@/bindings/ApplicationKind'
 import type { SectionDraft } from '@/bindings/SectionDraft'
+import { formatDate } from '@/components/bits'
 import { PatientFormDialog } from '@/components/patient-form'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -136,6 +137,20 @@ export function StartStep({
                 ? t('lotse.sinceLast', { sessions, facts: recent.length })
                 : t('lotse.allFacts', { sessions, facts: recent.length })}
           </p>
+          {sources?.prior && (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="lotse-prior">
+              <History className="size-4 shrink-0" />
+              <span>
+                {t('lotse.prior', {
+                  kind: sources.prior.kind ? t(`enums.kind.${sources.prior.kind}`) : t('lotse.priorBericht'),
+                  date: formatDate(sources.prior.signed_at),
+                })}{' '}
+                <Link to="/reports/$reportId" params={{ reportId: sources.prior.report_id }} search={{ doc: true }} className="underline-offset-2 hover:underline">
+                  {t('lotse.priorOpen')}
+                </Link>
+              </span>
+            </p>
+          )}
         </CardContent>
       </Card>
 

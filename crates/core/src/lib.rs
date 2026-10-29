@@ -27,6 +27,7 @@ pub mod photo;
 pub mod pii;
 pub mod pseudo;
 pub mod render;
+pub mod review;
 pub mod store;
 pub mod stt;
 pub mod summary;

@@ -22,6 +22,9 @@ sections:
       Darstellung des bisherigen Behandlungsverlaufs seit dem letzten Bericht, der Veränderung der Symptomatik
       und des Behandlungsergebnisses in Bezug auf die Erreichung bzw. Nichterreichung der Therapieziele
     field: prose
+    # Bericht-Lotse (slice 40): besides its own Verlauf, a draft sees the goals and the Umwandlung
+    # part of the Vorbericht, to describe the change since then.
+    prior: [behandlungsplan_prognose, umwandlung]
     hints:
       - text: Auch bezüglich der begleitenden Behandlung der Bezugspersonen
         when: { age: [kjp] }
@@ -54,6 +57,7 @@ sections:
       Behandlungsziele, geänderte Behandlungsmethoden und -techniken, Prognose, Planung des Therapieabschlusses,
       ggf. weiterführende Maßnahmen nach Ende der Therapie
     field: prose
+    prior: [behandlungsplan_prognose]
     hints:
       - text: Begründung der Notwendigkeit der Fortführung der Behandlung
       - text: Weitere Therapieplanung, geänderte/erweiterte Behandlungsziele

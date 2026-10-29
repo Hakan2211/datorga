@@ -27,7 +27,11 @@ use thera_core::models::ModelInfo;
 use thera_core::pii::{self, CheckItem};
 use thera_core::pseudo::EntityKind;
 use thera_core::render;
-use thera_core::store::{day_before, AutopilotRun, CoveredAsk, DaySpend, GapCheckMeta, LlmSpend, SentenceChoice, SessionSummary, SpendReport, Store, TimelineGroup};
+use thera_core::review;
+use thera_core::store::{
+    day_before, AutopilotRun, CoveredAsk, DaySpend, GapCheckMeta, LlmSpend, ReportReview, ReviewMeta, SentenceChoice, SessionSummary, SpendReport, Store,
+    TimelineGroup,
+};
 use thera_core::summary;
 use thera_core::stt::{self, CloudStt, CloudSttModel, SttConfig, SttEngine, WhisperCli};
 use thera_core::templates::{Context, Template};
@@ -2492,6 +2496,9 @@ struct DraftChoice {
     /// Offer every fact to every section, ignoring the Bericht tags.
     #[serde(default)]
     all_facts: bool,
+    /// Leave the Vorbericht out.
+    #[serde(default)]
+    without_prior: bool,
 }
 
 /// Session facts as draft input, labelled with their Sitzungsnotiz section.
@@ -2505,6 +2512,7 @@ fn input_facts(s: &Store, facts: &[EpisodeFact]) -> thera_core::Result<Vec<draft
             text: f.text.clone(),
             bericht: f.bericht.clone(),
             own: false,
+            prior: false,
         })
         .collect())
 }
@@ -2544,13 +2552,33 @@ fn previous_application_at(s: &Store, report: &Report) -> thera_core::Result<Opt
         .map(|a| a.created_at.clone()))
 }
 
+/// The Vorbericht's prose sections with text that the sections of `view` draw on, as draft input.
+fn prior_input(s: &Store, view: &ReportView) -> thera_core::Result<(Vec<PriorRef>, Vec<draft::InputFact>)> {
+    let (Some(prior), Some(episode)) = (s.prior_report(&view.report.id)?, &view.episode) else { return Ok((vec![], vec![])) };
+    let kind = s.list_applications(&episode.id)?.into_iter().find(|a| Some(&a.id) == prior.application_id.as_ref()).map(|a| a.kind);
+    let old = s.template(&prior.template_key)?.resolve(&Context { method: episode.method, age_group: episode.age_group, kind });
+    let targets = draft::target_sections(&view.template);
+    let (mut refs, mut input) = (Vec::new(), Vec::new());
+    for def in old.sections.iter().filter(|d| d.field == thera_core::templates::FieldKind::Prose) {
+        let text = prior.sections.iter().find(|sec| sec.key == def.key && !sec.not_relevant).map(|sec| draft::plain_text(&sec.body)).unwrap_or_default();
+        let keys = draft::prior_targets(&def.key, targets.iter().copied());
+        if text.trim().is_empty() || keys.is_empty() {
+            continue;
+        }
+        refs.push(PriorRef { report_id: prior.id.clone(), section_key: def.key.clone() });
+        input.push(draft::InputFact::prior(keys, def, &text));
+    }
+    Ok((refs, input))
+}
+
 /// Exactly what drafting the chosen sections of this Bericht would send, from the episode's
-/// applied facts of the chosen sessions and her answers to the Lotse questions.
+/// applied facts of the chosen sessions, her answers to the Lotse questions and the Vorbericht.
+#[allow(clippy::type_complexity)]
 fn prepare_draft(
     s: &Store,
     report_id: &str,
     choice: &DraftChoice,
-) -> thera_core::Result<(draft::Prepared, Vec<EpisodeFact>, Vec<ReportAnswer>, Vec<draft::InputFact>)> {
+) -> thera_core::Result<(draft::Prepared, Vec<EpisodeFact>, Vec<ReportAnswer>, Vec<PriorRef>, Vec<draft::InputFact>)> {
     let view = report_view(s, report_id)?;
     let (Some(episode), Some(application)) = (&view.episode, &view.application) else {
         return Err(thera_core::Error::Invalid("Entwürfe gibt es nur für Berichte zu einem Antrag".into()));
@@ -2562,10 +2590,12 @@ fn prepare_draft(
         }
         facts.retain(|f| ids.contains(&f.session_id));
     }
-    // Her answers come after the facts: citation indices past the facts point at them.
+    // Her answers come after the facts, the Vorbericht last: citation indices count in that order.
     let answers = current_answers(s, &view)?;
     let mut input = input_facts(s, &facts)?;
     input.extend(answers.iter().map(|a| draft::InputFact::answer(&a.section_key, &a.question, &a.text)));
+    let (priors, prior_facts) = if choice.without_prior { (vec![], vec![]) } else { prior_input(s, &view)? };
+    input.extend(prior_facts);
     let tag_keys = draft_tag_keys(s, &view, choice.all_facts)?;
     let existing: Vec<(String, String)> = if choice.with_existing {
         view.report.sections.iter().map(|sec| (sec.key.clone(), draft::plain_text(&sec.body))).collect()
@@ -2584,7 +2614,7 @@ fn prepare_draft(
         instruction: choice.instruction.as_deref(),
     };
     let prepared = draft::prepare(&view.template, &frame, &req, &view.patient, dict)?;
-    Ok((prepared, facts, answers, input))
+    Ok((prepared, facts, answers, priors, input))
 }
 
 #[derive(Serialize)]
@@ -2618,16 +2648,41 @@ struct DraftSources {
     since: Option<String>,
     /// Her answers to the Lotse questions, which drafts use too.
     answers: usize,
+    /// The Vorbericht drafts see, with the sections they draw on.
+    prior: Option<PriorInfo>,
 }
 
-/// The applied Sitzungsnotiz facts (and answers) a draft of this Bericht could draw on.
+#[derive(Serialize)]
+struct PriorInfo {
+    report_id: String,
+    kind: Option<ApplicationKind>,
+    seq: Option<i64>,
+    signed_at: Option<String>,
+    /// Its sections with text that a draft of this Bericht sees.
+    sections: usize,
+}
+
+/// The applied Sitzungsnotiz facts (and answers, and the Vorbericht) a draft of this Bericht could draw on.
 #[tauri::command]
 fn draft_sources(state: State<'_, AppState>, report_id: String) -> CmdResult<DraftSources> {
     state.with(|s| {
         let view = report_view(s, &report_id)?;
-        let Some(ep) = &view.report.episode_id else { return Ok(DraftSources { facts: vec![], since: None, answers: 0 }) };
+        let Some(ep) = &view.report.episode_id else { return Ok(DraftSources { facts: vec![], since: None, answers: 0, prior: None }) };
         let since = previous_application_at(s, &view.report)?;
-        Ok(DraftSources { facts: s.episode_facts(ep)?, since, answers: current_answers(s, &view)?.len() })
+        let prior = match s.prior_report(&report_id)? {
+            Some(p) => {
+                let app = s.list_applications(ep)?.into_iter().find(|a| Some(&a.id) == p.application_id.as_ref());
+                Some(PriorInfo {
+                    report_id: p.id,
+                    kind: app.as_ref().map(|a| a.kind),
+                    seq: app.map(|a| a.seq),
+                    signed_at: p.signed_at,
+                    sections: prior_input(s, &view)?.0.len(),
+                })
+            }
+            None => None,
+        };
+        Ok(DraftSources { facts: s.episode_facts(ep)?, since, answers: current_answers(s, &view)?.len(), prior })
     })
 }
 
@@ -2835,6 +2890,121 @@ async fn gaps_run(app: AppHandle, report_id: String, digest: String, request_id:
     .await
 }
 
+// ---------- Bericht-Lotse "Prüfen" (slice 40) ----------
+
+/// The Bericht text the Gutachter-Check reads: prose sections with text, not "nicht relevant".
+fn review_sections(view: &ReportView) -> Vec<(&thera_core::templates::SectionDef, String)> {
+    review::sections(
+        &view.template,
+        |k| not_relevant(view, k),
+        |k| view.report.sections.iter().find(|sec| sec.key == k).map(|sec| draft::plain_text(&sec.body)).unwrap_or_default(),
+    )
+}
+
+#[derive(Serialize)]
+struct ReviewView {
+    review: Option<ReportReview>,
+    /// She changed the text since the check.
+    stale: bool,
+    /// Sections with text a check would read now.
+    sections: usize,
+}
+
+fn review_view(s: &Store, report_id: &str) -> thera_core::Result<ReviewView> {
+    let view = report_view(s, report_id)?;
+    let sections = review_sections(&view);
+    let review = s.report_review(report_id)?;
+    let digest = review::text_digest(&sections);
+    Ok(ReviewView { stale: review.as_ref().is_some_and(|r| r.text_digest != digest), review, sections: sections.len() })
+}
+
+#[tauri::command]
+fn report_review_get(state: State<'_, AppState>, report_id: String) -> CmdResult<ReviewView> {
+    state.with(|s| review_view(s, &report_id))
+}
+
+/// "Ignorieren" on a hint of the Gutachter-Check, or back.
+#[tauri::command]
+fn report_review_ignore(state: State<'_, AppState>, report_id: String, hint_id: String, ignored: bool) -> CmdResult<ReviewView> {
+    state.with(|s| {
+        s.set_review_hint_ignored(&report_id, &hint_id, ignored)?;
+        review_view(s, &report_id)
+    })
+}
+
+/// Exactly what the Gutachter-Check would send: the Bericht's text with the PTV 3 hints.
+fn prepare_review(s: &Store, report_id: &str) -> thera_core::Result<(review::Prepared, String, usize)> {
+    let view = report_view(s, report_id)?;
+    let (Some(episode), Some(application)) = (&view.episode, &view.application) else {
+        return Err(thera_core::Error::Invalid("Den Gutachter-Check gibt es nur für Berichte zu einem Antrag".into()));
+    };
+    let sections = review_sections(&view);
+    let frame = draft::Frame { method: episode.method, age_group: episode.age_group, kind: application.kind };
+    let dict = s.pseudo_dictionary(&view.patient.id)?;
+    let prepared = review::prepare(&view.template, &frame, &sections, &view.patient, dict)?;
+    Ok((prepared, review::text_digest(&sections), sections.len()))
+}
+
+#[tauri::command]
+fn review_preview(state: State<'_, AppState>, report_id: String) -> CmdResult<ExtractPreview> {
+    let (prepared, ..) = state.with(|s| prepare_review(s, &report_id))?;
+    let report = state.with(|s| s.report(&report_id))?;
+    let terms = state.with(|s| s.pseudo_terms(&report.patient_id))?;
+    let config = state.with(|s| s.llm_config())?;
+    let provider = config.active.map(llm::provider);
+    let model = config.active.and_then(|id| config.settings(id).model).filter(|m| !m.is_empty());
+    Ok(ExtractPreview { preview: prepared.preview(), terms, provider, model })
+}
+
+/// Sends the previewed check (one request) and replaces the Bericht's check with its hints. The
+/// text is never changed. Cancelled: the earlier check stays.
+#[tauri::command]
+async fn review_run(app: AppHandle, report_id: String, digest: String, request_id: String) -> CmdResult<ReviewView> {
+    let events = app.clone();
+    blocking(app, move |state| {
+        let run = LlmRun::start(state, &request_id)?;
+        let (provider, model) = active_llm(state)?;
+        let (prepared, text_digest, sections) = state.with(|s| prepare_review(s, &report_id))?;
+        if prepared.digest != digest {
+            return Err(CmdError::Other("Der Text hat sich seit der Vorschau geändert. Bitte die Vorschau erneut prüfen.".into()));
+        }
+        let progress = |stage, done| {
+            let _ = events.emit("review-progress", ExtractProgress { report_id: report_id.clone(), stage, done, total: 1 });
+        };
+        let unchanged = |state: &AppState| -> CmdResult<ReviewView> { Ok(state.with(|s| review_view(s, &report_id))?) };
+        if provider == ProviderId::Local {
+            progress("loading", 0);
+        }
+        let ep = match llm_endpoint(state, provider, &run.cancel) {
+            Err(_) if run.cancelled() => return unchanged(state),
+            r => r?.0,
+        };
+        progress("running", 0);
+        let messages = [(llm::Role::System, &prepared.system), (llm::Role::User, &prepared.user)];
+        let Some(completion) = stream_call(state, &events, &run, "llm.review", (provider, &model), &ep, &messages, &review::chat_options())? else {
+            return unchanged(state);
+        };
+        let (hints, dropped) = review::parse(&completion.text, &prepared)?;
+        progress("running", 1);
+        let provider = provider_str(provider);
+        let meta = ReviewMeta {
+            provider: &provider,
+            model: &completion.model,
+            prompt_hash: &prepared.prompt_hash,
+            text_digest: &text_digest,
+            sections,
+            dropped,
+        };
+        state
+            .with(|s| {
+                s.save_review(&report_id, &meta, &hints)?;
+                review_view(s, &report_id)
+            })
+            .map_err(Into::into)
+    })
+    .await
+}
+
 #[tauri::command]
 fn report_drafts(state: State<'_, AppState>, report_id: String) -> CmdResult<Vec<SectionDraft>> {
     state.with(|s| s.section_drafts(&report_id))
@@ -2860,7 +3030,7 @@ async fn draft_run(app: AppHandle, report_id: String, choice: DraftChoice, diges
     blocking(app, move |state| {
         let run = LlmRun::start(state, &request_id)?;
         let (provider, model) = active_llm(state)?;
-        let (prepared, facts, answers, input) = state.with(|s| prepare_draft(s, &report_id, &choice))?;
+        let (prepared, facts, answers, priors, input) = state.with(|s| prepare_draft(s, &report_id, &choice))?;
         if prepared.digest != digest {
             return Err(CmdError::Other("Der Text hat sich seit der Vorschau geändert. Bitte die Vorschau erneut prüfen.".into()));
         }
@@ -2917,7 +3087,7 @@ async fn draft_run(app: AppHandle, report_id: String, choice: DraftChoice, diges
             session_ids: choice.session_ids.clone(),
             source: DraftSource::Facts,
         };
-        let drafts = state.with(|s| s.save_drafts(&report_id, &meta, &drafts, &facts, &answers))?;
+        let drafts = state.with(|s| s.save_drafts(&report_id, &meta, &drafts, &facts, &answers, &priors))?;
         Ok(DraftResult { drafts, sentences, dropped, done, total, cancelled: done < total })
     })
     .await
@@ -3386,7 +3556,7 @@ async fn workshop_run(app: AppHandle, report_id: String, choice: WorkshopChoice,
             session_ids: None,
             source: DraftSource::Dictation,
         };
-        let drafts = state.with(|s| s.save_drafts(&report_id, &meta, &results, &[], &[]))?;
+        let drafts = state.with(|s| s.save_drafts(&report_id, &meta, &results, &[], &[], &[]))?;
         Ok(DraftResult { drafts, sentences, dropped, done: 1, total: 1, cancelled: false })
     })
     .await
@@ -4061,6 +4231,10 @@ pub fn run() {
             report_draft_apply,
             report_draft_decide,
             fact_sections_set,
+            report_review_get,
+            report_review_ignore,
+            review_preview,
+            review_run,
             local_overview,
             local_model_download,
             local_model_import,

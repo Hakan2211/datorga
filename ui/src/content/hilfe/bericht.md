@@ -2,15 +2,22 @@
 title: Bericht schreiben
 summary: Vom Antrag zum unterschriebenen PTV-3-Bericht
 order: 5
-keywords: bericht, gutachter, ptv 3, fragen, lotse, medikation, ihre angabe, erstantrag, umwandlung, fortführung, entwurf, abschnitte, fokus, tastatur, fakten, kontingent, export, pdf, docx, board
+keywords: bericht, gutachter, ptv 3, fragen, lotse, medikation, ihre angabe, erstantrag, umwandlung, fortführung, vorbericht, entwurf, abschnitte, fokus, tastatur, fakten, prüfen, gutachter-check, unterschreiben, unsigniert, kontingent, export, pdf, docx, board
 ---
 Berichte an den Gutachter gehören zu einem Behandlungsfall. thera kennt Erstantrag, Umwandlungsantrag und Fortführungsantrag nach PTV 3.
+
+Der **Bericht-Lotse** führt in fünf Schritten durch jeden Bericht: **Start · Fragen · Abschnitte · Prüfen · Fertig**. Jeder Schritt hat unten rechts genau eine nächste Aktion. Über die Schrittleiste springen Sie jederzeit vor oder zurück, und **Ganzes Dokument** (unten links) zeigt den ganzen Bericht zum freien Bearbeiten.
 
 ## Bericht anlegen
 
 - Auf der Patientenseite wählen Sie im Behandlungsfall **Bericht anlegen**.
 - Oder Sie folgen dem Hinweis „… vorbereiten“ auf **Heute** bzw. unter **Berichte**, sobald das Kontingent knapp wird.
 - Die Diagnosen des Behandlungsfalls werden übernommen. Pflegen Sie sie deshalb dort.
+- Der Schritt **Start** zeigt die empfohlene Antragsart und je Abschnitt, was thera schon weiß.
+
+## Vorbericht bei Umwandlung und Fortführung
+
+Gibt es im Behandlungsfall schon einen unterschriebenen Bericht, nutzen die Entwürfe ihn als **Vorbericht**: pseudonymisiert mitgesendet und am Satz als „Vorbericht (Datum)“ zitiert. Beim Fortführungsantrag beschreibt der Entwurf vor allem, was sich seit dem Vorbericht verändert hat. Unter **Optionen** im Schritt Abschnitte lässt sich der Vorbericht für die nächsten Entwürfe abwählen.
 
 ## Fragen vor dem Entwurf
 
@@ -32,12 +39,20 @@ Nach den Fragen entwirft die KI alle leeren Abschnitte auf einmal (mit Vorschau,
 
 Sind alle Abschnitte übernommen oder als nicht relevant markiert, steht der Bericht auf **Bereit zur Prüfung** und es geht weiter zum Prüfen.
 
-**Ganzes Dokument** (unten links) zeigt den Bericht wie bisher als Ganzes, mit Vorschau wie im Export.
+## Prüfen
 
-## Prüfen und exportieren
+Der Schritt **Prüfen** sammelt in einer Liste, was vor der Unterschrift noch offen ist, das Wichtigste zuerst:
 
-- **Prüfen**: Umfang, Leitfaden-Hinweise und die Checkliste vor der Unterschrift.
-- **Exportieren**: als PDF oder DOCX. Im Bericht steht die Chiffre, nicht der Name.
+- die Prüfungen der App: leere Pflichtabschnitte, Namen oder Geburtsdaten im Text, fehlende Chiffre, Umfang, und Diagnosen, die vom Behandlungsfall abweichen (**Übernehmen**);
+- auf Wunsch der **Gutachter-Check**: **Mit KI prüfen** schickt den Bericht pseudonymisiert (mit Vorschau) an Ihr KI-Modell. Es liest ihn wie ein Gutachter und nennt, was nachgefragt würde, etwa „Ein Gutachter würde fragen: Woran machen Sie die günstige Prognose fest?“. Den Text ändert der Check nie, und zu den Diagnosen sagt er nichts.
+
+**Zum Abschnitt** führt zurück in den Abschnitt, **Ignorieren** blendet einen Hinweis aus. Ändern Sie den Text danach, zeigt thera, dass der Check älter ist als der Text.
+
+## Fertig: unterschreiben und exportieren
+
+- Links sehen Sie den Bericht so, wie er exportiert wird. Im Bericht steht die Chiffre, nicht der Name.
+- Rechts unterschreiben Sie mit Ihrem Namen (aus den Einstellungen vorbelegt). Das geht erst, wenn die Prüfung nichts Blockierendes mehr meldet. Danach ist der Bericht schreibgeschützt.
+- Export als PDF oder DOCX. Vor der Unterschrift ist der Export ein Entwurf: thera weist darauf hin und hängt „unsigniert“ an den Dateinamen.
 
 ## Board und Fristen
 

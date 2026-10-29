@@ -9,6 +9,7 @@ import { toast } from 'sonner'
 import { Sparkles, X } from 'lucide-react'
 import type { ApplyMode } from '@/bindings/ApplyMode'
 import type { EpisodeFact } from '@/bindings/EpisodeFact'
+import type { PriorSource } from '@/bindings/PriorSource'
 import type { ReportAnswer } from '@/bindings/ReportAnswer'
 import type { SectionDef } from '@/bindings/SectionDef'
 import type { SectionDraft } from '@/bindings/SectionDraft'
@@ -49,7 +50,7 @@ export function useDraftSessions(reportId: string) {
  * What the focus mode's "Optionen" and "Neu entwerfen" chose; the dialog then only previews.
  * `sessionIds` undefined: the default sessions, `null`: all.
  */
-export type DraftPreset = { sessionIds?: string[] | null; withExisting?: boolean; instruction?: string }
+export type DraftPreset = { sessionIds?: string[] | null; withExisting?: boolean; instruction?: string; withoutPrior?: boolean }
 
 /**
  * Redaction preview + the choices for drafting `keys` (sessions, existing text, instruction),
@@ -102,6 +103,7 @@ export function DraftDialog({
     sessionIds: all ? null : chosen,
     withExisting: withExisting && filled.length > 0,
     allFacts,
+    withoutPrior: !!preset?.withoutPrior,
   }
   const previewKey = ['draftPreview', reportId, choice]
   // Shares the dialog's preview query (same key): sections skipped for lack of facts.
@@ -164,6 +166,7 @@ export function DraftDialog({
           <p className="text-[13px] text-muted-foreground" data-testid="draft-preset">
             {all ? t('draft.presetAll', { count: rows.length }) : t('draft.presetSome', { count: chosen.length, total: rows.length })}
             {withExisting && filled.length > 0 && ` · ${t('draft.presetExisting')}`}
+            {sources.data?.prior && preset.withoutPrior && ` · ${t('draft.presetWithoutPrior')}`}
             {sent && ` · ${t('draft.presetInstruction', { text: sent })}`}
           </p>
         )}
@@ -332,6 +335,9 @@ export function Sentences({ draft, noteSections }: { draft: SectionDraft; noteSe
           {s.answers.map((a) => (
             <AnswerChip key={a.id} answer={a} />
           ))}
+          {s.prior.map((p) => (
+            <PriorChip key={`${p.report_id}/${p.section_key}`} prior={p} />
+          ))}
         </li>
       ))}
     </ol>
@@ -351,6 +357,29 @@ export function AnswerChip({ answer }: { answer: ReportAnswer }) {
       <TooltipContent className="max-w-sm">
         <p className="text-xs opacity-80">{answer.question}</p>
         <p>{answer.text}</p>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+/** A sentence resting on a section of the Vorbericht. */
+export function PriorChip({ prior }: { prior: PriorSource }) {
+  const { t } = useTranslation()
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Link
+          to="/reports/$reportId"
+          params={{ reportId: prior.report_id }}
+          search={{ doc: true }}
+          className="rounded bg-sand px-1.5 py-0.5 text-[11px] whitespace-nowrap text-sand-foreground hover:bg-primary/15 hover:text-foreground"
+          data-testid="prior-chip"
+        >
+          {t('draft.prior', { date: formatDate(prior.signed_at) })}
+        </Link>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-sm">
+        <p>{prior.excerpt}</p>
       </TooltipContent>
     </Tooltip>
   )

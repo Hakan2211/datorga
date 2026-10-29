@@ -1,6 +1,8 @@
+import type { CheckItem } from '@/bindings/CheckItem'
 import type { EpisodeFact } from '@/bindings/EpisodeFact'
 import type { SectionDef } from '@/bindings/SectionDef'
 import type { Diagnosis } from '@/bindings/Diagnosis'
+import type { ReviewHint } from '@/bindings/ReviewHint'
 import type { QuestionView } from '@/lib/api'
 
 /** Template whose sections facts are tagged with (mirrors `extract::TAG_TEMPLATE_KEY`). */
@@ -82,4 +84,44 @@ export function nextOpenSection(keys: string[], states: Record<string, SectionSt
     if (states[k] === 'proposal' || states[k] === 'open') return k
   }
   return null
+}
+
+export type CheckTone = 'block' | 'warn' | 'info'
+
+/** One line of step 4: a check of the app's own, differing diagnoses, or a Gutachter-Check hint. */
+export type CheckEntry =
+  | { kind: 'check'; id: string; tone: CheckTone; item: CheckItem }
+  | { kind: 'diagnoses'; id: string; tone: CheckTone }
+  | { kind: 'hint'; id: string; tone: CheckTone; hint: ReviewHint }
+
+const TONE_RANK: Record<CheckTone, number> = { block: 0, warn: 1, info: 2 }
+
+/**
+ * Step 4's list, most pressing first: what blocks signing, then what a Gutachter would likely
+ * object to (and diagnoses that differ from the Behandlungsfall), then notes and the length.
+ * Passed checks and ignored hints are left out; the length always shows.
+ */
+export function checkEntries(o: {
+  checklist: CheckItem[]
+  hints: ReviewHint[]
+  reportDiagnoses: Diagnosis[] | null
+  episodeDiagnoses: Diagnosis[]
+}): CheckEntry[] {
+  const out: CheckEntry[] = []
+  for (const item of o.checklist) {
+    if (item.key === 'length') out.push({ kind: 'check', id: item.key, tone: item.ok ? 'info' : 'warn', item })
+    else if (!item.ok) out.push({ kind: 'check', id: item.key, tone: item.severity === 'block' ? 'block' : 'warn', item })
+  }
+  if (o.reportDiagnoses && o.episodeDiagnoses.length > 0 && !sameDiagnoses(o.reportDiagnoses, o.episodeDiagnoses)) {
+    out.push({ kind: 'diagnoses', id: 'diagnoses', tone: 'warn' })
+  }
+  for (const hint of o.hints) {
+    if (!hint.ignored) out.push({ kind: 'hint', id: hint.id, tone: hint.level === 'important' ? 'warn' : 'info', hint })
+  }
+  // Stable: within a tone, checks before hints, the length last.
+  const last = (e: CheckEntry) => (e.kind === 'check' && e.item.key === 'length' ? 1 : 0)
+  return out
+    .map((e, i) => ({ e, i }))
+    .sort((a, b) => TONE_RANK[a.e.tone] - TONE_RANK[b.e.tone] || last(a.e) - last(b.e) || a.i - b.i)
+    .map(({ e }) => e)
 }

@@ -23,7 +23,8 @@ export function ReportPreview({
   /** Changes whenever the report's text changes. */
   content: string
   flush: () => Promise<void>
-  onClose: () => void
+  /** Without it the preview has no close button (a Lotse step where it is part of the screen). */
+  onClose?: () => void
 }) {
   const { t } = useTranslation()
   const [pages, setPages] = useState<string[]>([])
@@ -69,15 +70,17 @@ export function ReportPreview({
             <Loader2 className="size-3 animate-spin" /> {t('report.previewUpdating')}
           </span>
         )}
-        <Button
-          variant="ghost"
-          size="icon"
-          className={busy ? 'size-6' : 'ml-auto size-6'}
-          onClick={onClose}
-          aria-label={t('report.previewClose')}
-        >
-          <X className="size-3.5" />
-        </Button>
+        {onClose && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className={busy ? 'size-6' : 'ml-auto size-6'}
+            onClick={onClose}
+            aria-label={t('report.previewClose')}
+          >
+            <X className="size-3.5" />
+          </Button>
+        )}
       </div>
       {error && (
         <p className="flex items-start gap-2 border-b bg-destructive/10 px-3 py-2 text-xs text-destructive">

@@ -8,6 +8,7 @@ import type { ApplicationKind } from '@/bindings/ApplicationKind'
 import type { AuditEvent } from '@/bindings/AuditEvent'
 import type { BerichtCandidate } from '@/bindings/BerichtCandidate'
 import type { CheckItem } from '@/bindings/CheckItem'
+import type { ReportReview } from '@/bindings/ReportReview'
 import type { Consent } from '@/bindings/Consent'
 import type { ConsentKind } from '@/bindings/ConsentKind'
 import type { ConsentText } from '@/bindings/ConsentText'
@@ -218,11 +219,17 @@ export type DraftChoice = {
   withExisting: boolean
   /** Ignore the Bericht tags: every fact to every section. */
   allFacts: boolean
+  /** Leave the Vorbericht out. */
+  withoutPrior?: boolean
 }
 /** `skipped`: sections no fact is tagged for (nothing sent); `untagged`: facts from before tagging. */
 export type DraftPreview = ExtractPreview & { skipped: string[]; untagged: number }
+/** The last signed Bericht of the case, which drafts see too (`sections`: those with text they draw on). */
+export type PriorInfo = { report_id: string; kind: ApplicationKind | null; seq: number | null; signed_at: string | null; sections: number }
 /** `since`: when the previous application was created (sessions after it are the default choice). */
-export type DraftSources = { facts: EpisodeFact[]; since: string | null; answers: number }
+export type DraftSources = { facts: EpisodeFact[]; since: string | null; answers: number; prior: PriorInfo | null }
+/** The Gutachter-Check of step 4 (`stale`: the text changed since; `sections`: what a check would read now). */
+export type ReviewView = { review: ReportReview | null; stale: boolean; sections: number }
 /** One question of the Lotse "Fragen" step (slice 38). */
 export type QuestionView = {
   section_key: string
@@ -490,6 +497,12 @@ export const api = {
   gapsPreview: (reportId: string) => invoke<ExtractPreview>('gaps_preview', { reportId }),
   gapsRun: (reportId: string, digest: string, requestId: string) =>
     invoke<ReportQuestions>('gaps_run', { reportId, digest, requestId }),
+  review: (reportId: string) => invoke<ReviewView>('report_review_get', { reportId }),
+  reviewIgnore: (reportId: string, hintId: string, ignored: boolean) =>
+    invoke<ReviewView>('report_review_ignore', { reportId, hintId, ignored }),
+  reviewPreview: (reportId: string) => invoke<ExtractPreview>('review_preview', { reportId }),
+  reviewRun: (reportId: string, digest: string, requestId: string) =>
+    invoke<ReviewView>('review_run', { reportId, digest, requestId }),
   draftPreview: (reportId: string, choice: DraftChoice) => invoke<DraftPreview>('draft_preview', { reportId, choice }),
   draftRun: (reportId: string, choice: DraftChoice, digest: string, requestId: string) =>
     invoke<DraftResult>('draft_run', { reportId, choice, digest, requestId }),
@@ -635,6 +648,7 @@ export const q = {
     queryOptions({ queryKey: ['draftSources', reportId], queryFn: () => api.draftSources(reportId) }),
   reportQuestions: (reportId: string) =>
     queryOptions({ queryKey: ['reportQuestions', reportId], queryFn: () => api.reportQuestions(reportId) }),
+  review: (reportId: string) => queryOptions({ queryKey: ['review', reportId], queryFn: () => api.review(reportId) }),
   reportDrafts: (reportId: string) =>
     queryOptions({ queryKey: ['reportDrafts', reportId], queryFn: () => api.reportDrafts(reportId) }),
   // Polled during a download/import and while a model loads (`busy`: a request may be loading one).

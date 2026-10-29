@@ -10,7 +10,7 @@ import type { SectionDraft } from '@/bindings/SectionDraft'
 import type { SentenceChoice } from '@/bindings/SentenceChoice'
 import { formatDate } from '@/components/bits'
 import { QuestionCard, shortHeading } from '@/components/lotse/questions-step'
-import { AnswerChip, FactChip, useDraftSessions, type DraftPreset } from '@/components/report-draft'
+import { AnswerChip, FactChip, PriorChip, useDraftSessions, type DraftPreset } from '@/components/report-draft'
 import { SectionEditor } from '@/components/section-editor'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -204,6 +204,9 @@ export function SectionsStep({
                             ))}
                             {s.answers.map((a) => (
                               <AnswerChip key={a.id} answer={a} />
+                            ))}
+                            {s.prior.map((p) => (
+                              <PriorChip key={`${p.report_id}/${p.section_key}`} prior={p} />
                             ))}
                             {editing !== s.id && (
                               <span className="ml-auto flex gap-1.5">
@@ -501,6 +504,7 @@ function OptionsButton({
 }) {
   const { t } = useTranslation()
   const sessions = useDraftSessions(reportId)
+  const prior = useQuery(q.draftSources(reportId)).data?.prior
   const chosen = options.sessionIds === undefined ? sessions.defaults : options.sessionIds === null ? sessions.rows.map((r) => r.id) : options.sessionIds
   const set = (ids: string[]) => onOptions({ ...options, sessionIds: ids.length === sessions.rows.length ? null : ids })
   return (
@@ -542,6 +546,19 @@ function OptionsButton({
           </label>
           <p className="pl-6 text-muted-foreground">{sectionFilled ? t('draft.withExistingHint') : t('lotse.focus.withExistingEmpty')}</p>
         </div>
+        {prior && (
+          <div className="space-y-1">
+            <label className="flex items-center gap-2">
+              <Checkbox
+                checked={!options.withoutPrior}
+                onCheckedChange={(v) => onOptions({ ...options, withoutPrior: v !== true })}
+                data-testid="focus-with-prior"
+              />
+              {t('draft.withPrior')}
+            </label>
+            <p className="pl-6 text-muted-foreground">{t('draft.withPriorHint', { date: formatDate(prior.signed_at) })}</p>
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   )
@@ -550,7 +567,7 @@ function OptionsButton({
 /** "Woher kommt das?": the facts and answers the sentence under review rests on. */
 function SourcesCard({ sentence }: { sentence: SectionDraft['sentences'][number] }) {
   const { t } = useTranslation()
-  const none = sentence.sources.length === 0 && sentence.answers.length === 0
+  const none = sentence.sources.length === 0 && sentence.answers.length === 0 && sentence.prior.length === 0
   return (
     <Card className="gap-0" data-testid="focus-sources">
       <CardHeader className="pb-2">
@@ -571,6 +588,12 @@ function SourcesCard({ sentence }: { sentence: SectionDraft['sentences'][number]
             <p className="text-xs text-muted-foreground">{a.question}</p>
             <p>„{a.text}“</p>
             <p className="mt-1 text-xs text-primary">{t('lotse.questions.own')}</p>
+          </blockquote>
+        ))}
+        {sentence.prior.map((p) => (
+          <blockquote key={`${p.report_id}/${p.section_key}`} className="rounded-md bg-sand/60 px-3 py-2">
+            <p>„{p.excerpt}“</p>
+            <p className="mt-1 text-xs text-sand-foreground">{t('draft.prior', { date: formatDate(p.signed_at) })}</p>
           </blockquote>
         ))}
       </CardContent>

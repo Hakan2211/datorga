@@ -1,6 +1,7 @@
 // A local OpenAI-compatible endpoint for the recording: fixed answers for Jonas Albrecht's
-// session (facts, key points) and Bericht drafts built from the facts thera sends. It answers
-// by the system prompt like the E2E mocks: "sentences" = draft, "points" = summary, else facts.
+// session (facts, key points), Bericht drafts built from the facts thera sends and a Gutachter-Check.
+// It answers by the system prompt like the E2E mocks: "sentences" = draft, "points" = summary,
+// "hints" = Gutachter-Check, else facts.
 import http from 'node:http'
 
 /** Jonas's demo transcript, 1-based segment numbers ([S1] …). */
@@ -25,11 +26,23 @@ function draft(user) {
   return { sentences: facts.map(([, n, text]) => ({ text: text.trim(), facts: [Number(n)] })) }
 }
 
+/** Gutachter-Check hints for the first two sections sent ([A1] …). */
+function hints(user) {
+  const sections = [...user.matchAll(/^\[A(\d+)\] /gm)].map(([, n]) => Number(n))
+  return {
+    hints: [
+      { section: sections[1] ?? null, level: 'wichtig', text: 'Ein Gutachter würde fragen: Woran zeigt sich, dass die Kurzzeittherapie nicht ausreicht?' },
+      { section: sections[0] ?? null, level: 'hinweis', text: 'Die Ziele für die Langzeittherapie könnten konkreter benannt werden.' },
+    ],
+  }
+}
+
 function answer(messages) {
   const system = messages.find((m) => m.role === 'system')?.content ?? ''
   const user = messages.filter((m) => m.role === 'user').map((m) => m.content).join('\n')
   if (system.includes('"sentences"')) return draft(user)
   if (system.includes('"points"')) return { points: user.includes('Mathearbeit') ? POINTS : [] }
+  if (system.includes('"hints"')) return hints(user)
   return { facts: user.includes('Mathearbeit') ? FACTS : [] }
 }
 
