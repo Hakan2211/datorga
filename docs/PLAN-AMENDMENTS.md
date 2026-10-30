@@ -412,3 +412,11 @@ Fixed while filming: after signing a note or Bericht, every editor turning read-
 | D2 | **A Bericht is deleted together with its Antrag** (`application` points at it without a foreign key, so it would dangle), with drafts, answers and checks; sessions and notes stay. A Sitzungsnotiz is not deleted on its own, only with its session. | One Bericht per Antrag; an Antrag without Bericht has no use. |
 | D3 | **Signed or exported documents can be deleted too**, but the confirm adds a warning about the 10-year retention (§ 630f BGB). | Easy deletes as asked, without hiding the legal duty; the therapist decides. |
 | D4 | **One delete button everywhere** (`components/delete-button.tsx`, a trash icon + confirm dialog): session rows, the session page, the calendar dialog, the Berichte table and board cards (on hover), the Bericht page, the patient tiles (on hover), table and page. Audit `session.delete` / `report.delete` / `patient.erase`, IDs only. | "Replace, don't add": the patient page's own dialog and the calendar's two-click delete are gone. |
+
+## 28. Einstellungen as subpages (slice 42, 2026-10-30; user asked for routes, structure approved in plan)
+
+| # | Decision | Why |
+|---|---|---|
+| E1 | **One route per group** under a layout `routes/settings/route.tsx` with a sub-nav (left; a tab row on top below 1024 px): Allgemein (Praxis, Darstellung, Autopilot, Hilfe & Demo), KI & Kosten, Sprache & Aufnahme (Transkription, Sprechertrennung, Stimme), Datensicherung, Sicherheit, Protokoll. `/settings` redirects to Allgemein. The list lives in `lib/settings-nav.ts` (nav + Strg+K). | Deep links to the right page, back button works, one file per page instead of a 535-line scroll. |
+| E2 | **The Protokoll moved to `/settings/protokoll`**; `/audit` redirects there. | PLAN-PHASE4 put it under Einstellungen; it has no place in the main nav. |
+| E3 | **Every link into the settings names its page**: "Modell einstellen"/"Kein KI-Anbieter" → KI, transcription problems and voice prep → Sprache, backup reminder → Datensicherung, balance banner → KI; Hilfe articles say "Einstellungen → KI & Kosten" as a link; Rundgang steps point at the subpages. | She lands where the fix is, no scrolling. |

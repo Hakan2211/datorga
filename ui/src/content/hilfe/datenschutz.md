@@ -30,4 +30,4 @@ Für Tonaufnahmen und für die Cloud-Transkription erfassen Sie die Einwilligung
 
 ## Protokoll
 
-Jede Änderung und jede KI-Anfrage wird ohne Inhalte in einer manipulationssicheren Kette protokolliert. Sie öffnen das Protokoll unter [Einstellungen](/settings) → Sicherheit.
+Jede Änderung und jede KI-Anfrage wird ohne Inhalte in einer manipulationssicheren Kette protokolliert. Sie öffnen es unter [Einstellungen → Protokoll](/settings/protokoll).

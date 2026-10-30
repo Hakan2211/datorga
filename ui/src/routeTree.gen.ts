@@ -13,7 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AssistantRouteImport } from './routes/assistant'
 import { Route as AuditRouteImport } from './routes/audit'
 import { Route as CalendarRouteImport } from './routes/calendar'
-import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as SettingsRouteRouteImport } from './routes/settings/route'
 import { Route as HilfeIndexRouteImport } from './routes/hilfe/index'
 import { Route as HilfeSlugRouteImport } from './routes/hilfe/$slug'
 import { Route as PatientsIndexRouteImport } from './routes/patients/index'
@@ -22,6 +22,13 @@ import { Route as ReportsIndexRouteImport } from './routes/reports/index'
 import { Route as ReportsReportIdRouteImport } from './routes/reports/$reportId'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
 import { Route as SessionsSessionIdRouteImport } from './routes/sessions/$sessionId'
+import { Route as SettingsIndexRouteImport } from './routes/settings/index'
+import { Route as SettingsAllgemeinRouteImport } from './routes/settings/allgemein'
+import { Route as SettingsKiRouteImport } from './routes/settings/ki'
+import { Route as SettingsProtokollRouteImport } from './routes/settings/protokoll'
+import { Route as SettingsSicherheitRouteImport } from './routes/settings/sicherheit'
+import { Route as SettingsSicherungRouteImport } from './routes/settings/sicherung'
+import { Route as SettingsSpracheRouteImport } from './routes/settings/sprache'
 import { Route as TemplatesIndexRouteImport } from './routes/templates/index'
 import { Route as ReportsReportIdWerkstattRouteImport } from './routes/reports/$reportId_.werkstatt'
 import { Route as SessionsSessionIdWerkstattRouteImport } from './routes/sessions/$sessionId_.werkstatt'
@@ -46,7 +53,7 @@ const CalendarRoute = CalendarRouteImport.update({
   path: '/calendar',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SettingsRoute = SettingsRouteImport.update({
+const SettingsRouteRoute = SettingsRouteRouteImport.update({
   id: '/settings',
   path: '/settings',
   getParentRoute: () => rootRouteImport,
@@ -91,6 +98,41 @@ const SessionsSessionIdRoute = SessionsSessionIdRouteImport.update({
   path: '/sessions/$sessionId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsIndexRoute = SettingsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => SettingsRouteRoute,
+} as any)
+const SettingsAllgemeinRoute = SettingsAllgemeinRouteImport.update({
+  id: '/allgemein',
+  path: '/allgemein',
+  getParentRoute: () => SettingsRouteRoute,
+} as any)
+const SettingsKiRoute = SettingsKiRouteImport.update({
+  id: '/ki',
+  path: '/ki',
+  getParentRoute: () => SettingsRouteRoute,
+} as any)
+const SettingsProtokollRoute = SettingsProtokollRouteImport.update({
+  id: '/protokoll',
+  path: '/protokoll',
+  getParentRoute: () => SettingsRouteRoute,
+} as any)
+const SettingsSicherheitRoute = SettingsSicherheitRouteImport.update({
+  id: '/sicherheit',
+  path: '/sicherheit',
+  getParentRoute: () => SettingsRouteRoute,
+} as any)
+const SettingsSicherungRoute = SettingsSicherungRouteImport.update({
+  id: '/sicherung',
+  path: '/sicherung',
+  getParentRoute: () => SettingsRouteRoute,
+} as any)
+const SettingsSpracheRoute = SettingsSpracheRouteImport.update({
+  id: '/sprache',
+  path: '/sprache',
+  getParentRoute: () => SettingsRouteRoute,
+} as any)
 const TemplatesIndexRoute = TemplatesIndexRouteImport.update({
   id: '/templates/',
   path: '/templates/',
@@ -111,18 +153,25 @@ const SessionsSessionIdWerkstattRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/settings': typeof SettingsRouteRouteWithChildren
   '/assistant': typeof AssistantRoute
   '/audit': typeof AuditRoute
   '/calendar': typeof CalendarRoute
-  '/settings': typeof SettingsRoute
   '/hilfe/$slug': typeof HilfeSlugRoute
   '/patients/$patientId': typeof PatientsPatientIdRoute
   '/reports/$reportId': typeof ReportsReportIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
+  '/settings/allgemein': typeof SettingsAllgemeinRoute
+  '/settings/ki': typeof SettingsKiRoute
+  '/settings/protokoll': typeof SettingsProtokollRoute
+  '/settings/sicherheit': typeof SettingsSicherheitRoute
+  '/settings/sicherung': typeof SettingsSicherungRoute
+  '/settings/sprache': typeof SettingsSpracheRoute
   '/hilfe/': typeof HilfeIndexRoute
   '/patients/': typeof PatientsIndexRoute
   '/reports/': typeof ReportsIndexRoute
   '/sessions/': typeof SessionsIndexRoute
+  '/settings/': typeof SettingsIndexRoute
   '/templates/': typeof TemplatesIndexRoute
   '/reports/$reportId/werkstatt': typeof ReportsReportIdWerkstattRoute
   '/sessions/$sessionId/werkstatt': typeof SessionsSessionIdWerkstattRoute
@@ -132,15 +181,21 @@ export interface FileRoutesByTo {
   '/assistant': typeof AssistantRoute
   '/audit': typeof AuditRoute
   '/calendar': typeof CalendarRoute
-  '/settings': typeof SettingsRoute
   '/hilfe/$slug': typeof HilfeSlugRoute
   '/patients/$patientId': typeof PatientsPatientIdRoute
   '/reports/$reportId': typeof ReportsReportIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
+  '/settings/allgemein': typeof SettingsAllgemeinRoute
+  '/settings/ki': typeof SettingsKiRoute
+  '/settings/protokoll': typeof SettingsProtokollRoute
+  '/settings/sicherheit': typeof SettingsSicherheitRoute
+  '/settings/sicherung': typeof SettingsSicherungRoute
+  '/settings/sprache': typeof SettingsSpracheRoute
   '/hilfe': typeof HilfeIndexRoute
   '/patients': typeof PatientsIndexRoute
   '/reports': typeof ReportsIndexRoute
   '/sessions': typeof SessionsIndexRoute
+  '/settings': typeof SettingsIndexRoute
   '/templates': typeof TemplatesIndexRoute
   '/reports/$reportId/werkstatt': typeof ReportsReportIdWerkstattRoute
   '/sessions/$sessionId/werkstatt': typeof SessionsSessionIdWerkstattRoute
@@ -148,18 +203,25 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/settings': typeof SettingsRouteRouteWithChildren
   '/assistant': typeof AssistantRoute
   '/audit': typeof AuditRoute
   '/calendar': typeof CalendarRoute
-  '/settings': typeof SettingsRoute
   '/hilfe/$slug': typeof HilfeSlugRoute
   '/patients/$patientId': typeof PatientsPatientIdRoute
   '/reports/$reportId': typeof ReportsReportIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
+  '/settings/allgemein': typeof SettingsAllgemeinRoute
+  '/settings/ki': typeof SettingsKiRoute
+  '/settings/protokoll': typeof SettingsProtokollRoute
+  '/settings/sicherheit': typeof SettingsSicherheitRoute
+  '/settings/sicherung': typeof SettingsSicherungRoute
+  '/settings/sprache': typeof SettingsSpracheRoute
   '/hilfe/': typeof HilfeIndexRoute
   '/patients/': typeof PatientsIndexRoute
   '/reports/': typeof ReportsIndexRoute
   '/sessions/': typeof SessionsIndexRoute
+  '/settings/': typeof SettingsIndexRoute
   '/templates/': typeof TemplatesIndexRoute
   '/reports/$reportId_/werkstatt': typeof ReportsReportIdWerkstattRoute
   '/sessions/$sessionId_/werkstatt': typeof SessionsSessionIdWerkstattRoute
@@ -168,18 +230,25 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/settings'
     | '/assistant'
     | '/audit'
     | '/calendar'
-    | '/settings'
     | '/hilfe/$slug'
     | '/patients/$patientId'
     | '/reports/$reportId'
     | '/sessions/$sessionId'
+    | '/settings/allgemein'
+    | '/settings/ki'
+    | '/settings/protokoll'
+    | '/settings/sicherheit'
+    | '/settings/sicherung'
+    | '/settings/sprache'
     | '/hilfe/'
     | '/patients/'
     | '/reports/'
     | '/sessions/'
+    | '/settings/'
     | '/templates/'
     | '/reports/$reportId/werkstatt'
     | '/sessions/$sessionId/werkstatt'
@@ -189,33 +258,46 @@ export interface FileRouteTypes {
     | '/assistant'
     | '/audit'
     | '/calendar'
-    | '/settings'
     | '/hilfe/$slug'
     | '/patients/$patientId'
     | '/reports/$reportId'
     | '/sessions/$sessionId'
+    | '/settings/allgemein'
+    | '/settings/ki'
+    | '/settings/protokoll'
+    | '/settings/sicherheit'
+    | '/settings/sicherung'
+    | '/settings/sprache'
     | '/hilfe'
     | '/patients'
     | '/reports'
     | '/sessions'
+    | '/settings'
     | '/templates'
     | '/reports/$reportId/werkstatt'
     | '/sessions/$sessionId/werkstatt'
   id:
     | '__root__'
     | '/'
+    | '/settings'
     | '/assistant'
     | '/audit'
     | '/calendar'
-    | '/settings'
     | '/hilfe/$slug'
     | '/patients/$patientId'
     | '/reports/$reportId'
     | '/sessions/$sessionId'
+    | '/settings/allgemein'
+    | '/settings/ki'
+    | '/settings/protokoll'
+    | '/settings/sicherheit'
+    | '/settings/sicherung'
+    | '/settings/sprache'
     | '/hilfe/'
     | '/patients/'
     | '/reports/'
     | '/sessions/'
+    | '/settings/'
     | '/templates/'
     | '/reports/$reportId_/werkstatt'
     | '/sessions/$sessionId_/werkstatt'
@@ -223,10 +305,10 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  SettingsRouteRoute: typeof SettingsRouteRouteWithChildren
   AssistantRoute: typeof AssistantRoute
   AuditRoute: typeof AuditRoute
   CalendarRoute: typeof CalendarRoute
-  SettingsRoute: typeof SettingsRoute
   HilfeSlugRoute: typeof HilfeSlugRoute
   PatientsPatientIdRoute: typeof PatientsPatientIdRoute
   ReportsReportIdRoute: typeof ReportsReportIdRoute
@@ -274,7 +356,7 @@ declare module '@tanstack/react-router' {
       id: '/settings'
       path: '/settings'
       fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteImport
+      preLoaderRoute: typeof SettingsRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/hilfe/': {
@@ -333,6 +415,55 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SessionsSessionIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings/': {
+      id: '/settings/'
+      path: '/'
+      fullPath: '/settings/'
+      preLoaderRoute: typeof SettingsIndexRouteImport
+      parentRoute: typeof SettingsRouteRoute
+    }
+    '/settings/allgemein': {
+      id: '/settings/allgemein'
+      path: '/allgemein'
+      fullPath: '/settings/allgemein'
+      preLoaderRoute: typeof SettingsAllgemeinRouteImport
+      parentRoute: typeof SettingsRouteRoute
+    }
+    '/settings/ki': {
+      id: '/settings/ki'
+      path: '/ki'
+      fullPath: '/settings/ki'
+      preLoaderRoute: typeof SettingsKiRouteImport
+      parentRoute: typeof SettingsRouteRoute
+    }
+    '/settings/protokoll': {
+      id: '/settings/protokoll'
+      path: '/protokoll'
+      fullPath: '/settings/protokoll'
+      preLoaderRoute: typeof SettingsProtokollRouteImport
+      parentRoute: typeof SettingsRouteRoute
+    }
+    '/settings/sicherheit': {
+      id: '/settings/sicherheit'
+      path: '/sicherheit'
+      fullPath: '/settings/sicherheit'
+      preLoaderRoute: typeof SettingsSicherheitRouteImport
+      parentRoute: typeof SettingsRouteRoute
+    }
+    '/settings/sicherung': {
+      id: '/settings/sicherung'
+      path: '/sicherung'
+      fullPath: '/settings/sicherung'
+      preLoaderRoute: typeof SettingsSicherungRouteImport
+      parentRoute: typeof SettingsRouteRoute
+    }
+    '/settings/sprache': {
+      id: '/settings/sprache'
+      path: '/sprache'
+      fullPath: '/settings/sprache'
+      preLoaderRoute: typeof SettingsSpracheRouteImport
+      parentRoute: typeof SettingsRouteRoute
+    }
     '/templates/': {
       id: '/templates/'
       path: '/templates'
@@ -357,12 +488,36 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface SettingsRouteRouteChildren {
+  SettingsAllgemeinRoute: typeof SettingsAllgemeinRoute
+  SettingsKiRoute: typeof SettingsKiRoute
+  SettingsProtokollRoute: typeof SettingsProtokollRoute
+  SettingsSicherheitRoute: typeof SettingsSicherheitRoute
+  SettingsSicherungRoute: typeof SettingsSicherungRoute
+  SettingsSpracheRoute: typeof SettingsSpracheRoute
+  SettingsIndexRoute: typeof SettingsIndexRoute
+}
+
+const SettingsRouteRouteChildren: SettingsRouteRouteChildren = {
+  SettingsAllgemeinRoute: SettingsAllgemeinRoute,
+  SettingsKiRoute: SettingsKiRoute,
+  SettingsProtokollRoute: SettingsProtokollRoute,
+  SettingsSicherheitRoute: SettingsSicherheitRoute,
+  SettingsSicherungRoute: SettingsSicherungRoute,
+  SettingsSpracheRoute: SettingsSpracheRoute,
+  SettingsIndexRoute: SettingsIndexRoute,
+}
+
+const SettingsRouteRouteWithChildren = SettingsRouteRoute._addFileChildren(
+  SettingsRouteRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  SettingsRouteRoute: SettingsRouteRouteWithChildren,
   AssistantRoute: AssistantRoute,
   AuditRoute: AuditRoute,
   CalendarRoute: CalendarRoute,
-  SettingsRoute: SettingsRoute,
   HilfeSlugRoute: HilfeSlugRoute,
   PatientsPatientIdRoute: PatientsPatientIdRoute,
   ReportsReportIdRoute: ReportsReportIdRoute,

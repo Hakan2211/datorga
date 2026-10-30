@@ -16,6 +16,11 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
 
 ## Accomplished
 
+**Built (slice 42, 2026-10-30): Einstellungen as subpages**
+- `routes/settings/` replaces `routes/settings.tsx`: layout `route.tsx` (sub-nav from `lib/settings-nav.ts`, sticky on the left from `lg`, a tab row above), `index.tsx` (→ allgemein), `allgemein.tsx`, `ki.tsx` (keeps the `#costs` anchor), `sprache.tsx`, `sicherung.tsx`, `sicherheit.tsx`, `protokoll.tsx` (the former `/audit`, which now redirects). Cards moved unchanged; the "Berichte" card is now "Praxis". Decisions E1–E3 in PLAN-AMENDMENTS §28.
+- Deep links retargeted (Lotse start/check, assistant, workshop, summary, fact draft → KI; voice prep, transcription problem → Sprache; backup reminder → Datensicherung; balance banner → KI), Rundgang steps, Strg+K (one entry per subpage, `/audit` entry gone), Hilfe Markdown links (+ link test accepts the subpages), video shots `kosten`/`sicherung` click the sub-nav.
+- Tests: typecheck, Vitest 62; E2E on the Demo-Praxis: every subpage via the nav with active state, `/settings` and `/audit` redirects, tour targets present, Lotse "Modell" link, Strg+K, Hilfe link, no overflow at 1000 px, no console errors; `record.mjs --dry` without broken shots.
+
 **Built (slice 41, 2026-10-30): easy deletes + Lotse button overflow**
 - Core: `delete_session` deletes any session with everything attached (audio folders too), refused only while recording or a job runs; new `delete_report` (Bericht + its Antrag; not a Sitzungsnotiz). App command `report_delete`. Decisions D1–D4 in PLAN-AMENDMENTS §27 (replaces the slice 22 "absagen statt löschen" rule).
 - UI: shared `DeleteButton` / `DeleteSession` / `DeleteReport` / `DeletePatient` in session rows, session page, calendar dialog, Berichte table + board cards, Bericht page, patient tiles + table + page; signed documents get a retention warning (§ 630f BGB). The confirm button is now really red (`variant="destructive"`; the old `bg-destructive` class lost to `bg-primary` through Slot).

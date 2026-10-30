@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { SETTINGS_PAGES } from '@/lib/settings-nav'
 import { HELP, HELP_ARTICLES, helpArticle, linkTarget, parseArticle, parseBlocks, parseInline, searchHelp } from './help'
 
 describe('help articles', () => {
@@ -57,7 +58,7 @@ describe('help articles', () => {
   })
 
   it('links only to articles and pages that exist', () => {
-    const pages = ['/', '/calendar', '/patients', '/sessions', '/reports', '/assistant', '/settings', '/hilfe']
+    const pages = ['/', '/calendar', '/patients', '/sessions', '/reports', '/assistant', '/settings', '/hilfe', ...SETTINGS_PAGES.map((p) => p.to)]
     for (const a of HELP_ARTICLES) {
       for (const b of a.blocks) {
         for (const text of 'items' in b ? b.items : [b.text]) {

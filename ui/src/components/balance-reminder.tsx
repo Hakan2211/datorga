@@ -31,7 +31,7 @@ export function BalanceReminder() {
       <span className="ml-auto flex items-center gap-3">
         {openrouter.credits_url && <ExternalButton url={openrouter.credits_url}>{t('costs.topUp')}</ExternalButton>}
         <Button size="sm" variant="ghost" asChild>
-          <Link to="/settings" hash="costs">
+          <Link to="/settings/ki">
             {t('costs.details')}
           </Link>
         </Button>

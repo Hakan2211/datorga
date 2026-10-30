@@ -654,7 +654,7 @@ function SourceRow({ source, patientId }: { source: SourceView; patientId: strin
               {t('transcript.consentLink')}
             </Link>
           ) : (
-            <Link to="/settings" className="underline">
+            <Link to="/settings/sprache" className="underline">
               {t('transcript.settingsLink')}
             </Link>
           )}

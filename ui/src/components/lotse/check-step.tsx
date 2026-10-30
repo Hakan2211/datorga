@@ -289,7 +289,7 @@ function AiLine({
         !readOnly &&
         !llmActive && (
           <Button asChild size="sm" variant="outline">
-            <Link to="/settings">{t('lotse.modelSet')}</Link>
+            <Link to="/settings/ki">{t('lotse.modelSet')}</Link>
           </Button>
         )
       )}

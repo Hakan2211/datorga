@@ -5,7 +5,7 @@ import { useMatch, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { BookOpen, CalendarDays, CircleHelp, Compass, FileText, Mic, NotebookPen, Plus, ScrollText, Settings, Sparkles, Square, Sun, User, Users } from 'lucide-react'
+import { BookOpen, CalendarDays, CircleHelp, Compass, FileText, Mic, NotebookPen, Plus, Settings, Sparkles, Square, Sun, User, Users } from 'lucide-react'
 import { formatDate } from '@/components/bits'
 import {
   CommandDialog,
@@ -19,6 +19,7 @@ import {
 import { api, errorMessage, q } from '@/lib/api'
 import { useCaptureDevice } from '@/lib/capture'
 import { HELP_ARTICLES } from '@/lib/help'
+import { SETTINGS_PAGES } from '@/lib/settings-nav'
 import { useTour } from '@/components/tour'
 
 const pages = [
@@ -28,8 +29,6 @@ const pages = [
   { to: '/sessions', label: 'nav.sessions', icon: Mic },
   { to: '/reports', label: 'nav.reports', icon: FileText },
   { to: '/assistant', label: 'nav.assistant', icon: Sparkles },
-  { to: '/audit', label: 'nav.audit', icon: ScrollText },
-  { to: '/settings', label: 'nav.settings', icon: Settings },
   { to: '/hilfe', label: 'nav.help', icon: CircleHelp },
 ] as const
 
@@ -163,6 +162,15 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               {pages.map((p) => (
                 <CommandItem key={p.to} value={`${t('palette.goTo')} ${t(p.label)}`} onSelect={() => go(p.to)}>
                   <p.icon /> {t(p.label)}
+                </CommandItem>
+              ))}
+              {SETTINGS_PAGES.map((p) => (
+                <CommandItem
+                  key={p.to}
+                  value={`${t('palette.goTo')} ${t('nav.settings')} ${t(`settings.pages.${p.key}`)}`}
+                  onSelect={() => go(p.to)}
+                >
+                  <Settings /> {t('nav.settings')}: {t(`settings.pages.${p.key}`)}
                 </CommandItem>
               ))}
             </CommandGroup>

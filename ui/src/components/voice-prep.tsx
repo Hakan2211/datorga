@@ -95,7 +95,7 @@ export function PrepCard({ sessionId, primary = true }: { sessionId: string; pri
           {!enabled && (
             <span className="text-muted-foreground">
               {t('prep.disabled')}{' '}
-              <Link to="/settings" className="underline">
+              <Link to="/settings/sprache" className="underline">
                 {t('prep.toSettings')}
               </Link>
             </span>

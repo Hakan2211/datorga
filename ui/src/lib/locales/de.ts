@@ -1193,6 +1193,15 @@ export const de = {
   },
   settings: {
     title: 'Einstellungen',
+    pages: {
+      allgemein: 'Allgemein',
+      ki: 'KI & Kosten',
+      sprache: 'Sprache & Aufnahme',
+      sicherung: 'Datensicherung',
+      sicherheit: 'Sicherheit',
+      protokoll: 'Protokoll',
+    },
+    practiceTitle: 'Praxis',
     practice: 'Praxis-Briefkopf (rechts oben im Bericht)',
     therapist: 'Ihr Name für Unterschriften',
     security: 'Sicherheit',

@@ -152,12 +152,14 @@ export const SHOTS = {
   async kosten(d) {
     await d.press('Escape')
     await d.nav('Einstellungen')
+    await d.click(d.page.getByTestId('settings-nav-ki'))
     await d.page.evaluate(() => document.getElementById('costs')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
     await d.wait(1500)
     await d.hover(d.page.locator('#costs'), 2000, { dy: 0.3 })
   },
 
   async sicherung(d) {
+    await d.click(d.page.getByTestId('settings-nav-sicherung'))
     await d.hover(d.page.getByRole('button', { name: /Sicherung erstellen|Jetzt sichern/ }).first(), 2500)
   },
 

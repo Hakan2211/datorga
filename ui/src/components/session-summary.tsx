@@ -200,7 +200,7 @@ export function SummaryCard({ sessionId, patientId, ready }: { sessionId: string
       {!active ? (
         <p className="text-muted-foreground">
           {t('facts.noProvider')}{' '}
-          <Link to="/settings" className="underline">
+          <Link to="/settings/ki" className="underline">
             {t('facts.settingsLink')}
           </Link>
         </p>

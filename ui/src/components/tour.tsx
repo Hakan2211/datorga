@@ -18,10 +18,10 @@ export const TOUR_STEPS: Step[] = [
   { id: 'kalender', to: '/calendar', target: 'nav-calendar', side: 'right' },
   { id: 'patient', to: '/patients', target: 'patient-new', side: 'bottom' },
   { id: 'aufnehmen', to: '/sessions', target: 'nav-sessions', side: 'right' },
-  { id: 'autopilot', to: '/settings', target: 'autopilot', side: 'bottom' },
+  { id: 'autopilot', to: '/settings/allgemein', target: 'autopilot', side: 'bottom' },
   { id: 'notiz', to: '/sessions', target: 'session-filters', fallback: 'nav-sessions', side: 'bottom' },
   { id: 'bericht', to: '/reports', target: 'nav-reports', side: 'right' },
-  { id: 'ki', to: '/settings', target: 'llm-settings', side: 'bottom' },
+  { id: 'ki', to: '/settings/ki', target: 'llm-settings', side: 'bottom' },
 ]
 
 /** `done` | `skipped`; unset = the tour hasn't run on this computer yet. */

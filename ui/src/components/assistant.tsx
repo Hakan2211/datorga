@@ -135,7 +135,7 @@ export function AssistantChat({
       {!llm.isLoading && !active ? (
         <Notice>
           {t('assistant.noModel')}{' '}
-          <Link to="/settings" className="underline">
+          <Link to="/settings/ki" className="underline">
             {t('assistant.toSettings')}
           </Link>
         </Notice>

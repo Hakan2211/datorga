@@ -41,7 +41,7 @@ export function BackupReminder() {
           </Button>
         ) : (
           <Button size="sm" asChild>
-            <Link to="/settings">{t('backup.reminderSetup')}</Link>
+            <Link to="/settings/sicherung">{t('backup.reminderSetup')}</Link>
           </Button>
         )}
         <Button size="sm" variant="ghost" onClick={() => setDismissed(true)}>

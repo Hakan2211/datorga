@@ -4,7 +4,7 @@ summary: Was nach der Sitzung von selbst passiert
 order: 3
 keywords: automatisch, nach der sitzung, notiz anlegen, fakten, zusammenfassung, was wurde gesendet, antrag fällig
 ---
-Der Autopilot erledigt die Routine nach der Sitzung. Sie prüfen, übernehmen und unterschreiben. Er ist ab Werk eingeschaltet; Sie schalten ihn unter [Einstellungen](/settings) → „Autopilot nach der Sitzung“ aus.
+Der Autopilot erledigt die Routine nach der Sitzung. Sie prüfen, übernehmen und unterschreiben. Er ist ab Werk eingeschaltet; Sie schalten ihn unter [Einstellungen → Allgemein](/settings/allgemein) → „Autopilot nach der Sitzung“ aus.
 
 ## Was der Autopilot tut
 

@@ -17,7 +17,7 @@ Die Aufnahme wird in Teilen verschlüsselt gespeichert. Stürzt der Computer ab,
 
 ## Transkription
 
-Nach dem Beenden startet die Transkription von selbst, wenn der [Autopilot](hilfe:autopilot) an ist. Wo transkribiert wird, legen Sie unter [Einstellungen](/settings) → Transkription fest:
+Nach dem Beenden startet die Transkription von selbst, wenn der [Autopilot](hilfe:autopilot) an ist. Wo transkribiert wird, legen Sie unter [Einstellungen → Sprache & Aufnahme](/settings/sprache) → Transkription fest:
 
 - **Lokal**: auf diesem Computer, nichts verlässt das Gerät. Das Sprachmodell laden Sie einmal in den Einstellungen herunter.
 - **Cloud**: schneller, aber die Tonaufnahme verlässt den Computer. Für Sitzungsaufnahmen mit der Stimme der Patientin bzw. des Patienten geht das nur mit einer eigenen Einwilligung zur Cloud-Transkription.

@@ -26,4 +26,4 @@ Willkommen bei thera. thera hilft Ihnen, Sitzungen zu dokumentieren und Berichte
 
 Die Schaltfläche **Mit Beispieldaten ausprobieren** (beim ersten Start, hier in der Hilfe und unter Einstellungen) öffnet eine Demo-Praxis mit drei erfundenen Patient:innen, Sitzungen, Abschriften und einem Berichtsentwurf. Die Demo liegt in einem eigenen Ordner und mischt sich nie mit Ihren echten Daten. Über **Demo verlassen** kommen Sie zurück. Jedes Öffnen beginnt mit frischen Beispieldaten.
 
-Den **Rundgang** durch die wichtigsten Bereiche starten Sie jederzeit neu, hier in der Hilfe oder unter [Einstellungen](/settings).
+Den **Rundgang** durch die wichtigsten Bereiche starten Sie jederzeit neu, hier in der Hilfe oder unter [Einstellungen → Allgemein](/settings/allgemein).
