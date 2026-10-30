@@ -16,6 +16,12 @@ Test data in the dev DB: a session with a TTS dictation, a signed note ("E2E Tes
 
 ## Accomplished
 
+**Built (slice 41, 2026-10-30): easy deletes + Lotse button overflow**
+- Core: `delete_session` deletes any session with everything attached (audio folders too), refused only while recording or a job runs; new `delete_report` (Bericht + its Antrag; not a Sitzungsnotiz). App command `report_delete`. Decisions D1–D4 in PLAN-AMENDMENTS §27 (replaces the slice 22 "absagen statt löschen" rule).
+- UI: shared `DeleteButton` / `DeleteSession` / `DeleteReport` / `DeletePatient` in session rows, session page, calendar dialog, Berichte table + board cards, Bericht page, patient tiles + table + page; signed documents get a retention warning (§ 630f BGB). The confirm button is now really red (`variant="destructive"`; the old `bg-destructive` class lost to `bg-primary` through Slot).
+- Fix: the sentence buttons (Bearbeiten / Verwerfen / Übernehmen) in the focus mode wrap instead of spilling out of the proposal card in narrow windows.
+- Tests: core lib 329 green (documented/recording session delete, audio removed, Bericht + Antrag delete); UI typecheck + Vitest 62. E2E on the Demo-Praxis at 1250 px: no button outside the proposal card, delete of a Bericht (page), a recorded session (row, long warning), a session (page), an appointment (calendar dialog), a patient (tile and page).
+
 **Built (slice 35, 2026-10-29): Video explainer**
 - `docs/video/skript.md`: 9 chapters / 20 shots (Bild + Sprechertext), along the Hilfe articles; the recorder parses it (`## Kapitel`, `### id · Titel`, `> ` voice lines).
 - `scripts/video/` (own `package.json` with playwright-core; README): `record.mjs` (TTS with cache in `out/voice/`, fresh demo home in `%TEMP%/thera-video` with the real models hard-linked, debug app with `--demo` + CDP :9333, Vite started if needed, screencast frames → ffmpeg concat at 30 fps, voice mixed at each shot's start, VTT per sentence, keychain cleanup; `--dry` = one screenshot per shot and every broken shot reported, `--until <shot>` keeps the app open, `--voice`), `director.mjs` (drawn pointer, eased moves, centring before clicks so sticky footers/toasts aren't hit, captions, title cards), `shots.mjs` (actions), `mock-llm.mjs`. Output `scripts/video/out/` (git-ignored).

@@ -2,6 +2,7 @@ import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import type { ReportSummary } from '@/bindings/ReportSummary'
 import { StatusBadge, formatDate } from '@/components/bits'
+import { DeleteReport } from '@/components/delete-button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 export function ReportsTable({ reports }: { reports: ReportSummary[] }) {
@@ -18,6 +19,7 @@ export function ReportsTable({ reports }: { reports: ReportSummary[] }) {
           <TableHead>Status</TableHead>
           <TableHead>{t('reports.sectionsHead')}</TableHead>
           <TableHead className="text-right">{t('audit.at')}</TableHead>
+          <TableHead className="w-10" />
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -41,6 +43,9 @@ export function ReportsTable({ reports }: { reports: ReportSummary[] }) {
               {r.sections_filled}/{r.sections_total}
             </TableCell>
             <TableCell className="text-right text-muted-foreground">{formatDate(r.updated_at, true)}</TableCell>
+            <TableCell className="py-0 text-right">
+              <DeleteReport report={r} />
+            </TableCell>
           </TableRow>
         ))}
       </TableBody>

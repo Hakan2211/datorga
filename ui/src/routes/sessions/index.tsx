@@ -8,13 +8,14 @@ import { CalendarDays, ListChecks, Search } from 'lucide-react'
 import type { QueueSession } from '@/bindings/QueueSession'
 import { Page, PageHeader } from '@/components/app-shell'
 import { EmptyState, FilterChip, type StepState } from '@/components/bits'
+import { DeleteSession } from '@/components/delete-button'
 import { PatientAvatar } from '@/components/patient-avatar'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { q } from '@/lib/api'
-import { calendarFlow, flowStates, SESSION_FLOW } from '@/lib/calendar'
+import { calendarFlow, flowStates, isUntouched, SESSION_FLOW } from '@/lib/calendar'
 import { groupSessions, matchesPatient, SESSION_TODOS, sessionTime, sessionTodo, todoCounts, type DayGroup, type SessionTodo } from '@/lib/queue'
 import { cn } from '@/lib/utils'
 
@@ -169,6 +170,7 @@ function QueueRow({ session: s, group, now }: { session: QueueSession; group: Da
           {t('sessions.continue')}
         </Link>
       </Button>
+      <DeleteSession session={s} documented={!isUntouched(s)} />
     </li>
   )
 }

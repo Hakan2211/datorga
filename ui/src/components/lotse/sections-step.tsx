@@ -209,7 +209,7 @@ export function SectionsStep({
                               <PriorChip key={`${p.report_id}/${p.section_key}`} prior={p} />
                             ))}
                             {editing !== s.id && (
-                              <span className="ml-auto flex gap-1.5">
+                              <span className="ml-auto flex flex-wrap justify-end gap-1.5">
                                 <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEditing(s.id)} data-testid="sentence-edit">
                                   {t('lotse.focus.edit')} <Kbd>E</Kbd>
                                 </Button>
@@ -239,7 +239,7 @@ export function SectionsStep({
                 )}
                 <div className="flex flex-wrap items-center gap-2 border-t pt-3 text-xs text-muted-foreground">
                   {rejected > 0 && <span>{t('lotse.focus.rejectedCount', { count: rejected })}</span>}
-                  <span className="ml-auto flex gap-1.5">
+                  <span className="ml-auto flex flex-wrap justify-end gap-1.5">
                     {undecided.length > 0 && (
                       <Button
                         size="sm"

@@ -226,19 +226,32 @@ impl Store {
         self.session(id)
     }
 
-    /// Removes a session created by mistake. Only one with nothing attached (no recording, note
-    /// or prep); everything else is cancelled instead, so the record stays.
+    /// Deletes a session with everything attached: recordings (audio files too), transcripts,
+    /// note, facts, prep and summary. Facts a Bericht cited go with it; the Bericht text stays.
+    /// Not while a recording or a job for it is running.
     pub fn delete_session(&self, id: &str) -> Result<()> {
-        self.require_untouched(id)?;
-        let has_prep: bool =
-            self.conn.query_row("SELECT EXISTS (SELECT 1 FROM session_prep WHERE session_id = ?1)", [id], |r| r.get(0))?;
-        if has_prep {
-            return Err(Error::Invalid("Die Sitzung hat eine Vorbereitung: absagen statt löschen".into()));
+        self.session(id)?;
+        let busy: bool = self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM session_source WHERE session_id = ?1 AND status = 'recording')
+                 OR EXISTS (SELECT 1 FROM job j LEFT JOIN session_source src ON src.id = j.source_id
+                            WHERE j.status = 'running' AND (j.session_id = ?1 OR src.session_id = ?1))",
+            [id],
+            |r| r.get(0),
+        )?;
+        if busy {
+            return Err(Error::Invalid("Die Sitzung wird gerade aufgenommen oder verarbeitet: bitte danach löschen".into()));
         }
+        let mut stmt = self.conn.prepare(
+            "SELECT a.path FROM audio_asset a JOIN session_source src ON src.id = a.source_id WHERE src.session_id = ?1",
+        )?;
+        let audio_dirs: Vec<String> = stmt.query_map([id], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
         let tx = self.conn.unchecked_transaction()?;
         tx.execute("DELETE FROM session WHERE id = ?1", [id])?;
         audit::append(&tx, Entry { actor: ACTOR, action: "session.delete", entity_type: "session", entity_id: Some(id), meta: json!({}) })?;
         tx.commit()?;
+        for dir in audio_dirs {
+            let _ = std::fs::remove_dir_all(dir);
+        }
         Ok(())
     }
 
@@ -587,7 +600,6 @@ mod tests {
         let held = at(&store, &p, "2026-10-30T08:00:00Z");
         let note = store.create_session_note(&held.id).unwrap();
         assert!(store.cancel_session(&held.id, None).is_err());
-        assert!(store.delete_session(&held.id).is_err());
         // Documented in the wrong session: it moves, and the unsigned note's date with it.
         let fixed = store.update_session(&held.id, update("2026-10-29T08:00:00Z", None)).unwrap();
         assert_eq!(fixed.scheduled_at.as_deref(), Some("2026-10-29T08:00:00Z"));
@@ -597,11 +609,17 @@ mod tests {
         let rec = at(&store, &p, "2026-11-01T08:00:00Z");
         let (src, w) = store.start_source(&rec.id, SourceKind::Dictation, dir.path()).unwrap();
         assert!(store.update_session(&rec.id, update("2026-11-02T08:00:00Z", None)).is_err(), "not while recording");
+        assert!(store.delete_session(&rec.id).is_err(), "no delete while recording");
         store.finish_source(&src.id, "stopped", &w).unwrap();
         store.update_session(&rec.id, update("2026-11-02T08:00:00Z", None)).unwrap();
 
         store.delete_session(&s.id).unwrap();
         assert!(store.session(&s.id).is_err());
+        // Documented sessions can go too, signed note and recording included.
+        store.delete_session(&held.id).unwrap();
+        assert!(store.report(&note.id).is_err(), "the note goes with its session");
+        store.delete_session(&rec.id).unwrap();
+        assert!(!dir.path().join(&src.id).exists(), "audio files removed");
         let events = audit::list(store.conn(), 50).unwrap();
         for action in ["session.update", "session.cancel", "session.reopen", "session.delete"] {
             assert!(events.iter().any(|e| e.action == action), "{action} audited");

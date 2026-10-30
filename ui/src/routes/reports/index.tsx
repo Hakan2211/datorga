@@ -10,6 +10,7 @@ import type { ReportSummary } from '@/bindings/ReportSummary'
 import { Page, PageHeader } from '@/components/app-shell'
 import { usePrepareApplication } from '@/components/autopilot'
 import { EmptyState, FilterChip, formatDate } from '@/components/bits'
+import { DeleteReport } from '@/components/delete-button'
 import { ReportsTable } from '@/components/reports-table'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -146,38 +147,43 @@ function ReportCard({ report: r }: { report: ReportSummary }) {
   const open = r.status === 'draft' || r.status === 'in_review'
   const pct = r.sections_total > 0 ? (r.sections_filled / r.sections_total) * 100 : 0
   return (
-    <Link
-      to="/reports/$reportId"
-      params={{ reportId: r.id }}
-      className="block min-w-0 overflow-hidden rounded-lg border bg-card p-3.5 shadow-xs transition-colors hover:border-primary/40 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-      data-testid="report-card"
-    >
-      <div className="flex items-start justify-between gap-2">
-        <PatientLabel name={r.patient_name} chiffre={r.chiffre} />
-        {r.method && (
-          <Badge variant="secondary" className="shrink-0">
-            {r.method}
-          </Badge>
-        )}
-      </div>
-      <div className="mt-1 truncate text-sm text-muted-foreground">
-        {r.kind ? t(`enums.kind.${r.kind}`) : '—'}
-        {r.kind === 'fortfuehrung' && r.seq ? ` Nr. ${r.seq}` : ''}
-      </div>
-      {open ? (
-        <>
-          <Progress value={pct} className="mt-3 h-1.5" />
-          <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
-            <span data-testid="report-card-progress">{t('reports.sections', { filled: r.sections_filled, total: r.sections_total })}</span>
-            <Deadline report={r} />
-          </div>
-        </>
-      ) : (
-        <div className="mt-2 text-xs text-muted-foreground">
-          {t(`enums.status.${r.status}`)} {formatDate(r.updated_at)}
+    <div className="group/card relative min-w-0">
+      <Link
+        to="/reports/$reportId"
+        params={{ reportId: r.id }}
+        className="block min-w-0 overflow-hidden rounded-lg border bg-card p-3.5 shadow-xs transition-colors hover:border-primary/40 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        data-testid="report-card"
+      >
+        <div className="flex items-start justify-between gap-2">
+          <PatientLabel name={r.patient_name} chiffre={r.chiffre} />
+          {r.method && (
+            <Badge variant="secondary" className="shrink-0">
+              {r.method}
+            </Badge>
+          )}
         </div>
-      )}
-    </Link>
+        <div className="mt-1 truncate text-sm text-muted-foreground">
+          {r.kind ? t(`enums.kind.${r.kind}`) : '—'}
+          {r.kind === 'fortfuehrung' && r.seq ? ` Nr. ${r.seq}` : ''}
+        </div>
+        {open ? (
+          <>
+            <Progress value={pct} className="mt-3 h-1.5" />
+            <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+              <span data-testid="report-card-progress">{t('reports.sections', { filled: r.sections_filled, total: r.sections_total })}</span>
+              <Deadline report={r} />
+            </div>
+          </>
+        ) : (
+          <div className="mt-2 text-xs text-muted-foreground">
+            {t(`enums.status.${r.status}`)} {formatDate(r.updated_at)}
+          </div>
+        )}
+      </Link>
+      <div className="absolute right-1.5 bottom-1.5 bg-card opacity-0 transition-opacity group-hover/card:opacity-100 focus-within:opacity-100">
+        <DeleteReport report={r} />
+      </div>
+    </div>
   )
 }
 

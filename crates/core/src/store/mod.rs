@@ -2194,6 +2194,20 @@ impl Store {
         self.report(report_id)
     }
 
+    /// Deletes a Bericht and its Antrag, with drafts, answers and checks, signed ones too (the UI
+    /// warns about the retention period). A Sitzungsnotiz goes only with its session.
+    pub fn delete_report(&self, report_id: &str) -> Result<()> {
+        if self.report(report_id)?.kind != "bericht" {
+            return Err(Error::Invalid("Sitzungsnotizen werden mit ihrer Sitzung gelöscht".into()));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM application WHERE report_id = ?1", [report_id])?;
+        tx.execute("DELETE FROM report WHERE id = ?1", [report_id])?;
+        audit::append(&tx, Entry { actor: ACTOR, action: "report.delete", entity_type: "report", entity_id: Some(report_id), meta: json!({}) })?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Nachtrag to a signed Sitzungsnotiz (§ 630f BGB): written and signed in one step, then
     /// immutable. The original note is left untouched, so an earlier export stays what it was.
     pub fn add_addendum(&self, report_id: &str, body: &str, signed_by: &str) -> Result<Report> {
@@ -3840,6 +3854,13 @@ mod tests {
         assert_eq!(added.len(), 2);
         assert!(events.iter().all(|e| !e.meta_json.contains("Korrektur") && !e.meta_json.contains("Muster")), "no text in the audit log");
         assert_eq!(audit::verify(store.conn()).unwrap(), None);
+
+        assert!(matches!(store.delete_report(&note.id), Err(Error::Invalid(_))), "a note goes with its session");
+        store.delete_report(&bericht).unwrap();
+        assert!(store.report(&bericht).is_err());
+        let apps: i64 = store.conn().query_row("SELECT COUNT(*) FROM application", [], |r| r.get(0)).unwrap();
+        assert_eq!(apps, 0, "the Antrag goes with its Bericht");
+        assert!(audit::list(store.conn(), 50).unwrap().iter().any(|e| e.action == "report.delete"));
 
         store.erase_patient(&p.id).unwrap();
         let left: i64 = store.conn().query_row("SELECT COUNT(*) FROM report_addendum", [], |r| r.get(0)).unwrap();

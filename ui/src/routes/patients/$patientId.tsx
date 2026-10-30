@@ -3,7 +3,7 @@ import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { FilePlus2, Gauge, History, LayoutGrid, Pencil, Plus, Stethoscope, Trash2 } from 'lucide-react'
+import { FilePlus2, Gauge, History, LayoutGrid, Pencil, Plus, Stethoscope } from 'lucide-react'
 import type { Diagnosis } from '@/bindings/Diagnosis'
 import type { AgeGroup } from '@/bindings/AgeGroup'
 import type { Episode } from '@/bindings/Episode'
@@ -13,6 +13,7 @@ import type { Stage } from '@/bindings/Stage'
 import { Page, PageHeader } from '@/components/app-shell'
 import { ExportOutdatedBadge, StatusBadge, formatDate } from '@/components/bits'
 import { ConsentCard } from '@/components/consent-card'
+import { DeletePatient } from '@/components/delete-button'
 import { DiagnosisRows } from '@/components/diagnoses'
 import { PatientAvatar } from '@/components/patient-avatar'
 import { PatientFormDialog } from '@/components/patient-form'
@@ -20,17 +21,6 @@ import { PatientTimeline } from '@/components/patient-timeline'
 import { SessionDialog, type SessionDialogMode } from '@/components/session-dialog'
 import { usePrepareApplication } from '@/components/autopilot'
 import { useStartBericht } from '@/components/lotse/new-report'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -47,20 +37,10 @@ function PatientDetail() {
   const { patientId } = Route.useParams()
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const qc = useQueryClient()
   const patient = useQuery(q.patient(patientId))
   const photo = useQuery(q.patientPhoto(patientId))
   const episodes = useQuery(q.episodes(patientId))
   const [tab, setTab] = useState('overview')
-
-  const erase = useMutation({
-    mutationFn: () => api.erasePatient(patientId),
-    onSuccess: () => {
-      void qc.invalidateQueries()
-      void navigate({ to: '/patients' })
-    },
-    onError: (e) => toast.error(errorMessage(e)),
-  })
 
   if (!patient.data) return null
   const p = patient.data
@@ -90,25 +70,7 @@ function PatientDetail() {
                 </Button>
               }
             />
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="ghost" className="text-destructive">
-                  <Trash2 /> {t('patients.erase')}
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>{t('patients.erase')}</AlertDialogTitle>
-                  <AlertDialogDescription>{t('patients.eraseConfirm')}</AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
-                  <AlertDialogAction className="bg-destructive hover:bg-destructive/90" onClick={() => erase.mutate()}>
-                    {t('common.delete')}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+            <DeletePatient patientId={patientId} label onDeleted={() => void navigate({ to: '/patients' })} />
           </>
         }
       />

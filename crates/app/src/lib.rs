@@ -1697,6 +1697,11 @@ fn report_checklist(state: State<'_, AppState>, id: String) -> CmdResult<Vec<Che
 }
 
 #[tauri::command]
+fn report_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.with(|s| s.delete_report(&id))
+}
+
+#[tauri::command]
 fn report_sign(state: State<'_, AppState>, id: String, signed_by: String) -> CmdResult<Report> {
     if signed_by.trim().is_empty() {
         return Err(CmdError::Other("Name für die Unterschrift fehlt".into()));
@@ -4187,6 +4192,7 @@ pub fn run() {
             report_save_section,
             report_checklist,
             report_sign,
+            report_delete,
             report_add_addendum,
             report_export,
             report_preview,

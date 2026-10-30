@@ -34,6 +34,7 @@ import { SectionsStep } from '@/components/lotse/sections-step'
 import { CheckStep } from '@/components/lotse/check-step'
 import { FinishStep } from '@/components/lotse/finish-step'
 import { Page, PageHeader } from '@/components/app-shell'
+import { DeleteReport } from '@/components/delete-button'
 import { StatusBadge, Stepper, StickyActionBar, formatDate, stepStates } from '@/components/bits'
 import { useReportExport, type ExportFormat } from '@/components/report-export'
 import { ReportDocument, type DocumentFrame } from '@/components/report-document'
@@ -404,13 +405,16 @@ function ReportEditor({ view }: { view: ReportView }) {
           </span>
         }
         actions={
-          !readOnly && (
-            <Button asChild variant="outline" size="sm">
-              <Link to="/reports/$reportId/werkstatt" params={{ reportId: report.id }} data-testid="open-workshop">
-                <Mic /> {t('workshop.open')}
-              </Link>
-            </Button>
-          )
+          <>
+            {!readOnly && (
+              <Button asChild variant="outline" size="sm">
+                <Link to="/reports/$reportId/werkstatt" params={{ reportId: report.id }} data-testid="open-workshop">
+                  <Mic /> {t('workshop.open')}
+                </Link>
+              </Button>
+            )}
+            {!isNote && <DeleteReport report={report} label onDeleted={() => void navigate({ to: '/reports' })} />}
+          </>
         }
       />
       <Page>

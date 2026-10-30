@@ -6,6 +6,7 @@ import { LayoutGrid, Plus, Rows3, Search, Users } from 'lucide-react'
 import type { PatientCard } from '@/bindings/PatientCard'
 import { Page, PageHeader } from '@/components/app-shell'
 import { EmptyState, FilterChip, formatDate } from '@/components/bits'
+import { DeletePatient } from '@/components/delete-button'
 import { PatientAvatar } from '@/components/patient-avatar'
 import { PatientFormDialog } from '@/components/patient-form'
 import { Badge } from '@/components/ui/badge'
@@ -195,51 +196,56 @@ function PatientTile({ card, now }: { card: PatientCard; now: Date }) {
   const p = card.patient
   const [main, ...more] = card.diagnoses
   return (
-    <Link
-      to="/patients/$patientId"
-      params={{ patientId: p.id }}
-      className="group rounded-xl focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-      data-testid="patient-card"
-    >
-      <Card className="h-full gap-0 py-0 transition-shadow group-hover:shadow-md">
-        <CardContent className="flex gap-4 px-5 pt-5 pb-4">
-          <PatientAvatar patientId={p.id} hasPhoto={card.has_photo} firstName={p.first_name} lastName={p.last_name} className="size-20 text-2xl" />
-          <div className="min-w-0 space-y-1">
-            <div className="truncate font-serif text-lg leading-tight">
-              {p.first_name} {p.last_name}
+    <div className="group/tile relative">
+      <Link
+        to="/patients/$patientId"
+        params={{ patientId: p.id }}
+        className="group block h-full rounded-xl focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        data-testid="patient-card"
+      >
+        <Card className="h-full gap-0 py-0 transition-shadow group-hover:shadow-md">
+          <CardContent className="flex gap-4 px-5 pt-5 pb-4">
+            <PatientAvatar patientId={p.id} hasPhoto={card.has_photo} firstName={p.first_name} lastName={p.last_name} className="size-20 text-2xl" />
+            <div className="min-w-0 space-y-1">
+              <div className="truncate font-serif text-lg leading-tight">
+                {p.first_name} {p.last_name}
+              </div>
+              {p.chiffre && <div className="font-mono text-xs tracking-wide text-primary">{p.chiffre}</div>}
+              <div className="text-sm text-muted-foreground">{ageGender(card, now, t) || ' '}</div>
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {card.method && (
+                  <Badge variant="outline" className="border-primary/40 text-primary">
+                    {card.method}
+                  </Badge>
+                )}
+                {main && (
+                  <Badge variant="secondary" className="font-mono" title={main.label}>
+                    {main.code}
+                    {main.certainty !== 'G' ? ` ${main.certainty}` : ''}
+                  </Badge>
+                )}
+                {more.length > 0 && <Badge variant="secondary">+{more.length}</Badge>}
+              </div>
             </div>
-            {p.chiffre && <div className="font-mono text-xs tracking-wide text-primary">{p.chiffre}</div>}
-            <div className="text-sm text-muted-foreground">{ageGender(card, now, t) || ' '}</div>
-            <div className="flex flex-wrap gap-1.5 pt-1">
-              {card.method && (
-                <Badge variant="outline" className="border-primary/40 text-primary">
-                  {card.method}
-                </Badge>
+          </CardContent>
+          <div className="mt-auto flex items-center justify-between gap-2 border-t px-5 py-3 text-sm">
+            <span className="truncate text-muted-foreground">
+              {card.next_at ? (
+                <>
+                  {t('patients.nextSession')}: <span className="text-foreground">{shortWhen(card.next_at)}</span>
+                </>
+              ) : (
+                t('patients.noSession')
               )}
-              {main && (
-                <Badge variant="secondary" className="font-mono" title={main.label}>
-                  {main.code}
-                  {main.certainty !== 'G' ? ` ${main.certainty}` : ''}
-                </Badge>
-              )}
-              {more.length > 0 && <Badge variant="secondary">+{more.length}</Badge>}
-            </div>
+            </span>
+            {card.open_items > 0 && <OpenDot count={card.open_items} />}
           </div>
-        </CardContent>
-        <div className="mt-auto flex items-center justify-between gap-2 border-t px-5 py-3 text-sm">
-          <span className="truncate text-muted-foreground">
-            {card.next_at ? (
-              <>
-                {t('patients.nextSession')}: <span className="text-foreground">{shortWhen(card.next_at)}</span>
-              </>
-            ) : (
-              t('patients.noSession')
-            )}
-          </span>
-          {card.open_items > 0 && <OpenDot count={card.open_items} />}
-        </div>
-      </Card>
-    </Link>
+        </Card>
+      </Link>
+      <div className="absolute top-2 right-2 opacity-0 transition-opacity group-hover/tile:opacity-100 focus-within:opacity-100">
+        <DeletePatient patientId={p.id} />
+      </div>
+    </div>
   )
 }
 
@@ -276,6 +282,7 @@ function PatientTable({ cards, now }: { cards: PatientCard[]; now: Date }) {
               <TableHead>{t('episodes.diagnoses')}</TableHead>
               <TableHead>{t('patients.nextSession')}</TableHead>
               <TableHead className="text-right">{t('patients.openColumn')}</TableHead>
+              <TableHead className="w-10" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -300,6 +307,9 @@ function PatientTable({ cards, now }: { cards: PatientCard[]; now: Date }) {
                   <TableCell className="font-mono text-xs">{c.diagnoses.map((d) => d.code).join(', ') || '—'}</TableCell>
                   <TableCell>{c.next_at ? shortWhen(c.next_at) : '—'}</TableCell>
                   <TableCell className="text-right tabular-nums">{c.open_items || '—'}</TableCell>
+                  <TableCell className="py-0 text-right">
+                    <DeletePatient patientId={p.id} />
+                  </TableCell>
                 </TableRow>
               )
             })}

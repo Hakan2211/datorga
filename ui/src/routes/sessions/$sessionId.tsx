@@ -38,6 +38,7 @@ import {
 } from '@/components/bits'
 import { useReportExport } from '@/components/report-export'
 import { invalidateSessions } from '@/components/session-dialog'
+import { DeleteSession } from '@/components/delete-button'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -96,6 +97,7 @@ function summaryReady({ session, sources }: SessionView) {
 function SessionPage() {
   const { sessionId } = Route.useParams()
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const view = useQuery(q.session(sessionId))
   const recording = useQuery(q.recording())
   const prep = useQuery(q.prep(sessionId))
@@ -120,15 +122,16 @@ function SessionPage() {
           </span>
         }
         actions={
-          session.status !== 'cancelled' &&
-          session.note_status !== 'signed' &&
-          session.note_status !== 'exported' && (
-            <Button asChild size="sm" variant="outline">
-              <Link to="/sessions/$sessionId/werkstatt" params={{ sessionId: session.id }} data-testid="open-workshop">
-                <Mic /> {t('workshop.open')}
-              </Link>
-            </Button>
-          )
+          <>
+            {session.status !== 'cancelled' && session.note_status !== 'signed' && session.note_status !== 'exported' && (
+              <Button asChild size="sm" variant="outline">
+                <Link to="/sessions/$sessionId/werkstatt" params={{ sessionId: session.id }} data-testid="open-workshop">
+                  <Mic /> {t('workshop.open')}
+                </Link>
+              </Button>
+            )}
+            <DeleteSession session={session} label onDeleted={() => void navigate({ to: '/sessions' })} />
+          </>
         }
       />
       <Page className="flex-1">

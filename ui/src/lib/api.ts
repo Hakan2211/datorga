@@ -534,6 +534,7 @@ export const api = {
 
   reports: (status?: ReportStatus) => invoke<ReportSummary[]>('reports_list', { status: status ?? null }),
   report: (id: string) => invoke<ReportView>('report_get', { id }),
+  deleteReport: (id: string) => invoke<void>('report_delete', { id }),
   saveSection: (id: string, key: string, body: string) => invoke<void>('report_save_section', { id, key, body }),
   setSectionNotRelevant: (id: string, key: string, on: boolean) =>
     invoke<Report>('report_section_not_relevant', { id, key, on }),

@@ -7,8 +7,9 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { format } from 'date-fns'
 import { de } from 'date-fns/locale'
-import { CalendarDays, Trash2, Undo2, XCircle } from 'lucide-react'
+import { CalendarDays, Undo2, XCircle } from 'lucide-react'
 import type { Session } from '@/bindings/Session'
+import { DeleteSession } from '@/components/delete-button'
 import { Button } from '@/components/ui/button'
 import { Calendar } from '@/components/ui/calendar'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -26,8 +27,8 @@ export type SessionDialogMode =
   | { kind: 'create'; at?: Date; patientId?: string }
   | {
       kind: 'edit'
-      session: Pick<Session, 'id' | 'scheduled_at' | 'started_at' | 'planned_minutes' | 'modality' | 'status'>
-      /** Has a recording or a note: it can still move, but not be cancelled or deleted. */
+      session: Pick<Session, 'id' | 'scheduled_at' | 'started_at' | 'planned_minutes' | 'modality' | 'status' | 'note_status'>
+      /** Has a recording or a note: it can still move, but not be cancelled; deleting asks more firmly. */
       documented?: boolean
     }
 
@@ -75,7 +76,6 @@ function SessionForm({ mode, close, openAfterCreate }: { mode: SessionDialogMode
   const [dayOpen, setDayOpen] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [reason, setReason] = useState('')
-  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const minute = parseTime(time)
   const start = () => atMinute(day, minute ?? 0)
@@ -125,15 +125,10 @@ function SessionForm({ mode, close, openAfterCreate }: { mode: SessionDialogMode
     onSuccess: done,
     onError: (e) => toast.error(errorMessage(e)),
   })
-  const remove = useMutation({
-    mutationFn: () => api.deleteSession(editing!.id),
-    onSuccess: done,
-    onError: (e) => toast.error(errorMessage(e)),
-  })
 
   const cancelled = editing?.status === 'cancelled'
   const documented = mode.kind === 'edit' && !!mode.documented
-  const busy = save.isPending || cancel.isPending || reopen.isPending || remove.isPending
+  const busy = save.isPending || cancel.isPending || reopen.isPending
 
   if (cancelling) {
     return (
@@ -298,20 +293,7 @@ function SessionForm({ mode, close, openAfterCreate }: { mode: SessionDialogMode
               <Undo2 /> {t('calendar.reopen')}
             </Button>
           )}
-          {editing && !documented && (
-            <Button
-              variant="ghost"
-              size={confirmDelete ? 'default' : 'icon'}
-              className={confirmDelete ? 'text-destructive' : undefined}
-              onClick={() => (confirmDelete ? remove.mutate() : setConfirmDelete(true))}
-              disabled={busy}
-              title={t('calendar.deleteHint')}
-              aria-label={t('calendar.delete')}
-              data-testid="session-delete"
-            >
-              <Trash2 /> {confirmDelete && t('calendar.deleteConfirm')}
-            </Button>
-          )}
+          {editing && <DeleteSession session={editing} documented={documented} onDeleted={close} />}
         </div>
         <Button onClick={() => save.mutate()} disabled={busy || (!editing && !patientId) || minute === null} data-testid="session-save">
           {editing ? t('common.save') : count === '1' ? t('calendar.create') : t('calendar.createSeries', { count: Number(count) })}

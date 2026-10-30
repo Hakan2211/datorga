@@ -91,6 +91,9 @@ export const de = {
     open: 'Öffnen',
     close: 'Schließen',
     back: 'Zurück',
+    deleted: 'Gelöscht',
+    retention:
+      'Das Dokument ist unterschrieben. Die Behandlungsdokumentation ist 10 Jahre aufzubewahren (§ 630f BGB): löschen Sie es nur, wenn es eine Kopie gibt oder es irrtümlich angelegt wurde.',
   },
   privacy: {
     encrypted: 'Datenbank verschlüsselt',
@@ -339,6 +342,10 @@ export const de = {
     emptyTitle: 'Noch keine Sitzungen',
     emptyBody: 'Planen Sie die erste Sitzung im Kalender. Danach führt diese Liste Sie durch Aufnahme, Prüfung und Notiz.',
     toCalendar: 'Zum Kalender',
+    delete: 'Sitzung löschen',
+    deleteText:
+      'Die Sitzung wird mit allem gelöscht, was dazugehört: Aufnahmen, Abschriften, Sitzungsnotiz, Fakten, Vorbereitung und Zusammenfassung. Texte, die schon in einem Bericht stehen, bleiben dort. Das lässt sich nicht rückgängig machen.',
+    deleteEmptyText: 'Der Termin wird aus dem Kalender gelöscht.',
   },
   reports: {
     view: 'Ansicht',
@@ -358,6 +365,9 @@ export const de = {
     emptyBody:
       'Ein Bericht entsteht mit einem Antrag im Behandlungsfall der Patient:in. Wenn das Kontingent zur Neige geht, schlägt thera den Antrag hier vor.',
     toPatients: 'Zu den Patient:innen',
+    delete: 'Bericht löschen',
+    deleteText:
+      'Der Bericht wird mit seinem Antrag gelöscht, samt Entwürfen, Antworten und Prüfung. Die Sitzungen und ihre Notizen bleiben. Das lässt sich nicht rückgängig machen.',
     new: 'Neuer Bericht',
   },
   lotse: {
@@ -572,9 +582,6 @@ export const de = {
     reason: 'Grund (optional)',
     reasonPlaceholder: 'z. B. krank, kurzfristig abgesagt, Ausfall',
     reopen: 'Wieder planen',
-    delete: 'Termin löschen',
-    deleteHint: 'Nur für versehentlich angelegte Termine ohne Aufnahme, Notiz und Vorbereitung',
-    deleteConfirm: 'Wirklich löschen',
     sessionNo: 'Sitzung {{n}}',
     hasPrep: 'Vorbereitung vorhanden',
     moving: 'Wird verschoben…',
