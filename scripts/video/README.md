@@ -1,12 +1,12 @@
 # Erklärvideo aufnehmen
 
-`record.mjs` nimmt „thera in 5 Minuten“ in der Demo-Praxis auf. Storyboard und Sprechertexte stehen in `docs/video/skript.md`, die Klicks je Einstellung in `shots.mjs`.
+`record.mjs` nimmt „Theralo in 5 Minuten“ in der Demo-Praxis auf. Storyboard und Sprechertexte stehen in `docs/video/skript.md`, die Klicks je Einstellung in `shots.mjs`.
 
 ```
 cd scripts/video
 npm install
 node record.mjs --dry            # ohne Stimme und Aufnahme: ein Bild je Einstellung in out/dry/
-node record.mjs                  # out/thera-in-5-minuten.mp4 + .de.vtt
+node record.mjs                  # out/theralo-in-5-minuten.mp4 + .de.vtt
 node record.mjs --voice sage     # andere OpenAI-Stimme
 node record.mjs --dry --until fakten   # hält nach der Einstellung an, thera bleibt offen (CDP :9333)
 ```

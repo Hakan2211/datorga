@@ -1,8 +1,8 @@
-# Video: thera in 5 Minuten
+# Video: Theralo in 5 Minuten
 
 Erklärvideo für die Hilfe (`VIDEO_URL` in `ui/src/lib/help.ts`) und den letzten Schritt des Rundgangs. Aufgenommen wird nur in der Demo-Praxis: alle Personen und Inhalte sind erfunden.
 
-**Aufnahme:** `scripts/video/record.mjs` (siehe `scripts/video/README.md`) liest die Sprechertexte unten, lässt sie per OpenAI-Sprachausgabe sprechen, klickt die Demo-Praxis über CDP durch und baut daraus `scripts/video/out/thera-in-5-minuten.mp4` (1920 × 1080) und Untertitel (`.vtt`). Die Länge jeder Einstellung richtet sich nach ihrem Sprechertext. Wer einen Text ändert, nimmt neu auf; nur geänderte Texte werden neu vertont.
+**Aufnahme:** `scripts/video/record.mjs` (siehe `scripts/video/README.md`) liest die Sprechertexte unten, lässt sie per OpenAI-Sprachausgabe sprechen, klickt die Demo-Praxis über CDP durch und baut daraus `scripts/video/out/theralo-in-5-minuten.mp4` (1920 × 1080) und Untertitel (`.vtt`). Die Länge jeder Einstellung richtet sich nach ihrem Sprechertext. Wer einen Text ändert, nimmt neu auf; nur geänderte Texte werden neu vertont.
 
 **Format dieser Datei** (das Skript liest es): `## Kapitel` gruppiert, `### <id> · Titel` ist eine Einstellung, Zeilen mit `> ` sind der Sprechertext, `Bild:` beschreibt, was zu sehen ist. Die Kapitel folgen den Hilfe-Artikeln.
 
@@ -11,8 +11,8 @@ Stimme: `coral` (warm, weiblich), Modell `gpt-4o-mini-tts`, ruhiges Tempo. Gesam
 ## 1 · Erste Schritte
 
 ### intro · Willkommen
-Bild: Titelkarte „thera in 5 Minuten“, dann „Heute“ der Demo-Praxis mit dem gelben Demo-Hinweis.
-> thera hilft Ihnen, Sitzungen zu dokumentieren und Berichte an die Gutachterin oder den Gutachter zu schreiben. Was Sie hier sehen, ist die Demo-Praxis: Alle Personen sind erfunden. Ihre echten Daten liegen verschlüsselt auf Ihrem Rechner.
+Bild: Titelkarte „Theralo in 5 Minuten“, dann „Heute“ der Demo-Praxis mit dem gelben Demo-Hinweis.
+> Theralo hilft Ihnen, Sitzungen zu dokumentieren und Berichte an die Gutachterin oder den Gutachter zu schreiben. Was Sie hier sehen, ist die Demo-Praxis: Alle Personen sind erfunden. Ihre echten Daten liegen verschlüsselt auf Ihrem Rechner.
 
 ### heute · Heute
 Bild: Maus über den Termin des Tages, die Aufgaben und die Karte „Fällig“.
@@ -44,11 +44,11 @@ Bild: Klick auf „Beenden“, die Abschrift startet von selbst.
 
 ### pruefen · Abschrift prüfen
 Bild: Sitzung von Jonas Albrecht von gestern, Abschrift mit Therapeut/in und Patient/in, langsam scrollen.
-> Danach übernimmt der Autopilot. Ihre Aufgabe ist nur, die Abschrift zu prüfen. thera trennt die Sprecher, und Sie korrigieren, wo nötig.
+> Danach übernimmt der Autopilot. Ihre Aufgabe ist nur, die Abschrift zu prüfen. Theralo trennt die Sprecher, und Sie korrigieren, wo nötig.
 
 ### bestaetigen · Bestätigen
 Bild: Klick auf „Abschrift bestätigen“; die Schritte des Autopiloten haken sich nacheinander ab.
-> Sobald Sie bestätigen, legt thera die Sitzungsnotiz an, schlägt Fakten vor und schreibt eine kurze Zusammenfassung. Das läuft im Hintergrund, Sie können weiterarbeiten.
+> Sobald Sie bestätigen, legt Theralo die Sitzungsnotiz an, schlägt Fakten vor und schreibt eine kurze Zusammenfassung. Das läuft im Hintergrund, Sie können weiterarbeiten.
 
 ## 4 · Notiz & Fakten
 
@@ -64,11 +64,11 @@ Bild: Alle übernehmen, nach unten zu „Signieren“.
 
 ### board · Berichte
 Bild: „Berichte“ als Board, Hinweis „bald fällig“ oben, die Karte von Lena Sommer.
-> Unter Berichte sehen Sie alle Anträge als Board, vom Entwurf bis zum Export. thera rechnet mit, wann das Kontingent endet, und erinnert Sie rechtzeitig.
+> Unter Berichte sehen Sie alle Anträge als Board, vom Entwurf bis zum Export. Theralo rechnet mit, wann das Kontingent endet, und erinnert Sie rechtzeitig.
 
 ### entwurf · KI-Entwurf
 Bild: Umwandlungsantrag von Lena Sommer öffnen (Schritt „Abschnitte“), „Leere Abschnitte entwerfen“, die Vorschau des ausgehenden Texts, „Senden und entwerfen“, zwei Sätze übernehmen.
-> Der Bericht-Lotse führt Sie Schritt für Schritt. Die KI entwirft leere Abschnitte aus Ihren signierten Notizen; vorher zeigt thera, welcher Text den Rechner verlässt. Sie gehen die Vorschläge Satz für Satz durch. Diagnosen und Medikation trägt die KI nie ein.
+> Der Bericht-Lotse führt Sie Schritt für Schritt. Die KI entwirft leere Abschnitte aus Ihren signierten Notizen; vorher zeigt Theralo, welcher Text den Rechner verlässt. Sie gehen die Vorschläge Satz für Satz durch. Diagnosen und Medikation trägt die KI nie ein.
 
 ### gutachter · Prüfen und Export
 Bild: Schritt „Prüfen“, „Mit KI prüfen“, „Bericht prüfen lassen“, ein Hinweis „Ein Gutachter würde fragen …“, dann „Weiter: Unterschreiben“, Maus über den PDF-Export.
@@ -78,7 +78,7 @@ Bild: Schritt „Prüfen“, „Mit KI prüfen“, „Bericht prüfen lassen“,
 
 ### gesendet · Was wurde gesendet?
 Bild: Zurück zur Sitzung von Jonas Albrecht, „Was wurde gesendet?“ öffnen, der pseudonymisierte Text.
-> Bevor ein Text an einen KI-Dienst geht, ersetzt thera Namen, Orte und Daten durch Platzhalter. Unter „Was wurde gesendet?“ sehen Sie genau, was Ihren Rechner verlassen hat.
+> Bevor ein Text an einen KI-Dienst geht, ersetzt Theralo Namen, Orte und Daten durch Platzhalter. Unter „Was wurde gesendet?“ sehen Sie genau, was Ihren Rechner verlassen hat.
 
 ## 7 · KI-Anbieter & Kosten
 
@@ -88,7 +88,7 @@ Bild: Hilfe-Artikel „KI-Anbieter & Kosten“, die Anleitung „OpenRouter einr
 
 ### kosten · Kosten
 Bild: Einstellungen, Karte „KI-Kosten & Guthaben“.
-> Was die KI kostet, sehen Sie in den Einstellungen, nach Aufgabe und nach Modell. Wird das Guthaben knapp, warnt thera rechtzeitig.
+> Was die KI kostet, sehen Sie in den Einstellungen, nach Aufgabe und nach Modell. Wird das Guthaben knapp, warnt Theralo rechtzeitig.
 
 ## 8 · Datensicherung & Notfall-Kit
 

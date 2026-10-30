@@ -3,7 +3,7 @@
 
 export const SHOTS = {
   async intro(d) {
-    await d.card('thera in 5 Minuten', 'Demo-Praxis · alle Personen sind erfunden')
+    await d.card('Theralo in 5 Minuten', 'Demo-Praxis · alle Personen sind erfunden')
     await d.wait(3500)
     await d.hideCard()
     await d.wait(1200)
@@ -20,7 +20,7 @@ export const SHOTS = {
   async kalender(d) {
     await d.nav('Kalender')
     await d.wait(800)
-    await d.hover(d.page.getByText('S140391').first(), 1600)
+    await d.hover(d.page.getByText('Lena Sommer', { exact: true }).first(), 1600)
     await d.click(d.page.getByTestId('calendar-view').getByText('Monat', { exact: true }))
     await d.wait(1000)
   },
@@ -179,7 +179,7 @@ export const SHOTS = {
     await d.nav('Heute')
     await d.hover(d.page.getByRole('button', { name: 'Demo verlassen' }), 1500)
     await d.untilVoiceEnds(0)
-    await d.card('thera', 'Hilfe und Rundgang finden Sie jederzeit in der App.')
+    await d.card('Theralo', 'Hilfe und Rundgang finden Sie jederzeit in der App.')
     await d.wait(3000)
   },
 }

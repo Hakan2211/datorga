@@ -1,6 +1,6 @@
 // Records the explainer video (slice 35) on the Demo-Praxis.
 //
-//   node record.mjs            voice-over + recording → out/thera-in-5-minuten.mp4 (+ .vtt)
+//   node record.mjs            voice-over + recording → out/theralo-in-5-minuten.mp4 (+ .vtt)
 //   node record.mjs --dry      no voice, no recording: runs the shots, one screenshot each (out/dry/)
 //   node record.mjs --voice sage --keep
 //
@@ -26,7 +26,7 @@ const ROOT = path.resolve(HERE, '../..')
 const OUT = path.join(HERE, 'out')
 const SKRIPT = path.join(ROOT, 'docs/video/skript.md')
 const APP = path.join(ROOT, 'target/debug/thera-app.exe')
-const NAME = 'thera-in-5-minuten'
+const NAME = 'theralo-in-5-minuten'
 const CDP_PORT = 9333
 /** CSS pixels; with the scale factor the frames are 1920 × 1080. */
 const VIEW = { width: 1280, height: 720, scale: 1.5 }

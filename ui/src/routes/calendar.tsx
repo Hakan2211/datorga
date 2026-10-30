@@ -384,7 +384,7 @@ function EventBlock({ s, minute, dragging }: { s: CalendarSession; minute: numbe
       )}
     >
       <span className="font-medium tabular-nums">{time}</span>
-      <span className="truncate font-mono">{s.chiffre ?? s.patient_name}</span>
+      <span className="truncate">{s.patient_name}</span>
       <span className="absolute top-1.5 right-1.5 flex items-center gap-1">
         {s.modality === 'video' && <Video className="size-3" />}
         {state === 'signed' && <Check className="size-3.5" />}
@@ -485,7 +485,7 @@ function MonthGrid({ anchor, sessions, onDay }: { anchor: Date; sessions: Calend
                     className={cn('flex w-full items-center gap-1 truncate rounded border px-1.5 py-0.5 text-[11px]', blockStyle[state])}
                   >
                     <span className="tabular-nums">{format(sessionStart(s)!, 'HH:mm')}</span>
-                    <span className="truncate font-mono">{s.chiffre ?? s.patient_name}</span>
+                    <span className="truncate">{s.patient_name}</span>
                   </button>
                 )
               })}
