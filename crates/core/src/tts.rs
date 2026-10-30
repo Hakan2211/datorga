@@ -163,7 +163,7 @@ pub fn speak(ep: &Endpoint, model: &str, voice: &str, text: &Pseudonymized<Strin
 /// A fixed German sentence (no patient data) to try a voice in Settings.
 pub fn sample(ep: &Endpoint, model: &str, voice: &str) -> Result<Speech> {
     let mut p = Pseudonymizer::new(Dictionary::new());
-    let text = p.pseudonymize("Guten Tag. So klingt die Vorlesestimme in thera.")?;
+    let text = p.pseudonymize("Guten Tag. So klingt die Vorlesestimme in Theralo.")?;
     speak(ep, model, voice, &text)
 }
 

@@ -4,12 +4,12 @@ summary: Anbieter einrichten, Modelle wählen, Guthaben im Blick
 order: 7
 keywords: openrouter, requesty, openai, api-schlüssel, schlüssel, modell, kosten, guthaben, aufladen, lokal, zdr
 ---
-Für Fakten, Zusammenfassungen und Berichtsentwürfe braucht thera ein KI-Modell. Sie wählen es unter [Einstellungen → KI & Kosten](/settings/ki).
+Für Fakten, Zusammenfassungen und Berichtsentwürfe braucht Theralo ein KI-Modell. Sie wählen es unter [Einstellungen → KI & Kosten](/settings/ki).
 
 ## Anbieter
 
-- **OpenRouter** oder **Requesty**: viele Modelle über einen eigenen Schlüssel. Sie zahlen nur, was Sie nutzen. Bei OpenRouter verwendet thera nur Endpunkte ohne Datenspeicherung (Zero Data Retention).
-- **Lokales Modell**: läuft auf diesem Computer, ohne Kosten und ohne dass Text hinausgeht. thera empfiehlt ein Modell passend zu Ihrer Hardware.
+- **OpenRouter** oder **Requesty**: viele Modelle über einen eigenen Schlüssel. Sie zahlen nur, was Sie nutzen. Bei OpenRouter verwendet Theralo nur Endpunkte ohne Datenspeicherung (Zero Data Retention).
+- **Lokales Modell**: läuft auf diesem Computer, ohne Kosten und ohne dass Text hinausgeht. Theralo empfiehlt ein Modell passend zu Ihrer Hardware.
 - **Eigener Endpunkt**: ein OpenAI-kompatibler Server Ihrer Wahl.
 - **OpenAI** wird nur für Sprache genutzt: Vorbereitung per Sprache und Vorlesen.
 
@@ -29,4 +29,4 @@ Die Karte **KI-Kosten & Guthaben** zeigt:
 - die Ausgaben dieses Monats, nach Aufgabe und nach Modell
 - den Verlauf der letzten 30 Tage
 
-Sinkt das Guthaben unter die eingestellte Schwelle (ab Werk 2 $), erscheint oben ein Hinweis. Requesty und OpenAI zeigen ihr Guthaben nur im Browser; thera verlinkt dorthin.
+Sinkt das Guthaben unter die eingestellte Schwelle (ab Werk 2 $), erscheint oben ein Hinweis. Requesty und OpenAI zeigen ihr Guthaben nur im Browser; Theralo verlinkt dorthin.

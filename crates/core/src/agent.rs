@@ -870,7 +870,7 @@ fn system_prompt(store: &Store, thread: &ChatThread, clock: &Clock) -> Result<St
         }
     };
     Ok(format!(
-        "Du bist der Assistent in thera, der Dokumentationssoftware einer psychotherapeutischen Praxis. \
+        "Du bist der Assistent in Theralo, der Dokumentationssoftware einer psychotherapeutischen Praxis. \
          Du hilfst der Therapeutin, sich zurechtzufinden, Termine und Aufgaben zu planen und Texte für Notizen und Berichte vorzubereiten.\n\
          {}\n\
          {scope}\n\

@@ -31,7 +31,7 @@ export function RecoveryKitPanel({
   const exportKit = useMutation({
     mutationFn: async () => {
       const path = await save({
-        defaultPath: `thera-Notfall-Kit-${new Date().toISOString().slice(0, 10)}.pdf`,
+        defaultPath: `Theralo-Notfall-Kit-${new Date().toISOString().slice(0, 10)}.pdf`,
         filters: [{ name: 'PDF', extensions: ['pdf'] }],
       })
       if (!path) return null

@@ -77,7 +77,7 @@ function CalendarPage() {
   const exportIcs = useMutation({
     mutationFn: async () => {
       const path = await save({
-        defaultPath: `thera-Termine-${localDate(from)}.ics`,
+        defaultPath: `Theralo-Termine-${localDate(from)}.ics`,
         filters: [{ name: 'iCalendar', extensions: ['ics'] }],
       })
       if (!path) return null

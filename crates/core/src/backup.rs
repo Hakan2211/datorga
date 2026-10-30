@@ -420,7 +420,7 @@ fn read_header<R: Read>(r: &mut R) -> Result<Header> {
 }
 
 fn not_a_backup() -> Error {
-    Error::Invalid("Keine thera-Datensicherung".into())
+    Error::Invalid("Keine Theralo-Datensicherung".into())
 }
 
 /// Per-backup payload key and the AAD shared by all chunks.

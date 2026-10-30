@@ -1,10 +1,10 @@
 ---
 title: Erste Schritte
-summary: thera in wenigen Minuten kennenlernen
+summary: Theralo in wenigen Minuten kennenlernen
 order: 1
 keywords: start, einrichten, überblick, demo, beispieldaten, rundgang
 ---
-Willkommen bei thera. thera hilft Ihnen, Sitzungen zu dokumentieren und Berichte an den Gutachter zu schreiben. Alle Daten bleiben verschlüsselt auf diesem Computer.
+Willkommen bei Theralo. Theralo hilft Ihnen, Sitzungen zu dokumentieren und Berichte an den Gutachter zu schreiben. Alle Daten bleiben verschlüsselt auf diesem Computer.
 
 ## In fünf Schritten zur ersten Notiz
 

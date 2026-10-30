@@ -218,7 +218,7 @@ impl Endpoint {
         };
         match self.provider {
             // OpenRouter attributes traffic to the app with these two headers (no user data).
-            ProviderId::Openrouter => req.header("HTTP-Referer", "https://datorga.de").header("X-Title", "thera"),
+            ProviderId::Openrouter => req.header("HTTP-Referer", "https://datorga.de").header("X-Title", "Theralo"),
             _ => req,
         }
     }

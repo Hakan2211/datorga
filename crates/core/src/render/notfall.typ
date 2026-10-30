@@ -1,7 +1,7 @@
 // Notfall-Kit (recovery kit). Data arrives as JSON in sys.inputs.data (see render/mod.rs: RecoveryKit).
 #let d = json(bytes(sys.inputs.data))
 
-#set document(title: "thera – Notfall-Kit")
+#set document(title: "Theralo – Notfall-Kit")
 #set page(paper: "a4", margin: (x: 2.2cm, top: 2.2cm, bottom: 2cm),
   footer: context {
     set text(8pt, fill: luma(110))
@@ -12,7 +12,7 @@
 #show heading: set text(12pt)
 #show heading: set block(above: 1.3em, below: 0.6em)
 
-#text(18pt, weight: "bold")[Notfall-Kit für thera]
+#text(18pt, weight: "bold")[Notfall-Kit für Theralo]
 #v(-0.3em)
 #text(10.5pt, fill: luma(70))[Wiederherstellungsschlüssel für die verschlüsselte Praxisdatenbank]
 
@@ -33,19 +33,19 @@
   [*Erstellt am*], [#d.created],
   [*Anlass*], [#d.reason],
   [*Computer*], [#d.device],
-  [*Programm*], [thera #d.app_version],
+  [*Programm*], [Theralo #d.app_version],
   [*Datenordner*], [#text(font: "DejaVu Sans Mono", size: 8.5pt)[#d.data_dir]],
   [*Aufbewahrungsort*], [#box(width: 1fr, stroke: (bottom: 0.5pt + luma(120)), height: 1em)],
 )
 
 = Wann brauchen Sie diesen Schlüssel?
-- *Schlüsselbund verloren:* Der Schlüssel zur Datenbank liegt in der Windows-Anmeldeinformationsverwaltung dieses Benutzerkontos. Fehlt er dort (nach einer Neuinstallation von Windows, mit einem neuen Benutzerkonto oder nach dem Löschen gespeicherter Anmeldeinformationen), meldet thera beim Start *„Wiederherstellung erforderlich“*.
+- *Schlüsselbund verloren:* Der Schlüssel zur Datenbank liegt in der Windows-Anmeldeinformationsverwaltung dieses Benutzerkontos. Fehlt er dort (nach einer Neuinstallation von Windows, mit einem neuen Benutzerkonto oder nach dem Löschen gespeicherter Anmeldeinformationen), meldet Theralo beim Start *„Wiederherstellung erforderlich“*.
 - *Neuer Computer:* Ihre Datensicherungen (`.therabak`) sind mit diesem Schlüssel geschützt.
 
 = So stellen Sie die Daten wieder her
-*Datenordner noch vorhanden:* Starten Sie thera, geben Sie auf dem Bildschirm „Wiederherstellung erforderlich“ den Schlüssel oben ein und klicken Sie auf „Wiederherstellen“. thera legt den Schlüssel wieder im Schlüsselbund ab.
+*Datenordner noch vorhanden:* Starten Sie Theralo, geben Sie auf dem Bildschirm „Wiederherstellung erforderlich“ den Schlüssel oben ein und klicken Sie auf „Wiederherstellen“. Theralo legt den Schlüssel wieder im Schlüsselbund ab.
 
-*Aus einer Datensicherung:* Installieren Sie thera, wählen Sie beim ersten Start „Aus Datensicherung wiederherstellen“, dann die Datei (`.therabak`), und geben Sie den Schlüssel ein. Auf demselben Computer geht das auch unter _Einstellungen → Datensicherung_, dort ohne Schlüssel.
+*Aus einer Datensicherung:* Installieren Sie Theralo, wählen Sie beim ersten Start „Aus Datensicherung wiederherstellen“, dann die Datei (`.therabak`), und geben Sie den Schlüssel ein. Auf demselben Computer geht das auch unter _Einstellungen → Datensicherung_, dort ohne Schlüssel.
 
 Wird der Schlüssel abgelehnt, prüfen Sie, ob er vom *neuesten* Notfall-Kit stammt. Eine Sicherung, die nicht im Sicherungsordner lag, als ein neuer Schlüssel erstellt wurde, öffnet nur mit dem Kit, das zur Zeit der Sicherung galt.
 
@@ -53,4 +53,4 @@ Wird der Schlüssel abgelehnt, prüfen Sie, ob er vom *neuesten* Notfall-Kit sta
 - *Ohne diesen Schlüssel und ohne den Schlüsselbund sind die Daten unwiederbringlich verloren.* Niemand, auch nicht der Hersteller, kann sie dann noch öffnen.
 - Wer diesen Schlüssel *und* den Datenordner oder eine Datensicherung besitzt, kann alle Patientendaten lesen. Bewahren Sie das Blatt wie eine Patientenakte auf: ausgedruckt, getrennt vom Computer und von den Datensicherungen, zum Beispiel im Praxistresor.
 - Nicht fotografieren, nicht per E-Mail versenden, nicht in einer Cloud ablegen. Löschen Sie die PDF-Datei nach dem Ausdrucken.
-- Unter _Einstellungen → Sicherheit → Neuen Notfall-Schlüssel erstellen_ erzeugen Sie jederzeit einen neuen Schlüssel. Sicherungen im Sicherungsordner stellt thera dabei um. Bewahren Sie das alte Kit auf, solange Sie Sicherungen von anderen Orten noch brauchen.
+- Unter _Einstellungen → Sicherheit → Neuen Notfall-Schlüssel erstellen_ erzeugen Sie jederzeit einen neuen Schlüssel. Sicherungen im Sicherungsordner stellt Theralo dabei um. Bewahren Sie das alte Kit auf, solange Sie Sicherungen von anderen Orten noch brauchen.

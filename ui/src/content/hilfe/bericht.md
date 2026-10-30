@@ -4,7 +4,7 @@ summary: Vom Antrag zum unterschriebenen PTV-3-Bericht
 order: 5
 keywords: bericht, gutachter, ptv 3, fragen, lotse, medikation, ihre angabe, erstantrag, umwandlung, fortführung, vorbericht, entwurf, abschnitte, fokus, tastatur, fakten, prüfen, gutachter-check, unterschreiben, unsigniert, kontingent, export, pdf, docx, board
 ---
-Berichte an den Gutachter gehören zu einem Behandlungsfall. thera kennt Erstantrag, Umwandlungsantrag und Fortführungsantrag nach PTV 3.
+Berichte an den Gutachter gehören zu einem Behandlungsfall. Theralo kennt Erstantrag, Umwandlungsantrag und Fortführungsantrag nach PTV 3.
 
 Der **Bericht-Lotse** führt in fünf Schritten durch jeden Bericht: **Start · Fragen · Abschnitte · Prüfen · Fertig**. Jeder Schritt hat unten rechts genau eine nächste Aktion. Über die Schrittleiste springen Sie jederzeit vor oder zurück, und **Ganzes Dokument** (unten links) zeigt den ganzen Bericht zum freien Bearbeiten.
 
@@ -13,7 +13,7 @@ Der **Bericht-Lotse** führt in fünf Schritten durch jeden Bericht: **Start · 
 - Auf der Patientenseite wählen Sie im Behandlungsfall **Bericht anlegen**.
 - Oder Sie folgen dem Hinweis „… vorbereiten“ auf **Heute** bzw. unter **Berichte**, sobald das Kontingent knapp wird.
 - Die Diagnosen des Behandlungsfalls werden übernommen. Pflegen Sie sie deshalb dort.
-- Der Schritt **Start** zeigt die empfohlene Antragsart und je Abschnitt, was thera schon weiß.
+- Der Schritt **Start** zeigt die empfohlene Antragsart und je Abschnitt, was Theralo schon weiß.
 
 ## Vorbericht bei Umwandlung und Fortführung
 
@@ -21,11 +21,11 @@ Gibt es im Behandlungsfall schon einen unterschriebenen Bericht, nutzen die Entw
 
 ## Fragen vor dem Entwurf
 
-Was die Sitzungen nicht hergeben, etwa Medikation, Vorbehandlungen, Therapieziele, Setting oder Prognose, fragt thera im Schritt **Fragen** ab. Stichworte genügen. Sie können tippen, diktieren (Mikrofon im Feld) oder eine Schnellantwort wie „keine“ wählen.
+Was die Sitzungen nicht hergeben, etwa Medikation, Vorbehandlungen, Therapieziele, Setting oder Prognose, fragt Theralo im Schritt **Fragen** ab. Stichworte genügen. Sie können tippen, diktieren (Mikrofon im Feld) oder eine Schnellantwort wie „keine“ wählen.
 
 - Ihre Antworten gehen als **Ihre Angabe** in den Entwurf und sind dort am Satz zu sehen. Medikamente übernimmt der Entwurf so, wie Sie sie angeben.
 - **Mit KI prüfen** schaut nach, welche Fragen Ihre Sitzungsnotizen schon beantworten (pseudonymisiert, mit Vorschau). Diese Fragen werden eingeklappt; Sie können sie trotzdem selbst beantworten.
-- Nach Diagnosen fragt thera nie: die tragen Sie selbst ein.
+- Nach Diagnosen fragt Theralo nie: die tragen Sie selbst ein.
 - **Später** führt ohne Antworten weiter. Die Fragen bleiben offen und lassen sich jederzeit nachholen.
 
 ## Abschnitte: Satz für Satz
@@ -46,13 +46,13 @@ Der Schritt **Prüfen** sammelt in einer Liste, was vor der Unterschrift noch of
 - die Prüfungen der App: leere Pflichtabschnitte, Namen oder Geburtsdaten im Text, fehlende Chiffre, Umfang, und Diagnosen, die vom Behandlungsfall abweichen (**Übernehmen**);
 - auf Wunsch der **Gutachter-Check**: **Mit KI prüfen** schickt den Bericht pseudonymisiert (mit Vorschau) an Ihr KI-Modell. Es liest ihn wie ein Gutachter und nennt, was nachgefragt würde, etwa „Ein Gutachter würde fragen: Woran machen Sie die günstige Prognose fest?“. Den Text ändert der Check nie, und zu den Diagnosen sagt er nichts.
 
-**Zum Abschnitt** führt zurück in den Abschnitt, **Ignorieren** blendet einen Hinweis aus. Ändern Sie den Text danach, zeigt thera, dass der Check älter ist als der Text.
+**Zum Abschnitt** führt zurück in den Abschnitt, **Ignorieren** blendet einen Hinweis aus. Ändern Sie den Text danach, zeigt Theralo, dass der Check älter ist als der Text.
 
 ## Fertig: unterschreiben und exportieren
 
 - Links sehen Sie den Bericht so, wie er exportiert wird. Im Bericht steht die Chiffre, nicht der Name.
 - Rechts unterschreiben Sie mit Ihrem Namen (aus den Einstellungen vorbelegt). Das geht erst, wenn die Prüfung nichts Blockierendes mehr meldet. Danach ist der Bericht schreibgeschützt.
-- Export als PDF oder DOCX. Vor der Unterschrift ist der Export ein Entwurf: thera weist darauf hin und hängt „unsigniert“ an den Dateinamen.
+- Export als PDF oder DOCX. Vor der Unterschrift ist der Export ein Entwurf: Theralo weist darauf hin und hängt „unsigniert“ an den Dateinamen.
 
 ## Board und Fristen
 

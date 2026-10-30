@@ -1,5 +1,5 @@
 export const de = {
-  app: { name: 'thera', tagline: 'Dokumentation, die die Praxis nicht verlässt' },
+  app: { name: 'Theralo', tagline: 'Dokumentation, die die Praxis nicht verlässt' },
   nav: {
     dashboard: 'Heute',
     patients: 'Patient:innen',
@@ -104,9 +104,9 @@ export const de = {
     recoveryTitle: 'Ihr Notfall-Schlüssel',
     recoveryBody:
       'Mit diesem Schlüssel können Sie Ihre Daten wiederherstellen, falls der Schlüsselbund dieses Computers verloren geht. Er wird nur dieses eine Mal angezeigt. Speichern und drucken Sie das Notfall-Kit oder notieren Sie den Schlüssel, und bewahren Sie ihn sicher auf (nicht auf diesem Computer).',
-    welcomeTitle: 'Willkommen bei thera',
+    welcomeTitle: 'Willkommen bei Theralo',
     welcomeBody:
-      'Auf diesem Computer ist thera noch nicht eingerichtet. Richten Sie thera neu ein oder übernehmen Sie Ihre Daten aus einer Datensicherung.',
+      'Auf diesem Computer ist Theralo noch nicht eingerichtet. Richten Sie Theralo neu ein oder übernehmen Sie Ihre Daten aus einer Datensicherung.',
     newSetup: 'Neu einrichten',
     restoreHint:
       'Neuer Computer? Wählen Sie Ihre Datensicherung (.therabak). Dazu brauchen Sie Ihr Notfall-Kit.',
@@ -145,10 +145,10 @@ export const de = {
     reminderSetup: 'Sicherung einrichten',
     reminderLater: 'Später',
     restore: 'Aus Datensicherung wiederherstellen',
-    fileType: 'thera-Datensicherung',
-    pickedInfo: 'Datensicherung vom {{date}} (thera {{version}}).',
+    fileType: 'Theralo-Datensicherung',
+    pickedInfo: 'Datensicherung vom {{date}} (Theralo {{version}}).',
     replaceWarning:
-      'Alle Änderungen seit dieser Sicherung sind danach nicht mehr in thera sichtbar. Sie bleiben im verschobenen Ordner erhalten.',
+      'Alle Änderungen seit dieser Sicherung sind danach nicht mehr in Theralo sichtbar. Sie bleiben im verschobenen Ordner erhalten.',
     keyNeeded: 'Notfall-Schlüssel (vom Notfall-Kit, das zu dieser Sicherung gehört)',
     restoreNow: 'Wiederherstellen',
     restoring: 'Stelle wieder her…',
@@ -311,7 +311,7 @@ export const de = {
     stage: 'Phase',
     stageEdit: 'Phase ändern',
     stageHint:
-      'Die bewilligte Phase. Ab dem Beginn der Richtlinientherapie zählt thera die Sitzungen gegen das Kontingent und erinnert drei Sitzungen vor der Grenze an den nächsten Antrag. KZT-Sitzungen zählen bei der Umwandlung in die LZT mit.',
+      'Die bewilligte Phase. Ab dem Beginn der Richtlinientherapie zählt Theralo die Sitzungen gegen das Kontingent und erinnert drei Sitzungen vor der Grenze an den nächsten Antrag. KZT-Sitzungen zählen bei der Umwandlung in die LZT mit.',
     therapySince: 'Beginn der Richtlinientherapie (erste Sitzung nach der Probatorik)',
     contingent: '{{used}} von {{limit}} Sitzungen',
     probatorik: '{{used}} probatorische Sitzungen (höchstens {{limit}})',
@@ -363,7 +363,7 @@ export const de = {
     prepare: 'Bericht vorbereiten',
     emptyTitle: 'Noch keine Berichte',
     emptyBody:
-      'Ein Bericht entsteht mit einem Antrag im Behandlungsfall der Patient:in. Wenn das Kontingent zur Neige geht, schlägt thera den Antrag hier vor.',
+      'Ein Bericht entsteht mit einem Antrag im Behandlungsfall der Patient:in. Wenn das Kontingent zur Neige geht, schlägt Theralo den Antrag hier vor.',
     toPatients: 'Zu den Patient:innen',
     delete: 'Bericht löschen',
     deleteText:
@@ -373,7 +373,7 @@ export const de = {
   lotse: {
     step: { start: 'Start', fragen: 'Fragen', abschnitte: 'Abschnitte', pruefen: 'Prüfen', fertig: 'Fertig' },
     newTitle: 'Neuer Bericht',
-    newHint: 'Für welche Behandlung? thera schlägt die passende Antragsart vor.',
+    newHint: 'Für welche Behandlung? Theralo schlägt die passende Antragsart vor.',
     search: 'Patient:in suchen…',
     noCases: 'Keine offenen Behandlungsfälle. Ein Bericht gehört zu einem Behandlungsfall auf der Seite der Patient:in.',
     noMatch: 'Niemand gefunden.',
@@ -396,7 +396,7 @@ export const de = {
     priorOpen: 'Ansehen',
     noFactsYet: 'Noch keine übernommenen Fakten. Sie entstehen in den Sitzungsnotizen.',
     readiness: 'Bereitschaft',
-    readinessHint: 'Was thera für jeden Abschnitt schon weiß.',
+    readinessHint: 'Was Theralo für jeden Abschnitt schon weiß.',
     facts_one: '{{count}} Fakt',
     facts_other: '{{count}} Fakten',
     noFacts: 'keine Fakten',
@@ -649,9 +649,9 @@ export const de = {
     running: 'Aufnahme läuft',
     elsewhere: 'Es läuft bereits eine Aufnahme in einer anderen Sitzung.',
     goThere: 'Dorthin wechseln',
-    lowDiskNow: 'Speicherplatz fast erschöpft: thera beendet die Aufnahme gleich automatisch und speichert sie.',
+    lowDiskNow: 'Speicherplatz fast erschöpft: Theralo beendet die Aufnahme gleich automatisch und speichert sie.',
     lowDisk:
-      'Speicherplatz wird knapp: noch etwa {{minutes}} Minuten Aufnahme möglich. Danach beendet thera die Aufnahme automatisch und speichert sie.',
+      'Speicherplatz wird knapp: noch etwa {{minutes}} Minuten Aufnahme möglich. Danach beendet Theralo die Aufnahme automatisch und speichert sie.',
     silent: 'Kein Signal? Mikrofon und Windows-Datenschutzeinstellung „Mikrofonzugriff für Desktop-Apps“ prüfen.',
     sources: 'Aufnahmen',
     none: 'Noch keine Aufnahme.',
@@ -719,7 +719,7 @@ export const de = {
       recognized:
         'Ihre Stimme wurde erkannt. Stimmt die Zuordnung nicht, tauschen Sie die Sprecher oder ändern Sie einzelne Abschnitte.',
       unrecognized:
-        'Die Sprecher wurden getrennt, aber Ihre Stimme ist noch nicht bekannt. Wer davon sind Sie? thera merkt sich Ihre Stimme für die nächsten Aufnahmen.',
+        'Die Sprecher wurden getrennt, aber Ihre Stimme ist noch nicht bekannt. Wer davon sind Sie? Theralo merkt sich Ihre Stimme für die nächsten Aufnahmen.',
       isMe: '{{name}} bin ich',
       swap: 'Sprecher tauschen',
       learned: 'Zugeordnet',
@@ -1058,7 +1058,7 @@ export const de = {
     settingTitle: 'Autopilot nach der Sitzung',
     settingLabel: 'Arbeitsschritte nach der Sitzung automatisch ausführen',
     settingHint:
-      'Nach dem Stoppen einer Aufnahme startet die Transkription von selbst. Sobald Sie die Abschrift bestätigt haben, legt thera die Sitzungsnotiz an, schlägt Fakten vor und schreibt die Zusammenfassung. Bei einem Cloud-Anbieter gehen dafür nur pseudonymisierte Texte hinaus, ohne Vorschau jedes Mal; was gesendet wurde, können Sie danach ansehen. Übernehmen, Diagnosen und Unterschreiben bleiben immer bei Ihnen.',
+      'Nach dem Stoppen einer Aufnahme startet die Transkription von selbst. Sobald Sie die Abschrift bestätigt haben, legt Theralo die Sitzungsnotiz an, schlägt Fakten vor und schreibt die Zusammenfassung. Bei einem Cloud-Anbieter gehen dafür nur pseudonymisierte Texte hinaus, ohne Vorschau jedes Mal; was gesendet wurde, können Sie danach ansehen. Übernehmen, Diagnosen und Unterschreiben bleiben immer bei Ihnen.',
     queued: 'Wartet…',
     running: 'Läuft automatisch…',
     retry: 'Erneut versuchen',
@@ -1099,7 +1099,7 @@ export const de = {
     mgmt: {
       show: 'Guthaben hier anzeigen…',
       stored: 'Management-Schlüssel hinterlegt',
-      hint: 'OpenRouter gibt das Kontoguthaben nur mit einem Management-Schlüssel heraus. Er dient thera nur zum Anzeigen des Guthabens, nie für Anfragen. Er darf aber Schlüssel verwalten: legen Sie ihn nur an, wenn Sie die Anzeige wirklich möchten.',
+      hint: 'OpenRouter gibt das Kontoguthaben nur mit einem Management-Schlüssel heraus. Er dient Theralo nur zum Anzeigen des Guthabens, nie für Anfragen. Er darf aber Schlüssel verwalten: legen Sie ihn nur an, wenn Sie die Anzeige wirklich möchten.',
       create: 'Management-Schlüssel erstellen',
       label: 'Management-Schlüssel (nur für die Guthabenanzeige)',
       saved: 'Management-Schlüssel im Schlüsselbund gespeichert',
@@ -1156,7 +1156,7 @@ export const de = {
     credits: 'Guthaben aufladen',
     create: 'API-Schlüssel erstellen',
     paste: 'Schlüssel hier einfügen',
-    pasteHint: 'Kopieren Sie den Schlüssel (er wird nur einmal angezeigt) und fügen Sie ihn hier ein. thera speichert ihn im Schlüsselbund des Betriebssystems.',
+    pasteHint: 'Kopieren Sie den Schlüssel (er wird nur einmal angezeigt) und fügen Sie ihn hier ein. Theralo speichert ihn im Schlüsselbund des Betriebssystems.',
     pasteStored: 'Ein Schlüssel ist hinterlegt. Ein neuer ersetzt ihn.',
     test: 'Verbindung testen',
     testHint: 'Prüft den Schlüssel beim Anbieter. Dabei wird kein Text gesendet.',
@@ -1167,10 +1167,10 @@ export const de = {
       name: 'OpenRouter',
       signup: 'Mit E-Mail-Adresse oder Google-Konto registrieren.',
       credits: 'Unter „Credits“ z. B. 10 $ per Karte aufladen. Abgerechnet wird pro Anfrage; eine Sitzungsnotiz kostet meist wenige Cent.',
-      create: '„Create Key“, Name z. B. „thera“. Optional ein Monatslimit setzen: thera zeigt dann an, wie viel davon übrig ist.',
+      create: '„Create Key“, Name z. B. „Theralo“. Optional ein Monatslimit setzen: Theralo zeigt dann an, wie viel davon übrig ist.',
       ready: 'OpenRouter ist bereit. Wählen Sie unter „KI-Entwürfe“ ein Modell.',
       privacy:
-        'Nur pseudonymisierte Texte verlassen diesen Computer. thera verlangt bei jeder Anfrage Anbieter ohne Datenspeicherung (Zero Data Retention); gibt es für ein Modell keinen, schlägt die Anfrage fehl. Optional zusätzlich unter Settings → Privacy die ZDR-Pflicht für das ganze Konto einschalten.',
+        'Nur pseudonymisierte Texte verlassen diesen Computer. Theralo verlangt bei jeder Anfrage Anbieter ohne Datenspeicherung (Zero Data Retention); gibt es für ein Modell keinen, schlägt die Anfrage fehl. Optional zusätzlich unter Settings → Privacy die ZDR-Pflicht für das ganze Konto einschalten.',
     },
     requesty: {
       name: 'Requesty',
@@ -1184,11 +1184,11 @@ export const de = {
     openai: {
       name: 'OpenAI',
       signup: 'Auf platform.openai.com registrieren (ein ChatGPT-Abo ist nicht nötig und wird nicht genutzt).',
-      credits: 'Unter Billing Guthaben kaufen („Add to credit balance“), z. B. 10 $. Das Guthaben zeigt OpenAI nur dort, thera kann es nicht abrufen.',
+      credits: 'Unter Billing Guthaben kaufen („Add to credit balance“), z. B. 10 $. Das Guthaben zeigt OpenAI nur dort, Theralo kann es nicht abrufen.',
       create: 'Möglichst in einem Projekt mit Region Europa „Create new secret key“ wählen.',
       ready: 'OpenAI ist bereit für Vorlesen und Sitzungsvorbereitung.',
       privacy:
-        'OpenAI wird nur für Sprachfunktionen genutzt, nie für Entwürfe. Es ist ein US-Unternehmen; mit einem EU-Projekt und „EU-Datenresidenz“ in thera wird laut OpenAI in Europa ohne Datenspeicherung verarbeitet.',
+        'OpenAI wird nur für Sprachfunktionen genutzt, nie für Entwürfe. Es ist ein US-Unternehmen; mit einem EU-Projekt und „EU-Datenresidenz“ in Theralo wird laut OpenAI in Europa ohne Datenspeicherung verarbeitet.',
     },
   },
   settings: {
@@ -1251,7 +1251,7 @@ export const de = {
         chosen: 'Gewählt',
         custom: 'Gewählt ist ein eigenes Modell ({{model}}); dafür gibt es keine Schätzung.',
         footnote:
-          '* Schätzung bei 20 Sitzungen pro Woche und 2 Berichten im Monat, Preise von OpenRouter in US-Dollar (Stand 28.10.2026). Alle Modelle hier wurden mit thera getestet und speichern keine Daten.',
+          '* Schätzung bei 20 Sitzungen pro Woche und 2 Berichten im Monat, Preise von OpenRouter in US-Dollar (Stand 28.10.2026). Alle Modelle hier wurden mit Theralo getestet und speichern keine Daten.',
         spent: 'Abgerechnet diesen Monat: {{month}} ({{requests}} Anfragen) · insgesamt {{total}}',
       },
       modelPlaceholder: 'z. B. anthropic/claude-haiku-5.5',
@@ -1262,7 +1262,7 @@ export const de = {
       testOk: 'Verbindung steht: {{model}} ({{ms}} ms)',
       warning: {
         openrouter:
-          'OpenRouter ist ein US-Unternehmen. thera fordert bei jeder Anfrage nur Anbieter ohne Datenspeicherung an (Zero Data Retention); gibt es für das Modell keinen, schlägt die Anfrage fehl. Den EU-Endpunkt (eu.openrouter.ai) gibt es nur in Business-Tarifen.',
+          'OpenRouter ist ein US-Unternehmen. Theralo fordert bei jeder Anfrage nur Anbieter ohne Datenspeicherung an (Zero Data Retention); gibt es für das Modell keinen, schlägt die Anfrage fehl. Den EU-Endpunkt (eu.openrouter.ai) gibt es nur in Business-Tarifen.',
         requesty:
           'Requesty ist ein US-Unternehmen; der voreingestellte EU-Endpunkt verarbeitet in Frankfurt. Schalten Sie für den Schlüssel das Protokollieren von Anfragen ab und wählen Sie ein Modell mit EU-Region, sonst wird außerhalb der EU gerechnet.',
       },
@@ -1343,7 +1343,7 @@ export const de = {
         enabled: 'Sprecher in Sitzungsaufnahmen trennen',
         learn: 'Meine Stimme aus Diktaten und „… bin ich“ lernen',
         learnHint:
-          'Dafür speichert thera einen Stimmabdruck (Zahlenwerte, keine Tonaufnahme) verschlüsselt in der Datenbank. Den Abdruck Ihres Gegenübers löscht thera mit der Tonaufnahme, sobald Sie die Abschrift bestätigen.',
+          'Dafür speichert Theralo einen Stimmabdruck (Zahlenwerte, keine Tonaufnahme) verschlüsselt in der Datenbank. Den Abdruck Ihres Gegenübers löscht Theralo mit der Tonaufnahme, sobald Sie die Abschrift bestätigen.',
         profile: 'Ihr Stimmprofil',
         profileNone: 'Noch kein Stimmprofil. Diktieren Sie einmal etwa eine halbe Minute, oder markieren Sie sich in einer Sitzungsabschrift.',
         profileSome: 'aus {{dictations}} Diktat(en) und {{sessions}} Sitzung(en), {{minutes}} min Sprache',
@@ -1492,11 +1492,11 @@ export const de = {
     search: 'Hilfe durchsuchen…',
     noHits: 'Kein Artikel passt zu dieser Suche.',
     linkTo: 'Hilfe: {{title}}',
-    videoTitle: 'Video: thera in 5 Minuten',
+    videoTitle: 'Video: Theralo in 5 Minuten',
     videoBody: 'Ein kurzer Überblick über die wichtigsten Funktionen (öffnet im Browser).',
     videoSoon: 'Das Video erscheint in Kürze.',
     emergencyTitle: 'Hinweis',
-    emergencyBody: 'thera ist kein Notfalldienst. Bei akuter Gefahr wählen Sie bitte 112.',
+    emergencyBody: 'Theralo ist kein Notfalldienst. Bei akuter Gefahr wählen Sie bitte 112.',
     settingsTitle: 'Hilfe & Rundgang',
     settingsBody:
       'Der Rundgang zeigt in acht Schritten die wichtigsten Bereiche. In der Demo-Praxis probieren Sie alles mit erfundenen Beispieldaten aus.',
@@ -1509,7 +1509,7 @@ export const de = {
     finish: 'Fertig',
     end: 'Rundgang beenden',
     restartHint: 'Den Rundgang starten Sie jederzeit neu unter Hilfe oder Einstellungen.',
-    video: 'Video ansehen: thera in 5 Minuten',
+    video: 'Video ansehen: Theralo in 5 Minuten',
     steps: {
       heute: {
         title: 'Heute',
@@ -1529,7 +1529,7 @@ export const de = {
       },
       autopilot: {
         title: 'Autopilot',
-        body: 'Nach der Aufnahme transkribiert thera von selbst. Sobald Sie die Abschrift bestätigt haben, entstehen Notiz, Faktenvorschläge und Zusammenfassung. Hier schalten Sie das ab.',
+        body: 'Nach der Aufnahme transkribiert Theralo von selbst. Sobald Sie die Abschrift bestätigt haben, entstehen Notiz, Faktenvorschläge und Zusammenfassung. Hier schalten Sie das ab.',
       },
       notiz: {
         title: 'Notiz signieren',
@@ -1549,7 +1549,7 @@ export const de = {
     enter: 'Mit Beispieldaten ausprobieren',
     enterTitle: 'Demo-Praxis öffnen?',
     enterBody:
-      'thera startet neu und öffnet eine Demo-Praxis mit erfundenen Patient:innen, Sitzungen und einem Berichtsentwurf. Sie liegt in einem eigenen Ordner; Ihre echten Daten bleiben unberührt. Jedes Öffnen beginnt mit frischen Beispieldaten.',
+      'Theralo startet neu und öffnet eine Demo-Praxis mit erfundenen Patient:innen, Sitzungen und einem Berichtsentwurf. Sie liegt in einem eigenen Ordner; Ihre echten Daten bleiben unberührt. Jedes Öffnen beginnt mit frischen Beispieldaten.',
     enterAction: 'Demo öffnen',
     bannerTitle: 'Demo-Praxis:',
     bannerBody: 'Alle Personen und Inhalte sind erfunden. Echte Patientendaten gehören nicht hierher.',

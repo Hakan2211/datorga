@@ -13,7 +13,7 @@ Jede Sitzung hat oben eine Schrittleiste: **Vorbereiten → Aufnehmen → Abschr
 - Wählen Sie das richtige **Mikrofon**. Der Pegel zeigt, ob Ton ankommt.
 - Mit **Beenden** stoppen Sie. Während einer Aufnahme zeigt die obere Leiste auf jeder Seite einen roten Hinweis, der zur Sitzung zurückführt.
 
-Die Aufnahme wird in Teilen verschlüsselt gespeichert. Stürzt der Computer ab, bleiben die bis dahin gespeicherten Teile erhalten. Wird der Speicherplatz knapp, stoppt thera die Aufnahme rechtzeitig.
+Die Aufnahme wird in Teilen verschlüsselt gespeichert. Stürzt der Computer ab, bleiben die bis dahin gespeicherten Teile erhalten. Wird der Speicherplatz knapp, stoppt Theralo die Aufnahme rechtzeitig.
 
 ## Transkription
 
@@ -26,7 +26,7 @@ Nach dem Beenden startet die Transkription von selbst, wenn der [Autopilot](hilf
 
 ## Sprecher
 
-Bei Sitzungsaufnahmen trennt thera die Sprecher auf diesem Computer. Ihre Stimme erkennt thera an Ihren Diktaten oder wenn Sie einmal „… bin ich“ wählen. Sind mehr als zwei Personen im Raum, stellen Sie „Personen im Gespräch“ ein und wählen **Neu trennen**. Einzelne Abschnitte ordnen Sie per Klick auf den Sprecher neu zu.
+Bei Sitzungsaufnahmen trennt Theralo die Sprecher auf diesem Computer. Ihre Stimme erkennt Theralo an Ihren Diktaten oder wenn Sie einmal „… bin ich“ wählen. Sind mehr als zwei Personen im Raum, stellen Sie „Personen im Gespräch“ ein und wählen **Neu trennen**. Einzelne Abschnitte ordnen Sie per Klick auf den Sprecher neu zu.
 
 ## Abschrift prüfen
 

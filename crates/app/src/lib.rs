@@ -537,7 +537,7 @@ struct BackupDone {
     summary: BackupSummary,
 }
 
-/// Writes `thera-backup-<time>.therabak` to the backup folder and checks it can be restored
+/// Writes `Theralo-Sicherung-<time>.therabak` to the backup folder and checks it can be restored
 /// (decrypt everything, open the database, walk the audit chain).
 #[tauri::command]
 async fn backup_create(app: AppHandle) -> CmdResult<BackupDone> {
@@ -554,7 +554,7 @@ async fn backup_create(app: AppHandle) -> CmdResult<BackupDone> {
         let result = (|| {
             state.with(|s| s.snapshot_to(&snapshot))?;
             let stamp = render::file_stamp(&thera_core::domain::now());
-            let out = dir.join(format!("thera-backup-{stamp}.{}", backup::EXTENSION));
+            let out = dir.join(format!("Theralo-Sicherung-{stamp}.{}", backup::EXTENSION));
             let summary = backup::create(&out, &snapshot, &state.audio_root(), &key, &wrapped, env!("CARGO_PKG_VERSION"))?;
             backup::verify(&out, &key, &state.data_dir.join("backup-verify"))?;
             Ok::<_, CmdError>((out, summary))
@@ -4044,7 +4044,7 @@ pub fn run() {
                 data_dir = home_dir.join("demo");
                 keyring_user = demo_keyring_user(&keyring_user);
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.set_title("thera – Demo-Praxis (Beispieldaten)");
+                    let _ = window.set_title("Theralo – Demo-Praxis (Beispieldaten)");
                 }
             }
             std::fs::create_dir_all(&data_dir)?;

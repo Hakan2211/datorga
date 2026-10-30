@@ -31,4 +31,4 @@ Ohne KI-Anbieter legt der Autopilot nur die Notiz an; Fakten und Zusammenfassung
 
 ## Antrag fällig
 
-thera zählt die Sitzungen im Behandlungsfall. Wird das Kontingent knapp, erscheint auf **Heute** und unter **Berichte** ein Hinweis wie „Umwandlungsantrag vorbereiten“. Ein Klick legt den Bericht an und lässt die KI einen ersten Entwurf aus den übernommenen Fakten schreiben.
+Theralo zählt die Sitzungen im Behandlungsfall. Wird das Kontingent knapp, erscheint auf **Heute** und unter **Berichte** ein Hinweis wie „Umwandlungsantrag vorbereiten“. Ein Klick legt den Bericht an und lässt die KI einen ersten Entwurf aus den übernommenen Fakten schreiben.
