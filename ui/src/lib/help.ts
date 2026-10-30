@@ -4,7 +4,7 @@
 
 /** The explainer video (slice 35, `docs/video/skript.md`), hosted on bunny.net. `null` until
  * it is published: the Hilfe card then says "erscheint in Kürze" and the tour shows no link. */
-export const VIDEO_URL: string | null = null
+export const VIDEO_URL: string | null = 'https://memdia-cdn.b-cdn.net/thera-in-5-minuten.mp4'
 
 export type Block =
   | { type: 'h2' | 'h3' | 'p' | 'note'; text: string }
