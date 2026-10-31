@@ -1533,7 +1533,7 @@ dependencies = [
 
 [[package]]
 name = "eval"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "regex",
  "serde",
@@ -6038,7 +6038,7 @@ dependencies = [
 
 [[package]]
 name = "thera-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -6060,7 +6060,7 @@ dependencies = [
 
 [[package]]
 name = "thera-capture"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cpal",
  "serde",
@@ -6069,7 +6069,7 @@ dependencies = [
 
 [[package]]
 name = "thera-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -6101,7 +6101,7 @@ dependencies = [
 
 [[package]]
 name = "thera-diarize"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libloading 0.8.9",
  "serde",
