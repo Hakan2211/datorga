@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import { Trash2 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -17,7 +18,8 @@ import {
 } from '@/components/ui/alert-dialog'
 import { api, errorMessage } from '@/lib/api'
 
-/** The one way to delete something: a trash button, a confirm, then every query refreshes. */
+/** The one way to delete something: a trash button, a confirm, then every query refreshes.
+ *  Signed documents land in the Papierkorb; the toast then links there. */
 export function DeleteButton({
   title,
   description,
@@ -39,12 +41,19 @@ export function DeleteButton({
 }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const remove = useMutation({
     mutationFn: action,
-    onSuccess: () => {
+    onSuccess: (outcome) => {
       onDeleted?.()
       void qc.invalidateQueries()
-      toast.success(t('common.deleted'))
+      if ((outcome as { trashed?: boolean } | undefined)?.trashed) {
+        toast.success(t('trash.moved'), {
+          action: { label: t('trash.open'), onClick: () => void navigate({ to: '/settings/papierkorb' }) },
+        })
+      } else {
+        toast.success(t('common.deleted'))
+      }
     },
     onError: (e) => toast.error(errorMessage(e)),
   })
@@ -99,8 +108,10 @@ export function DeleteSession({
   return (
     <DeleteButton
       title={t('sessions.delete')}
-      description={t(documented ? 'sessions.deleteText' : 'sessions.deleteEmptyText')}
-      warning={signed(session.note_status) ? t('common.retention') : null}
+      description={
+        documented ? `${t('sessions.deleteText')} ${signed(session.note_status) ? '' : t('common.irreversible')}` : t('sessions.deleteEmptyText')
+      }
+      warning={signed(session.note_status) ? t('common.toTrash') : null}
       action={() => api.deleteSession(session.id)}
       onDeleted={onDeleted}
       label={label ? t('common.delete') : undefined}
@@ -114,8 +125,8 @@ export function DeleteReport({ report, onDeleted, label }: { report: { id: strin
   return (
     <DeleteButton
       title={t('reports.delete')}
-      description={t('reports.deleteText')}
-      warning={signed(report.status) ? t('common.retention') : null}
+      description={`${t('reports.deleteText')} ${signed(report.status) ? '' : t('common.irreversible')}`}
+      warning={signed(report.status) ? t('common.toTrash') : null}
       action={() => api.deleteReport(report.id)}
       onDeleted={onDeleted}
       label={label ? t('common.delete') : undefined}

@@ -10,6 +10,8 @@ import type { BerichtCandidate } from '@/bindings/BerichtCandidate'
 import type { CheckItem } from '@/bindings/CheckItem'
 import type { ReportReview } from '@/bindings/ReportReview'
 import type { Consent } from '@/bindings/Consent'
+import type { DeleteOutcome } from '@/bindings/DeleteOutcome'
+import type { TrashItem } from '@/bindings/TrashItem'
 import type { ConsentKind } from '@/bindings/ConsentKind'
 import type { ConsentText } from '@/bindings/ConsentText'
 import type { Episode } from '@/bindings/Episode'
@@ -322,6 +324,9 @@ export const api = {
   /** Restarts the app in the Demo-Praxis (fresh fictional data in its own folder) or back. */
   demoEnter: () => invoke<void>('demo_enter'),
   demoLeave: () => invoke<void>('demo_leave'),
+  /** In the demo: the real practice's AI setup it may use (provider label, model), if any. */
+  demoAiInfo: () => invoke<{ provider: string; model: string | null; active: boolean } | null>('demo_ai_info'),
+  demoAiUse: () => invoke<void>('demo_ai_use'),
   createBackup: () => invoke<BackupDone>('backup_create'),
   inspectBackup: (path: string) => invoke<BackupHeaderView>('backup_inspect', { path }),
   restoreBackup: (path: string, recoveryKey: string | null) =>
@@ -366,7 +371,7 @@ export const api = {
   updateSession: (id: string, update: SessionUpdate) => invoke<Session>('session_update', { id, update }),
   cancelSession: (id: string, reason: string | null) => invoke<Session>('session_cancel', { id, reason }),
   reopenSession: (id: string) => invoke<Session>('session_reopen', { id }),
-  deleteSession: (id: string) => invoke<void>('session_delete', { id }),
+  deleteSession: (id: string) => invoke<DeleteOutcome>('session_delete', { id }),
 
   // Calendar: `from`/`to` are instants (RFC 3339), task and note dates are local 'YYYY-MM-DD'.
   calendar: (from: string, to: string) => invoke<CalendarSession[]>('calendar_range', { from, to }),
@@ -534,7 +539,11 @@ export const api = {
 
   reports: (status?: ReportStatus) => invoke<ReportSummary[]>('reports_list', { status: status ?? null }),
   report: (id: string) => invoke<ReportView>('report_get', { id }),
-  deleteReport: (id: string) => invoke<void>('report_delete', { id }),
+  deleteReport: (id: string) => invoke<DeleteOutcome>('report_delete', { id }),
+  trash: () => invoke<TrashItem[]>('trash_list'),
+  trashRestore: (id: string) => invoke<void>('trash_restore', { id }),
+  /** One item, or without `id` the whole Papierkorb. */
+  trashPurge: (id?: string) => invoke<number>('trash_purge', { id: id ?? null }),
   saveSection: (id: string, key: string, body: string) => invoke<void>('report_save_section', { id, key, body }),
   setSectionNotRelevant: (id: string, key: string, on: boolean) =>
     invoke<Report>('report_section_not_relevant', { id, key, on }),

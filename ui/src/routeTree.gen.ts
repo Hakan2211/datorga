@@ -25,6 +25,7 @@ import { Route as SessionsSessionIdRouteImport } from './routes/sessions/$sessio
 import { Route as SettingsIndexRouteImport } from './routes/settings/index'
 import { Route as SettingsAllgemeinRouteImport } from './routes/settings/allgemein'
 import { Route as SettingsKiRouteImport } from './routes/settings/ki'
+import { Route as SettingsPapierkorbRouteImport } from './routes/settings/papierkorb'
 import { Route as SettingsProtokollRouteImport } from './routes/settings/protokoll'
 import { Route as SettingsSicherheitRouteImport } from './routes/settings/sicherheit'
 import { Route as SettingsSicherungRouteImport } from './routes/settings/sicherung'
@@ -113,6 +114,11 @@ const SettingsKiRoute = SettingsKiRouteImport.update({
   path: '/ki',
   getParentRoute: () => SettingsRouteRoute,
 } as any)
+const SettingsPapierkorbRoute = SettingsPapierkorbRouteImport.update({
+  id: '/papierkorb',
+  path: '/papierkorb',
+  getParentRoute: () => SettingsRouteRoute,
+} as any)
 const SettingsProtokollRoute = SettingsProtokollRouteImport.update({
   id: '/protokoll',
   path: '/protokoll',
@@ -163,6 +169,7 @@ export interface FileRoutesByFullPath {
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/settings/allgemein': typeof SettingsAllgemeinRoute
   '/settings/ki': typeof SettingsKiRoute
+  '/settings/papierkorb': typeof SettingsPapierkorbRoute
   '/settings/protokoll': typeof SettingsProtokollRoute
   '/settings/sicherheit': typeof SettingsSicherheitRoute
   '/settings/sicherung': typeof SettingsSicherungRoute
@@ -187,6 +194,7 @@ export interface FileRoutesByTo {
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/settings/allgemein': typeof SettingsAllgemeinRoute
   '/settings/ki': typeof SettingsKiRoute
+  '/settings/papierkorb': typeof SettingsPapierkorbRoute
   '/settings/protokoll': typeof SettingsProtokollRoute
   '/settings/sicherheit': typeof SettingsSicherheitRoute
   '/settings/sicherung': typeof SettingsSicherungRoute
@@ -213,6 +221,7 @@ export interface FileRoutesById {
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/settings/allgemein': typeof SettingsAllgemeinRoute
   '/settings/ki': typeof SettingsKiRoute
+  '/settings/papierkorb': typeof SettingsPapierkorbRoute
   '/settings/protokoll': typeof SettingsProtokollRoute
   '/settings/sicherheit': typeof SettingsSicherheitRoute
   '/settings/sicherung': typeof SettingsSicherungRoute
@@ -240,6 +249,7 @@ export interface FileRouteTypes {
     | '/sessions/$sessionId'
     | '/settings/allgemein'
     | '/settings/ki'
+    | '/settings/papierkorb'
     | '/settings/protokoll'
     | '/settings/sicherheit'
     | '/settings/sicherung'
@@ -264,6 +274,7 @@ export interface FileRouteTypes {
     | '/sessions/$sessionId'
     | '/settings/allgemein'
     | '/settings/ki'
+    | '/settings/papierkorb'
     | '/settings/protokoll'
     | '/settings/sicherheit'
     | '/settings/sicherung'
@@ -289,6 +300,7 @@ export interface FileRouteTypes {
     | '/sessions/$sessionId'
     | '/settings/allgemein'
     | '/settings/ki'
+    | '/settings/papierkorb'
     | '/settings/protokoll'
     | '/settings/sicherheit'
     | '/settings/sicherung'
@@ -436,6 +448,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsKiRouteImport
       parentRoute: typeof SettingsRouteRoute
     }
+    '/settings/papierkorb': {
+      id: '/settings/papierkorb'
+      path: '/papierkorb'
+      fullPath: '/settings/papierkorb'
+      preLoaderRoute: typeof SettingsPapierkorbRouteImport
+      parentRoute: typeof SettingsRouteRoute
+    }
     '/settings/protokoll': {
       id: '/settings/protokoll'
       path: '/protokoll'
@@ -491,6 +510,7 @@ declare module '@tanstack/react-router' {
 interface SettingsRouteRouteChildren {
   SettingsAllgemeinRoute: typeof SettingsAllgemeinRoute
   SettingsKiRoute: typeof SettingsKiRoute
+  SettingsPapierkorbRoute: typeof SettingsPapierkorbRoute
   SettingsProtokollRoute: typeof SettingsProtokollRoute
   SettingsSicherheitRoute: typeof SettingsSicherheitRoute
   SettingsSicherungRoute: typeof SettingsSicherungRoute
@@ -501,6 +521,7 @@ interface SettingsRouteRouteChildren {
 const SettingsRouteRouteChildren: SettingsRouteRouteChildren = {
   SettingsAllgemeinRoute: SettingsAllgemeinRoute,
   SettingsKiRoute: SettingsKiRoute,
+  SettingsPapierkorbRoute: SettingsPapierkorbRoute,
   SettingsProtokollRoute: SettingsProtokollRoute,
   SettingsSicherheitRoute: SettingsSicherheitRoute,
   SettingsSicherungRoute: SettingsSicherungRoute,

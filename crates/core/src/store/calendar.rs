@@ -6,7 +6,8 @@ use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use super::{row_to_session, Store, ACTOR, SESSION_SELECT};
+use super::trash::TrashEntry;
+use super::{row_to_session, DeleteOutcome, Store, ACTOR, SESSION_SELECT};
 use crate::audit::{self, Entry};
 use crate::domain::*;
 use crate::{Error, Result};
@@ -228,9 +229,10 @@ impl Store {
 
     /// Deletes a session with everything attached: recordings (audio files too), transcripts,
     /// note, facts, prep and summary. Facts a Bericht cited go with it; the Bericht text stays.
-    /// Not while a recording or a job for it is running.
-    pub fn delete_session(&self, id: &str) -> Result<()> {
-        self.session(id)?;
+    /// Not while a recording or a job for it is running. A session with a signed note goes to the
+    /// Papierkorb instead, and its audio stays until the item is purged.
+    pub fn delete_session(&self, id: &str) -> Result<DeleteOutcome> {
+        let session = self.session(id)?;
         let busy: bool = self.conn.query_row(
             "SELECT EXISTS (SELECT 1 FROM session_source WHERE session_id = ?1 AND status = 'recording')
                  OR EXISTS (SELECT 1 FROM job j LEFT JOIN session_source src ON src.id = j.source_id
@@ -245,14 +247,30 @@ impl Store {
             "SELECT a.path FROM audio_asset a JOIN session_source src ON src.id = a.source_id WHERE src.session_id = ?1",
         )?;
         let audio_dirs: Vec<String> = stmt.query_map([id], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
+        let signed: bool = self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM report WHERE session_id = ?1 AND kind = 'sitzungsnotiz' AND status IN ('signed', 'exported'))",
+            [id],
+            |r| r.get(0),
+        )?;
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute("DELETE FROM session WHERE id = ?1", [id])?;
-        audit::append(&tx, Entry { actor: ACTOR, action: "session.delete", entity_type: "session", entity_id: Some(id), meta: json!({}) })?;
-        tx.commit()?;
-        for dir in audio_dirs {
-            let _ = std::fs::remove_dir_all(dir);
+        if signed {
+            let item = TrashEntry {
+                patient_id: &session.patient_id, kind: "session", entity_id: id, detail: None,
+                occurred_at: session.scheduled_at.as_deref().or(session.started_at.as_deref()),
+            };
+            Store::move_to_trash(&tx, item, &[("session", id)])?;
         }
-        Ok(())
+        tx.execute("DELETE FROM session WHERE id = ?1", [id])?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "session.delete", entity_type: "session", entity_id: Some(id), meta: json!({ "trashed": signed }),
+        })?;
+        tx.commit()?;
+        if !signed {
+            for dir in audio_dirs {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+        Ok(DeleteOutcome { trashed: signed })
     }
 
     /// Several sessions in one go ("Serie anlegen"). The UI computes the dates in local time, so a

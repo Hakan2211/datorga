@@ -27,6 +27,7 @@ mod speakers;
 mod spend;
 mod summary;
 mod timeline;
+mod trash;
 pub use agent::{TextMode, TextProposal};
 pub use answers::{CoveredAsk, GapCheck, GapCheckMeta};
 pub use autopilot::{AutopilotRun, AutopilotStep};
@@ -36,6 +37,7 @@ pub use review::{ReportReview, ReviewHint, ReviewMeta};
 pub use spend::{day_before, DaySpend, LlmSpend, ModelSpend, SpendReport, SpendTask, TaskSpend};
 pub use summary::{SessionSummary, SummaryInput, SummaryMeta, SummaryPointView};
 pub use timeline::{TimelineGroup, TimelineItem};
+pub use trash::{DeleteOutcome, TrashItem, TRASH_DAYS};
 
 const ACTOR: &str = "therapist";
 /// Setting: the therapist confirmed the current recovery key is stored. Absent or false means the
@@ -67,6 +69,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V21__answers.sql"),
     include_str!("migrations/V22__focus.sql"),
     include_str!("migrations/V23__review.sql"),
+    include_str!("migrations/V24__trash.sql"),
 ];
 
 /// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).
@@ -105,6 +108,7 @@ impl Store {
         store.migrate()?;
         store.seed_builtin_templates()?;
         store.sync_review_statuses()?;
+        store.purge_expired_trash()?;
         Ok(store)
     }
 
@@ -518,7 +522,8 @@ impl Store {
             "SELECT a.path FROM audio_asset a JOIN session_source src ON src.id = a.source_id
              JOIN session s ON s.id = src.session_id WHERE s.patient_id = ?1",
         )?;
-        let audio_dirs: Vec<String> = stmt.query_map([id], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
+        let mut audio_dirs: Vec<String> = stmt.query_map([id], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
+        audio_dirs.extend(self.trash_audio_dirs(id)?);
         let tx = self.conn.unchecked_transaction()?;
         Self::erase_chat_threads(&tx, id)?;
         let n = tx.execute("DELETE FROM patient WHERE id = ?1", [id])?;
@@ -2194,18 +2199,36 @@ impl Store {
         self.report(report_id)
     }
 
-    /// Deletes a Bericht and its Antrag, with drafts, answers and checks, signed ones too (the UI
-    /// warns about the retention period). A Sitzungsnotiz goes only with its session.
-    pub fn delete_report(&self, report_id: &str) -> Result<()> {
-        if self.report(report_id)?.kind != "bericht" {
+    /// Deletes a Bericht and its Antrag, with drafts, answers and checks. A signed one goes to the
+    /// Papierkorb. A Sitzungsnotiz goes only with its session.
+    pub fn delete_report(&self, report_id: &str) -> Result<DeleteOutcome> {
+        let report = self.report(report_id)?;
+        if report.kind != "bericht" {
             return Err(Error::Invalid("Sitzungsnotizen werden mit ihrer Sitzung gelöscht".into()));
         }
+        let signed = matches!(report.status, ReportStatus::Signed | ReportStatus::Exported);
         let tx = self.conn.unchecked_transaction()?;
+        if signed {
+            let app: Option<(String, String)> = tx
+                .query_row("SELECT id, kind FROM application WHERE report_id = ?1", [report_id], |r| Ok((r.get(0)?, r.get(1)?)))
+                .optional()?;
+            let mut roots = vec![("report", report_id)];
+            if let Some((app_id, _)) = &app {
+                roots.push(("application", app_id.as_str()));
+            }
+            let item = trash::TrashEntry {
+                patient_id: &report.patient_id, kind: "bericht", entity_id: report_id,
+                detail: app.as_ref().map(|(_, kind)| kind.as_str()), occurred_at: report.signed_at.as_deref(),
+            };
+            Store::move_to_trash(&tx, item, &roots)?;
+        }
         tx.execute("DELETE FROM application WHERE report_id = ?1", [report_id])?;
         tx.execute("DELETE FROM report WHERE id = ?1", [report_id])?;
-        audit::append(&tx, Entry { actor: ACTOR, action: "report.delete", entity_type: "report", entity_id: Some(report_id), meta: json!({}) })?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "report.delete", entity_type: "report", entity_id: Some(report_id), meta: json!({ "trashed": signed }),
+        })?;
         tx.commit()?;
-        Ok(())
+        Ok(DeleteOutcome { trashed: signed })
     }
 
     /// Nachtrag to a signed Sitzungsnotiz (§ 630f BGB): written and signed in one step, then

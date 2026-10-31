@@ -1,9 +1,9 @@
 // Demo-Praxis (slice 34): fictional data in its own folder. Entering or leaving restarts the
 // app, so a window only ever shows one of the two practices.
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Compass, FlaskConical, LogOut } from 'lucide-react'
+import { Compass, FlaskConical, LogOut, Sparkles } from 'lucide-react'
 import { api, errorMessage } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import {
@@ -37,6 +37,7 @@ export function DemoBanner() {
       <span className="min-w-64 flex-1">
         <span className="font-medium">{t('demo.bannerTitle')}</span> {t('demo.bannerBody')}
       </span>
+      <DemoAiButton />
       <Button size="sm" variant="ghost" onClick={tour.start} disabled={tour.running}>
         <Compass /> {t('tour.start')}
       </Button>
@@ -44,6 +45,48 @@ export function DemoBanner() {
         <LogOut /> {leave.isPending ? t('demo.restarting') : t('demo.leave')}
       </Button>
     </div>
+  )
+}
+
+/** Opt-in (PLAN-AMENDMENTS §20 H3): use the real practice's AI provider and key in this demo visit. */
+function DemoAiButton() {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const info = useQuery({ queryKey: ['demo-ai'], queryFn: api.demoAiInfo })
+  const use = useMutation({
+    mutationFn: api.demoAiUse,
+    onSuccess: () => void qc.invalidateQueries(),
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+  const ai = info.data
+  if (!ai) return null
+  if (ai.active) {
+    return (
+      <span className="flex items-center gap-1.5 text-xs" data-testid="demo-ai-active">
+        <Sparkles className="size-3.5" /> {t('demo.aiActive', { provider: ai.provider })}
+      </span>
+    )
+  }
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button size="sm" variant="ghost" data-testid="demo-ai-use">
+          <Sparkles /> {t('demo.aiUse')}
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t('demo.aiTitle')}</AlertDialogTitle>
+          <AlertDialogDescription>{t('demo.aiBody', { provider: ai.provider, model: ai.model ? ` (${ai.model})` : '' })}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+          <AlertDialogAction onClick={() => use.mutate()} disabled={use.isPending} data-testid="demo-ai-confirm">
+            {t('demo.aiAction')}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }
 

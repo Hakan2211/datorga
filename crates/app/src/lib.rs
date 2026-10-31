@@ -29,8 +29,8 @@ use thera_core::pseudo::EntityKind;
 use thera_core::render;
 use thera_core::review;
 use thera_core::store::{
-    day_before, AutopilotRun, CoveredAsk, DaySpend, GapCheckMeta, LlmSpend, ReportReview, ReviewMeta, SentenceChoice, SessionSummary, SpendReport, Store,
-    TimelineGroup,
+    day_before, AutopilotRun, CoveredAsk, DaySpend, DeleteOutcome, GapCheckMeta, LlmSpend, ReportReview, ReviewMeta, SentenceChoice, SessionSummary, SpendReport, Store,
+    TimelineGroup, TrashItem,
 };
 use thera_core::summary;
 use thera_core::stt::{self, CloudStt, CloudSttModel, SttConfig, SttEngine, WhisperCli};
@@ -128,6 +128,11 @@ struct AppState {
     /// whisper-server for live dictation, kept loaded between dictations for a while.
     whisper_server: Mutex<Option<dictate::WhisperServer>>,
     whisper_last_used: Mutex<Option<std::time::Instant>>,
+    /// Demo only: the real practice's AI settings (no keys), handed over on entering the demo.
+    demo_real_llm: Option<LlmConfig>,
+    /// Demo only: "Meinen KI-Schlüssel hier verwenden" was clicked, so the AI keys are read from
+    /// the real practice's keychain entries (read-only) for this visit.
+    demo_shared_keys: AtomicBool,
 }
 
 struct RunningJob {
@@ -386,7 +391,7 @@ fn demo_open(state: &AppState) -> CmdResult<InitResult> {
 
 /// Starts this app again (with `--demo` or without) and closes this one. Refused while a
 /// recording runs; the exit handler stops jobs as on a normal close.
-fn relaunch(app: &AppHandle, state: &AppState, demo: bool) -> CmdResult<()> {
+fn relaunch(app: &AppHandle, state: &AppState, demo: bool, real_llm: Option<String>) -> CmdResult<()> {
     if lock(&state.recording)?.is_some() {
         return Err(CmdError::Other("Bitte zuerst die laufende Aufnahme beenden".into()));
     }
@@ -405,6 +410,10 @@ fn relaunch(app: &AppHandle, state: &AppState, demo: bool) -> CmdResult<()> {
         if let Some(prev) = std::env::var_os(PREVIOUS) {
             cmd.env(WEBVIEW, prev);
         }
+    }
+    cmd.env_remove(DEMO_LLM_ENV);
+    if let Some(config) = real_llm {
+        cmd.env(DEMO_LLM_ENV, config);
     }
     cmd.spawn().map_err(|e| CmdError::Other(format!("Neustart fehlgeschlagen: {e}")))?;
     app.exit(0);
@@ -426,7 +435,10 @@ fn demo_enter(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
     if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, &user) {
         let _ = entry.delete_credential();
     }
-    relaunch(&app, &state, true)
+    // The AI settings (provider, model, endpoint; never a key) go along, so the demo can offer
+    // to use them.
+    let real_llm = state.with(|s| s.llm_config()).ok().and_then(|c| serde_json::to_string(&c).ok());
+    relaunch(&app, &state, true, real_llm)
 }
 
 /// "Demo verlassen": back to the real practice.
@@ -435,7 +447,42 @@ fn demo_leave(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
     if !state.demo {
         return Err(CmdError::Other("Die Demo-Praxis ist nicht geöffnet".into()));
     }
-    relaunch(&app, &state, false)
+    relaunch(&app, &state, false, None)
+}
+
+/// Env var carrying the real practice's `LlmConfig` into the demo process.
+const DEMO_LLM_ENV: &str = "THERA_DEMO_LLM";
+
+#[derive(Serialize)]
+struct DemoAi {
+    provider: String,
+    model: Option<String>,
+    /// Already switched on for this visit.
+    active: bool,
+}
+
+/// In the demo: the real practice's AI setup it could use, if there is one that works (a local
+/// model, or a provider whose key is in the keychain).
+#[tauri::command]
+fn demo_ai_info(state: State<'_, AppState>) -> CmdResult<Option<DemoAi>> {
+    let Some(config) = state.demo_real_llm.as_ref() else { return Ok(None) };
+    let Some(id) = config.active else { return Ok(None) };
+    let usable = !llm::provider(id).needs_key || real_llm_key_entry(&state, id)?.get_password().is_ok();
+    Ok(usable.then(|| DemoAi {
+        provider: llm::provider(id).label.to_string(),
+        model: config.settings(id).model,
+        active: state.demo_shared_keys.load(Ordering::Relaxed),
+    }))
+}
+
+/// "Meinen KI-Schlüssel hier verwenden": the demo takes the real AI settings and reads the keys
+/// from the real practice's keychain entries until it is left. Only fictional text is sent.
+#[tauri::command]
+fn demo_ai_use(state: State<'_, AppState>) -> CmdResult<()> {
+    let config = state.demo_real_llm.clone().ok_or_else(|| CmdError::Other("Keine KI-Einstellungen aus der Praxis vorhanden".into()))?;
+    state.with(|s| s.set_llm_config(&config))?;
+    state.demo_shared_keys.store(true, Ordering::Relaxed);
+    Ok(())
 }
 
 fn demo_keyring_user(real: &str) -> String {
@@ -1566,7 +1613,7 @@ fn session_reopen(state: State<'_, AppState>, id: String) -> CmdResult<Session> 
 }
 
 #[tauri::command]
-fn session_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+fn session_delete(state: State<'_, AppState>, id: String) -> CmdResult<DeleteOutcome> {
     state.with(|s| s.delete_session(&id))
 }
 
@@ -1697,8 +1744,26 @@ fn report_checklist(state: State<'_, AppState>, id: String) -> CmdResult<Vec<Che
 }
 
 #[tauri::command]
-fn report_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+fn report_delete(state: State<'_, AppState>, id: String) -> CmdResult<DeleteOutcome> {
     state.with(|s| s.delete_report(&id))
+}
+
+// ---------- Papierkorb ----------
+
+#[tauri::command]
+fn trash_list(state: State<'_, AppState>) -> CmdResult<Vec<TrashItem>> {
+    state.with(|s| s.list_trash())
+}
+
+#[tauri::command]
+fn trash_restore(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.with(|s| s.restore_trash(&id))
+}
+
+/// One item, or with `None` the whole Papierkorb.
+#[tauri::command]
+fn trash_purge(state: State<'_, AppState>, id: Option<String>) -> CmdResult<usize> {
+    state.with(|s| s.purge_trash(id.as_deref()))
 }
 
 #[tauri::command]
@@ -1796,9 +1861,23 @@ fn setting_set(state: State<'_, AppState>, key: String, value: serde_json::Value
 // ---------- llm (Phase 2) ----------
 
 /// Keychain entry for a provider's API key. Debug runs with `THERA_KEYRING_USER` get their own.
+/// A demo that was allowed to use the real keys reads the real practice's entries.
 fn llm_key_entry(state: &AppState, id: ProviderId) -> CmdResult<keyring::Entry> {
+    if state.demo_shared_keys.load(Ordering::Relaxed) {
+        return real_llm_key_entry(state, id);
+    }
+    key_entry_for(&state.keyring_user, id)
+}
+
+/// The real practice's entry, also from inside the demo.
+fn real_llm_key_entry(state: &AppState, id: ProviderId) -> CmdResult<keyring::Entry> {
+    let user = if state.demo { state.keyring_user.strip_prefix("demo-").unwrap_or(&state.keyring_user) } else { &state.keyring_user };
+    key_entry_for(user, id)
+}
+
+fn key_entry_for(keyring_user: &str, id: ProviderId) -> CmdResult<keyring::Entry> {
     let id = serde_json::to_value(id).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-    let user = if state.keyring_user == KEYRING_USER { format!("llm-{id}") } else { format!("{}-llm-{id}", state.keyring_user) };
+    let user = if keyring_user == KEYRING_USER { format!("llm-{id}") } else { format!("{keyring_user}-llm-{id}") };
     keyring::Entry::new(KEYRING_SERVICE, &user).map_err(|e| kr(e).into())
 }
 
@@ -1870,6 +1949,9 @@ fn llm_config_set(state: State<'_, AppState>, config: LlmConfig) -> CmdResult<()
 /// Stores (or with `None`/empty removes) a provider's API key in the OS keychain.
 #[tauri::command]
 fn llm_key_set(state: State<'_, AppState>, provider: ProviderId, key: Option<String>) -> CmdResult<()> {
+    if state.demo_shared_keys.load(Ordering::Relaxed) {
+        return Err(CmdError::Other("In der Demo-Praxis werden Ihre Schlüssel nur gelesen: bitte in der echten Praxis ändern".into()));
+    }
     let entry = llm_key_entry(&state, provider)?;
     match key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
         Some(k) => entry.set_password(&k).map_err(kr)?,
@@ -4068,6 +4150,11 @@ pub fn run() {
                 dictation: Mutex::new(None),
                 whisper_server: Mutex::new(None),
                 whisper_last_used: Mutex::new(None),
+                demo_real_llm: demo
+                    .then(|| std::env::var(DEMO_LLM_ENV).ok())
+                    .flatten()
+                    .and_then(|v| serde_json::from_str(&v).ok()),
+                demo_shared_keys: AtomicBool::new(false),
             });
             let handle = app.handle().clone();
             std::thread::spawn(move || stt_worker(handle));
@@ -4082,6 +4169,8 @@ pub fn run() {
             app_setup,
             demo_enter,
             demo_leave,
+            demo_ai_info,
+            demo_ai_use,
             backup_create,
             backup_inspect,
             backup_restore,
@@ -4193,6 +4282,9 @@ pub fn run() {
             report_checklist,
             report_sign,
             report_delete,
+            trash_list,
+            trash_restore,
+            trash_purge,
             report_add_addendum,
             report_export,
             report_preview,

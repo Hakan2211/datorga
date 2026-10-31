@@ -92,8 +92,9 @@ export const de = {
     close: 'Schließen',
     back: 'Zurück',
     deleted: 'Gelöscht',
-    retention:
-      'Das Dokument ist unterschrieben. Die Behandlungsdokumentation ist 10 Jahre aufzubewahren (§ 630f BGB): löschen Sie es nur, wenn es eine Kopie gibt oder es irrtümlich angelegt wurde.',
+    irreversible: 'Das lässt sich nicht rückgängig machen.',
+    toTrash:
+      'Das Dokument ist unterschrieben: es kommt in den Papierkorb und lässt sich dort 30 Tage lang wiederherstellen. Danach ist es endgültig gelöscht. Die Behandlungsdokumentation ist 10 Jahre aufzubewahren (§ 630f BGB).',
   },
   privacy: {
     encrypted: 'Datenbank verschlüsselt',
@@ -344,7 +345,7 @@ export const de = {
     toCalendar: 'Zum Kalender',
     delete: 'Sitzung löschen',
     deleteText:
-      'Die Sitzung wird mit allem gelöscht, was dazugehört: Aufnahmen, Abschriften, Sitzungsnotiz, Fakten, Vorbereitung und Zusammenfassung. Texte, die schon in einem Bericht stehen, bleiben dort. Das lässt sich nicht rückgängig machen.',
+      'Die Sitzung wird mit allem gelöscht, was dazugehört: Aufnahmen, Abschriften, Sitzungsnotiz, Fakten, Vorbereitung und Zusammenfassung. Texte, die schon in einem Bericht stehen, bleiben dort.',
     deleteEmptyText: 'Der Termin wird aus dem Kalender gelöscht.',
   },
   reports: {
@@ -367,7 +368,7 @@ export const de = {
     toPatients: 'Zu den Patient:innen',
     delete: 'Bericht löschen',
     deleteText:
-      'Der Bericht wird mit seinem Antrag gelöscht, samt Entwürfen, Antworten und Prüfung. Die Sitzungen und ihre Notizen bleiben. Das lässt sich nicht rückgängig machen.',
+      'Der Bericht wird mit seinem Antrag gelöscht, samt Entwürfen, Antworten und Prüfung. Die Sitzungen und ihre Notizen bleiben.',
     new: 'Neuer Bericht',
   },
   lotse: {
@@ -1198,6 +1199,7 @@ export const de = {
       ki: 'KI & Kosten',
       sprache: 'Sprache & Aufnahme',
       sicherung: 'Datensicherung',
+      papierkorb: 'Papierkorb',
       sicherheit: 'Sicherheit',
       protokoll: 'Protokoll',
     },
@@ -1545,6 +1547,25 @@ export const de = {
       },
     },
   },
+  trash: {
+    moved: 'In den Papierkorb verschoben',
+    open: 'Papierkorb',
+    hint: 'Gelöschte Sitzungen mit unterschriebener Notiz und unterschriebene Berichte bleiben hier {{days}} Tage, dann werden sie endgültig gelöscht. Wird eine Patient:in gelöscht, verschwinden auch ihre Einträge hier.',
+    empty: 'Der Papierkorb ist leer.',
+    session: 'Sitzung',
+    bericht: 'Bericht',
+    deletedAt: 'gelöscht {{date}}',
+    purgeAt: 'endgültig weg ab {{date}}',
+    restore: 'Wiederherstellen',
+    restored: 'Wiederhergestellt',
+    purge: 'Endgültig löschen',
+    purgeTitle: 'Endgültig löschen?',
+    purgeText: 'Der Eintrag wird mit allem, was dazugehört (auch Aufnahmen), endgültig gelöscht. Das lässt sich nicht rückgängig machen.',
+    purgeAll: 'Papierkorb leeren',
+    purgeAllTitle: 'Papierkorb leeren?',
+    purgeAllText_one: 'Ein Eintrag wird endgültig gelöscht. Das lässt sich nicht rückgängig machen.',
+    purgeAllText_other: '{{count}} Einträge werden endgültig gelöscht. Das lässt sich nicht rückgängig machen.',
+  },
   demo: {
     enter: 'Mit Beispieldaten ausprobieren',
     enterTitle: 'Demo-Praxis öffnen?',
@@ -1555,5 +1576,11 @@ export const de = {
     bannerBody: 'Alle Personen und Inhalte sind erfunden. Echte Patientendaten gehören nicht hierher.',
     leave: 'Demo verlassen',
     restarting: 'Startet neu…',
+    aiUse: 'Meine KI verwenden',
+    aiTitle: 'Ihre KI in der Demo verwenden?',
+    aiBody:
+      'Bis Sie die Demo verlassen, nutzt Theralo hier Ihren KI-Anbieter {{provider}}{{model}} mit Ihrem Schlüssel. So können Sie Autopilot, Fakten und Berichtsentwurf an den erfundenen Beispielen ausprobieren. Gesendet werden nur diese erfundenen Texte, pseudonymisiert wie immer; die Kosten (meist wenige Cent) laufen über Ihr Konto. Ihr Schlüssel wird nicht kopiert und lässt sich in der Demo nicht ändern.',
+    aiAction: 'Verwenden',
+    aiActive: 'Ihre KI ist aktiv: {{provider}}',
   },
 }
