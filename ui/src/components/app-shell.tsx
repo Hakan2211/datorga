@@ -24,6 +24,7 @@ import { formatDuration } from '@/lib/capture'
 import { AssistantPanel } from '@/components/assistant'
 import { BackupReminder } from '@/components/backup-reminder'
 import { BalanceReminder } from '@/components/balance-reminder'
+import { UpdateReminder } from '@/components/update'
 import { CommandPalette } from '@/components/command-palette'
 import { DemoBanner } from '@/components/demo'
 import { TourProvider } from '@/components/tour'
@@ -229,6 +230,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               {/* The router's scroll restoration resets and restores this container per page. */}
               <main className="min-w-0 flex-1 overflow-y-auto" data-scroll-restoration-id="main">
                 <DemoBanner />
+                <UpdateReminder />
                 <BackupReminder />
                 <BalanceReminder />
                 {children}

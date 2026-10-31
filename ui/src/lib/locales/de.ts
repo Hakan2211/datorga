@@ -1566,6 +1566,31 @@ export const de = {
     purgeAllText_one: 'Ein Eintrag wird endgültig gelöscht. Das lässt sich nicht rückgängig machen.',
     purgeAllText_other: '{{count}} Einträge werden endgültig gelöscht. Das lässt sich nicht rückgängig machen.',
   },
+  update: {
+    bannerTitle: 'Theralo {{version}} ist da.',
+    bannerBody: 'Ihre Daten bleiben beim Aktualisieren erhalten.',
+    install: 'Jetzt aktualisieren',
+    whatsNew: 'Was ist neu?',
+    dialogTitle: 'Auf Theralo {{version}} aktualisieren',
+    dialogBody:
+      'Theralo lädt die neue Version, prüft ihre Signatur, schließt sich und startet nach der Installation von selbst neu. Patientendaten, Aufnahmen und Einstellungen bleiben auf diesem Computer, wie sie sind. Ändert die neue Version die Datenbank, legt sie vorher eine Kopie an.',
+    notes: 'Neu in dieser Version',
+    downloading: 'Lade die neue Version… {{percent}} %',
+    downloadingSize: 'Lade die neue Version… {{mb}} MB',
+    installing: 'Installiere… Theralo startet gleich neu.',
+    settingsTitle: 'Version & Updates',
+    installed: 'Installiert: Theralo {{version}}',
+    check: 'Nach Updates suchen',
+    checking: 'Suche…',
+    upToDate: 'Theralo ist auf dem neuesten Stand.',
+    available: 'Theralo {{version}} ist verfügbar.',
+    auto: 'Beim Start automatisch nach Updates suchen',
+    autoHint:
+      'Dafür ruft Theralo nur eine kleine Versionsdatei von GitHub ab. Praxis- oder Patientendaten werden nicht gesendet.',
+    copies:
+      'Bevor ein Update die Datenbank ändert, legt Theralo eine Kopie im Ordner „vor-update“ im Datenverzeichnis ab (die letzten drei bleiben).',
+    checkFailed: 'Suche fehlgeschlagen: {{error}}',
+  },
   demo: {
     enter: 'Mit Beispieldaten ausprobieren',
     enterTitle: 'Demo-Praxis öffnen?',

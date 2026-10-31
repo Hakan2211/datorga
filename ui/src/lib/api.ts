@@ -99,6 +99,9 @@ export type InitResult = {
   demo: boolean
 }
 
+export type UpdateOffer = { version: string; notes: string | null }
+export type UpdateView = { current: string; available: UpdateOffer | null }
+export type UpdateProgress = { received: number; total: number | null }
 export type BackupHeaderView = { created_at: string; app_version: string; keychain_matches: boolean }
 export type BackupDone = { path: string; summary: BackupSummary }
 export type RestoreDone = { summary: BackupSummary; previous: string | null }
@@ -327,6 +330,12 @@ export const api = {
   /** In the demo: the real practice's AI setup it may use (provider label, model), if any. */
   demoAiInfo: () => invoke<{ provider: string; model: string | null; active: boolean } | null>('demo_ai_info'),
   demoAiUse: () => invoke<void>('demo_ai_use'),
+  /** Fetches only `latest.json` from the release page. */
+  updateCheck: () => invoke<UpdateView>('update_check'),
+  /** Downloads, verifies and starts the installer; the app closes and restarts on success. */
+  updateInstall: () => invoke<void>('update_install'),
+  onUpdateProgress: (cb: (p: UpdateProgress) => void): Promise<UnlistenFn> =>
+    listen<UpdateProgress>('update:progress', (e) => cb(e.payload)),
   createBackup: () => invoke<BackupDone>('backup_create'),
   inspectBackup: (path: string) => invoke<BackupHeaderView>('backup_inspect', { path }),
   restoreBackup: (path: string, recoveryKey: string | null) =>
@@ -644,6 +653,9 @@ export const q = {
     queryOptions({ queryKey: ['sessionSummary', sessionId], queryFn: () => api.sessionSummary(sessionId) }),
   timeline: (patientId: string) => queryOptions({ queryKey: ['timeline', patientId], queryFn: () => api.patientTimeline(patientId) }),
   autopilot: () => queryOptions({ queryKey: ['setting', 'autopilot'], queryFn: api.autopilotEnabled }),
+  // One check per start; Einstellungen refetches on demand.
+  update: (enabled = true) =>
+    queryOptions({ queryKey: ['update'], queryFn: api.updateCheck, enabled, staleTime: Infinity, retry: false }),
   // Polled while the run is queued or running (the backend also announces each step).
   autopilotRun: (sessionId: string) =>
     queryOptions({

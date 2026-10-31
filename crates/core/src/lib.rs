@@ -62,6 +62,9 @@ pub enum Error {
     Llm(String),
     #[error("Abgebrochen")]
     Cancelled,
+    /// Opening refused around an app update (data from a newer version).
+    #[error("{0}")]
+    Upgrade(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -2,7 +2,7 @@
 title: Datensicherung & Notfall-Kit
 summary: Sichern, wiederherstellen und den Schlüssel verwahren
 order: 8
-keywords: backup, sicherung, wiederherstellen, papierkorb, gelöscht, notfall-schlüssel, notfall-kit, neuer computer, usb, schlüsselbund
+keywords: backup, sicherung, wiederherstellen, papierkorb, gelöscht, notfall-schlüssel, notfall-kit, neuer computer, usb, schlüsselbund, update, aktualisieren, neue version
 ---
 Ihre Daten liegen nur auf diesem Computer. Ohne Sicherung gehen sie bei einem Defekt verloren.
 
@@ -26,3 +26,12 @@ Der Notfall-Schlüssel öffnet Ihre Daten, wenn der Schlüsselbund von Windows v
 ## Papierkorb
 
 Löschen Sie eine Sitzung mit unterschriebener Notiz oder einen unterschriebenen Bericht, kommt er in den [Papierkorb](/settings/papierkorb). Dort lässt er sich 30 Tage lang mit allem, was dazugehört, wiederherstellen; danach wird er endgültig gelöscht. Was nicht unterschrieben ist, wird sofort gelöscht. Beachten Sie die Aufbewahrungspflicht von 10 Jahren (§ 630f BGB).
+
+## Updates
+
+Gibt es eine neue Version, zeigt Theralo beim Start oben einen Hinweis. **Jetzt aktualisieren** lädt sie, prüft ihre Signatur und startet Theralo nach der Installation neu. Ihre Daten bleiben dabei auf diesem Computer, wie sie sind; Sie müssen nichts neu einrichten.
+
+- Ändert eine neue Version die Datenbank, legt Theralo vorher eine Kopie im Ordner „vor-update“ im Datenverzeichnis an. Die letzten drei Kopien bleiben.
+- Während einer Aufnahme wird nicht aktualisiert.
+- Unter [Einstellungen → Allgemein](/settings/allgemein) sehen Sie die installierte Version, können selbst nach Updates suchen oder die automatische Suche abschalten. Dabei wird nur eine kleine Versionsdatei abgerufen, keine Praxisdaten.
+- Ein Update ersetzt keine Datensicherung.

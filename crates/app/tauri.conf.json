@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Theralo",
-  "version": "0.1.0",
   "identifier": "de.datorga.thera",
   "build": {
     "beforeDevCommand": {
@@ -48,6 +47,18 @@
       "whisper/*": "whisper/",
       "llama/*": "llama/",
       "diarize/*": "diarize/"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ3QzZFOUJCQjFCMTIzRjYKUldUMkk3R3h1K25HMTduM2tnL0VjYnZJRS8yYnhPMnNQS0tOTVFZbytNZm5RTmMydnE1K2dCcFYK",
+      "endpoints": [
+        "https://github.com/Hakan2211/theralo-landing/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

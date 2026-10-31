@@ -1,0 +1,52 @@
+# Builds and publishes a Theralo release when a version tag is pushed:
+#   node scripts/release.mjs bump 0.2.0 && git commit -am "Theralo 0.2.0" && git tag v0.2.0 && git push --follow-tags
+# Secrets: TAURI_SIGNING_PRIVATE_KEY (text of ~/.tauri/theralo-updater.key),
+# RELEASE_TOKEN (fine-grained token with Contents: read and write on Hakan2211/theralo-landing).
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Fetch sidecars (whisper.cpp, llama.cpp, sherpa-onnx)
+        shell: pwsh
+        run: |
+          ./scripts/fetch-whisper.ps1
+          ./scripts/fetch-llama.ps1
+          ./scripts/fetch-sherpa.ps1
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Build (signed update)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+          LIBCLANG_PATH: C:\Program Files\LLVM\bin
+        run: node scripts/release.mjs build
+
+      - name: Prepare upload
+        run: node scripts/release.mjs prepare
+
+      - name: Publish to the landing repo
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: node scripts/release.mjs publish

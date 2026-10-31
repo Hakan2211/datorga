@@ -28,6 +28,7 @@ mod spend;
 mod summary;
 mod timeline;
 mod trash;
+mod upgrade;
 pub use agent::{TextMode, TextProposal};
 pub use answers::{CoveredAsk, GapCheck, GapCheckMeta};
 pub use autopilot::{AutopilotRun, AutopilotStep};
@@ -38,6 +39,7 @@ pub use spend::{day_before, DaySpend, LlmSpend, ModelSpend, SpendReport, SpendTa
 pub use summary::{SessionSummary, SummaryInput, SummaryMeta, SummaryPointView};
 pub use timeline::{TimelineGroup, TimelineItem};
 pub use trash::{DeleteOutcome, TrashItem, TRASH_DAYS};
+pub use upgrade::{pre_update_dir, KEEP as PRE_UPDATE_KEEP};
 
 const ACTOR: &str = "therapist";
 /// Setting: the therapist confirmed the current recovery key is stored. Absent or false means the
@@ -84,15 +86,15 @@ impl Store {
     /// mandatory and the file is unreadable without it.
     pub fn open(path: &Path, key: &MasterKey) -> Result<Self> {
         let conn = Connection::open(path)?;
-        Self::init(conn, key)
+        Self::init(conn, key, Some(path))
     }
 
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
-        Self::init(conn, &MasterKey::from_bytes([7; 32]))
+        Self::init(conn, &MasterKey::from_bytes([7; 32]), None)
     }
 
-    fn init(conn: Connection, key: &MasterKey) -> Result<Self> {
+    fn init(conn: Connection, key: &MasterKey, path: Option<&Path>) -> Result<Self> {
         #[cfg(feature = "sqlcipher")]
         {
             conn.pragma_update(None, "key", key.sqlcipher_pragma())?;
@@ -104,6 +106,7 @@ impl Store {
         let _ = key;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        upgrade::guard(&conn, path)?;
         let store = Self { conn };
         store.migrate()?;
         store.seed_builtin_templates()?;
@@ -121,7 +124,7 @@ impl Store {
     }
 
     fn migrate(&self) -> Result<()> {
-        let current: usize = self.conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))? as usize;
+        let current = upgrade::schema_version(&self.conn)?;
         for (i, sql) in MIGRATIONS.iter().enumerate().skip(current) {
             let tx = self.conn.unchecked_transaction()?;
             tx.execute_batch(sql)?;

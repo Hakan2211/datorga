@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Building2, CircleHelp, Compass, Monitor, Moon, Palette, Sun, Workflow } from 'lucide-react'
 import { DemoEnterButton } from '@/components/demo'
+import { UpdateCard } from '@/components/update'
 import { useTour } from '@/components/tour'
 import { SectionCard } from '@/components/bits'
 import { Button } from '@/components/ui/button'
@@ -29,6 +30,7 @@ function General() {
       </SectionCard>
       <AppearanceCard />
       <AutopilotCard />
+      <UpdateCard />
       <HelpCard />
     </>
   )

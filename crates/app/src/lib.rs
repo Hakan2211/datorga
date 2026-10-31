@@ -8,6 +8,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_updater::{Update, UpdaterExt};
 use thera_capture::power::{self, KeepAwake};
 use thera_capture::system::{self, ProcessJob};
 use thera_capture::{InputDevice, Recorder};
@@ -133,6 +134,8 @@ struct AppState {
     /// Demo only: "Meinen KI-Schlüssel hier verwenden" was clicked, so the AI keys are read from
     /// the real practice's keychain entries (read-only) for this visit.
     demo_shared_keys: AtomicBool,
+    /// The update the last check found, for "Jetzt aktualisieren".
+    update: Mutex<Option<Update>>,
 }
 
 struct RunningJob {
@@ -4102,11 +4105,122 @@ fn local_unload(state: State<'_, AppState>) -> CmdResult<()> {
     Ok(())
 }
 
+// ---------- updates ----------
+
+/// Cleanup before the process ends: on a normal close, and before the update installer, which
+/// ends the process without the exit event. Closing mid-recording still flushes and closes the
+/// source cleanly.
+fn shutdown(state: &AppState) {
+    let _ = stop_recording(state, "stopped");
+    // Kill a running sidecar and give the worker a moment to delete its plaintext WAV.
+    state.exiting.store(true, Ordering::Relaxed);
+    // Stops the local model server; a load in progress sees `exiting` and stops too.
+    if let Ok(mut llama) = state.llama.lock() {
+        *llama = None;
+    }
+    let cancel = state.transcribing.lock().ok().and_then(|g| g.as_ref().map(|r| r.cancel.clone()));
+    if let Some(cancel) = cancel {
+        cancel.store(true, Ordering::Relaxed);
+        for _ in 0..30 {
+            if state.transcribing.lock().map_or(true, |g| g.is_none()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct UpdateView {
+    current: String,
+    /// A newer version on the release page; `None` = up to date.
+    available: Option<UpdateOffer>,
+}
+
+#[derive(Serialize)]
+struct UpdateOffer {
+    version: String,
+    /// Release notes from `latest.json` (German, for the therapist).
+    notes: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct UpdateProgress {
+    received: u64,
+    total: Option<u64>,
+}
+
+fn update_err(e: tauri_plugin_updater::Error) -> CmdError {
+    CmdError::Other(format!("Update fehlgeschlagen: {e}"))
+}
+
+/// Debug builds take `THERA_UPDATE_ENDPOINT` (E2E against a local `latest.json`).
+fn updater(app: &AppHandle) -> CmdResult<tauri_plugin_updater::Updater> {
+    #[allow(unused_mut)]
+    let mut builder = app.updater_builder();
+    #[cfg(debug_assertions)]
+    if let Ok(url) = std::env::var("THERA_UPDATE_ENDPOINT") {
+        let url = url.parse().map_err(|e| CmdError::Other(format!("THERA_UPDATE_ENDPOINT: {e}")))?;
+        builder = builder.endpoints(vec![url]).map_err(update_err)?;
+    }
+    builder.build().map_err(update_err)
+}
+
+/// Asks the release page for a newer version. Only `latest.json` is fetched; nothing about the
+/// practice is sent.
+#[tauri::command]
+async fn update_check(app: AppHandle) -> CmdResult<UpdateView> {
+    let found = updater(&app)?.check().await.map_err(update_err)?;
+    let available = found.as_ref().map(|u| UpdateOffer {
+        version: u.version.clone(),
+        notes: u.body.clone().filter(|b| !b.trim().is_empty()),
+    });
+    *lock(&app.state::<AppState>().update)? = found;
+    Ok(UpdateView { current: app.package_info().version.to_string(), available })
+}
+
+/// "Jetzt aktualisieren": downloads the installer (progress as `update:progress`), checks its
+/// signature, shuts down like a normal close and starts the installer, which ends this process
+/// and opens the new version. The data folder is not touched; the new version copies the
+/// database to `vor-update/` before it changes it.
+#[tauri::command]
+async fn update_install(app: AppHandle) -> CmdResult<()> {
+    let busy = || -> CmdResult<()> {
+        if lock(&app.state::<AppState>().recording)?.is_some() {
+            return Err(CmdError::Other("Bitte zuerst die laufende Aufnahme beenden".into()));
+        }
+        Ok(())
+    };
+    busy()?;
+    let update = lock(&app.state::<AppState>().update)?.clone().ok_or_else(|| CmdError::Other("Kein Update gefunden. Bitte erneut suchen.".into()))?;
+    let events = app.clone();
+    let mut received = 0u64;
+    let bytes = update
+        .download(
+            move |chunk, total| {
+                received += chunk as u64;
+                let _ = events.emit("update:progress", UpdateProgress { received, total });
+            },
+            || {},
+        )
+        .await
+        .map_err(update_err)?;
+    // A recording may have started during the download.
+    busy()?;
+    let state = app.state::<AppState>();
+    shutdown(&state);
+    // Closes the database (WAL checkpoint) before the installer replaces the program.
+    *lock(&state.store)? = None;
+    // Only returns on failure; the store is closed by then.
+    update.install(bytes).map_err(|e| CmdError::Other(format!("Das Update konnte nicht gestartet werden ({e}). Bitte Theralo neu starten.")))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let mut data_dir = app.path().app_data_dir()?;
             let mut keyring_user = KEYRING_USER.to_string();
@@ -4155,6 +4269,7 @@ pub fn run() {
                     .flatten()
                     .and_then(|v| serde_json::from_str(&v).ok()),
                 demo_shared_keys: AtomicBool::new(false),
+                update: Mutex::new(None),
             });
             let handle = app.handle().clone();
             std::thread::spawn(move || stt_worker(handle));
@@ -4171,6 +4286,8 @@ pub fn run() {
             demo_leave,
             demo_ai_info,
             demo_ai_use,
+            update_check,
+            update_install,
             backup_create,
             backup_inspect,
             backup_restore,
@@ -4342,26 +4459,8 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // Closing the window mid-recording still flushes and closes the source cleanly.
             if let tauri::RunEvent::Exit = event {
-                let state = app.state::<AppState>();
-                let _ = stop_recording(&state, "stopped");
-                // Kill a running sidecar and give the worker a moment to delete its plaintext WAV.
-                state.exiting.store(true, Ordering::Relaxed);
-                // Stops the local model server; a load in progress sees `exiting` and stops too.
-                if let Ok(mut llama) = state.llama.lock() {
-                    *llama = None;
-                }
-                let cancel = state.transcribing.lock().ok().and_then(|g| g.as_ref().map(|r| r.cancel.clone()));
-                if let Some(cancel) = cancel {
-                    cancel.store(true, Ordering::Relaxed);
-                    for _ in 0..30 {
-                        if state.transcribing.lock().map_or(true, |g| g.is_none()) {
-                            break;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                    }
-                }
+                shutdown(&app.state::<AppState>());
             }
         });
 }
