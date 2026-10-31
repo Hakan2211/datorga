@@ -247,7 +247,9 @@ Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.
 | S6 | **A failed diarization doesn't fail the transcription**: the transcript just has no speakers. | The text is what matters; speakers are a help. |
 | S7 | **Extraction (`extract-2026.3`) writes `T:` / `P:`** before session segments; unknown speakers get no prefix. `SourceSegment.kind` now marks dictations explicitly: a session segment spoken by her is not a "Diktat" (and doesn't prefill the note). | Plan; fixes attributing her questions and interpretations to the patient. |
 
-## 15. Patient profile + card view decisions (slice 29, 2026-10-29; made while building, for the user to review)
+## 15. Patient profile + card view decisions (slice 29, 2026-10-29; made while building, reviewed by the user 2026-10-31)
+
+*Approved as is.*
 
 | # | Decision | Why |
 |---|---|---|
@@ -258,7 +260,9 @@ Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.
 | P5 | **"n offen"** = past, not cancelled sessions without a signed note + Berichte in draft/review. Same rule as "Fällig" on Heute, but over all time. | One definition of "open" across the app. |
 | P6 | **ICD chips show only the chapters present** (F0–F9, "Andere"), and the method chips likewise. Default sort is "Nächster Termin" (then "Zuletzt gesehen", "Name"), and view and sort are remembered per computer. | The mockup's fixed chip list would show empty filters in a small practice. |
 
-## 16. Session summary + timeline decisions (slice 30, 2026-10-29; made while building, for the user to review)
+## 16. Session summary + timeline decisions (slice 30, 2026-10-29; made while building, reviewed by the user 2026-10-31)
+
+*Approved as is.*
 
 | # | Decision | Why |
 |---|---|---|
@@ -271,7 +275,9 @@ Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.
 | Z7 | **The voice prep brief uses the key points instead of the note's Verlauf** for the last 3 sessions ("Kernpunkte (KI-Zusammenfassung)"). It still takes "Vereinbarungen" from the signed note, and it also includes sessions that have key points but no signed note yet. The brief's existing filter still drops sentences naming third parties. The assistant gets a read tool `get_session_summaries` (last 3, max 10). | Shorter context and cheaper. The label makes clear that the points are AI-written. |
 | Z8 | **The trigger "again after signing if the note changed a lot" is left to slice 31** (autopilot), together with the trigger after transcript confirmation. | Both are autopilot triggers. Slice 30 has the manual button only. |
 
-## 17. Autopilot + contingent decisions (slice 31, 2026-10-29; made while building, for the user to review)
+## 17. Autopilot + contingent decisions (slice 31, 2026-10-29; made while building, reviewed by the user 2026-10-31)
+
+*Approved as is.*
 
 | # | Decision | Why |
 |---|---|---|
@@ -289,7 +295,9 @@ Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.
 | A12 | **The timeline numbers sessions in the contingent** ("Sitzung 11/12 · KZT 1", with the current phase's limit) and the ones before the therapy start as "Probatorik n". The Heute card keeps its plain session count. | Closes Z5. |
 | A13 | **Cleanup:** Protokoll and Vorlagen left the sidebar and the Strg+K list; `/audit` stays, linked from Einstellungen → Sicherheit. The raw status column in Sitzungen is gone. | Plan §0. |
 
-## 18. Work queue decisions (slice 32, 2026-10-29; made while building, for the user to review)
+## 18. Work queue decisions (slice 32, 2026-10-29; made while building, reviewed by the user 2026-10-31)
+
+*Approved as is.*
 
 | # | Decision | Why |
 |---|---|---|
@@ -301,7 +309,9 @@ Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.
 | W6 | **The "bald fällig" banner** on Berichte lists the same cases as Heute's "Antrag vorbereiten" and uses the same one-click action. | One rule, two places. |
 | W7 | **Search** matches name and Chiffre. | Same as the patients page. |
 
-## 19. AI costs + key guide decisions (slice 33, 2026-10-29; made while building, for the user to review)
+## 19. AI costs + key guide decisions (slice 33, 2026-10-29; made while building, reviewed by the user 2026-10-31)
+
+*Approved as is.*
 
 | # | Decision | Why |
 |---|---|---|
@@ -314,13 +324,15 @@ Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.
 | K7 | **Guide links**: OpenRouter sign-up / settings/credits / settings/keys (+ settings/privacy mentioned for account-wide ZDR); Requesty sign-up / settings/billing / api-keys; OpenAI signup / settings/organization/billing/overview / api-keys. The links live on `ProviderInfo` (`signup_url`, `credits_url`, `key_url`). | One place to update when a provider moves a page. |
 | K8 | **Where the guide opens**: "Schritt-für-Schritt-Anleitung" next to the key fields (KI-Entwürfe for OpenRouter/Requesty, Stimme for OpenAI) and "… einrichten" links in the costs card for providers without a key. Hilfe follows in slice 34. Breakdown and model table are stacked, not side by side as in mockup 15 (model ids were cut off in the 2xl card). | |
 
-## 20. Hilfe, Rundgang and Demo-Praxis decisions (slice 34, 2026-10-29; made while building, for the user to review)
+## 20. Hilfe, Rundgang and Demo-Praxis decisions (slice 34, 2026-10-29; made while building, reviewed by the user 2026-10-31)
+
+*Approved, except H3, which was decided (opt-in, still to build).*
 
 | # | Decision | Why |
 |---|---|---|
 | H1 | **The Demo-Praxis is a second start of thera** (`--demo`) with its own data folder (`<data>/demo`), keychain entry (`demo-master-key`) and WebView profile (`<data>/demo-webview`: own tour state, theme, view choices). "Mit Beispieldaten ausprobieren" and "Demo verlassen" restart the app. | A window only ever opens one database; nothing swaps the store at runtime, so demo and real data can't meet. |
 | H2 | **Every entry starts fresh**: the demo folder and key are deleted and re-seeded, dated relative to today. Closing thera while in the demo means the next start is the real practice. | Predictable for the tour and the video; no forgotten demo session. |
-| H3 | **The demo has no Notfall-Kit, no backup reminder and its own AI keys** (none set). Without a provider the autopilot only creates notes there. Open question: should the demo reuse her real OpenRouter key, so she can try the autopilot on fictional text? | Keys are per practice like everything else; reusing them would be one exception. |
+| H3 | **The demo has no Notfall-Kit, no backup reminder and its own AI keys** (none set). Without a provider the autopilot only creates notes there. **Decided 2026-10-31 (user): opt-in.** The demo offers "Meinen KI-Schlüssel hier verwenden"; only then does it use the real practice's provider and key, for that demo visit only. Not built yet. | Keys are per practice like everything else; reusing them would be one exception. |
 | H4 | **Demo content**: three fictional people (Lena Sommer VT/KZT 1 with an Umwandlungsbericht draft, Jonas Albrecht TP/Jugendlicher in Probatorik with a transcript to review, Miriam Keller VT/KZT 1 with the Umwandlungsantrag due), German dialogue excerpts of about 12 lines, facts and key points written by me (provider "demo"), silent audio for the unreviewed recording. No photos (no fictional face assets). | Shows each work-queue state once: Transkript prüfen, Notiz offen, Unsigniert, Antrag fällig, Bericht in progress. |
 | H5 | **Hilfe articles are Markdown inside the app** (`ui/src/content/hilfe`), rendered by a small built-in parser (no Markdown library, no raw HTML). Links point to other articles (`hilfe:…`), app pages or the web. No screenshots in the articles yet (mockup 18 has one); they can come with slice 35's recordings. | Offline, reviewable as text, no new dependency. |
 | H6 | **Search** matches every word in title, keywords, summary and body, ignoring case and accents ("schlusselbund" finds "Schlüsselbund"; "ue" for "ü" is not matched). Strg+K lists the articles by title, summary and keywords. | Enough for nine articles. |
@@ -328,7 +340,9 @@ Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.
 | H8 | **"?" links** sit on the cards that have an article; the video card says "erscheint in Kürze" until slice 35 sets `VIDEO_URL`. The key guides also open from the KI-Anbieter article. | Plan slices 33/34. |
 | H9 | **Pages now open at the top**: the shell's scroll area used to keep its position across pages (e.g. Hilfe opened half-way down after Einstellungen). Back/forward restore the position; `#…` links still jump to their target. | Found in the tour E2E. |
 
-## 21. Video explainer decisions (slice 35, 2026-10-29; V1 and V3 by the user, the rest made while building, for the user to review)
+## 21. Video explainer decisions (slice 35, 2026-10-29; V1 and V3 by the user, the rest made while building, reviewed by the user 2026-10-31)
+
+*Approved as is.*
 
 | # | Decision | Why |
 |---|---|---|
@@ -342,7 +356,9 @@ Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.
 
 Fixed while filming: after signing a note or Bericht, every editor turning read-only fired an update and tried to save, which ended in the toast "signed reports are read-only" (TipTap's `setEditable` emits an update by default; now `setEditable(…, false)`).
 
-## 22. UI quick-fix decisions (slice 36, 2026-10-29; U1 by the user, the rest made while building, for the user to review)
+## 22. UI quick-fix decisions (slice 36, 2026-10-29; U1 by the user, the rest made while building, reviewed by the user 2026-10-31)
+
+*Approved as is.*
 
 | # | Decision | Why |
 |---|---|---|
@@ -351,7 +367,9 @@ Fixed while filming: after signing a note or Bericht, every editor turning read-
 | U3 | **Back only, no forward button**: an arrow at the left of the header (disabled when there's nowhere to go) plus Alt+←. The mouse's back button is left to the webview's own handling (not tested). | Forward is rarely needed and would crowd the header. |
 | U4 | **Board columns keep at least 14 rem and the board scrolls sideways** when the space is too narrow (e.g. Assistent open), instead of squeezing four columns. Column titles truncate, card text wraps. The Demo-Praxis banner wraps its buttons below the text for the same reason. | The usual kanban behaviour; nothing overlaps. |
 
-## 23. Bericht-Lotse start decisions (slice 37, 2026-10-29; made while building, for the user to review)
+## 23. Bericht-Lotse start decisions (slice 37, 2026-10-29; made while building, reviewed by the user 2026-10-31)
+
+*Approved as is.*
 
 | # | Decision | Why |
 |---|---|---|
@@ -362,7 +380,9 @@ Fixed while filming: after signing a note or Bericht, every editor turning read-
 | L5 | **"Nicht relevant" only for Somatik** (template `optional: true`), the one PTV 3 section that is often empty. The section is left out of the export (numbers of the others stay), counts as done on the board, is skipped by the checklist and by drafting; its text is kept in case she switches back. | PTV 3: "Unterpunkte nur bei Relevanz"; the other sections are expected in every Bericht. Easy to extend in the YAML. |
 | L6 | **Gaps are fixed on the start step**: diagnoses on the Behandlungsfall that differ from the Bericht ("Übernehmen", keeps the notes), a missing Chiffre (patient dialog), a phase still on Probatorik for an Umwandlung/Fortführung (link to the patient page), no AI model (link to settings). | She doesn't discover them at signing time. |
 
-## 24. Bericht-Lotse "Fragen" decisions (slice 38, 2026-10-29; made while building, for the user to review)
+## 24. Bericht-Lotse "Fragen" decisions (slice 38, 2026-10-29; made while building, reviewed by the user 2026-10-31)
+
+*Approved as is.*
 
 | # | Decision | Why |
 |---|---|---|
@@ -376,7 +396,9 @@ Fixed while filming: after signing a note or Bericht, every editor turning read-
 | F8 | **Fix: built-in templates now update in existing databases** when the compiled-in YAML changes (same version, `origin = builtin` only; user packs untouched). Before, `INSERT OR IGNORE` kept the first stored definition, so slice 37's Somatik "nicht relevant" toggle never reached databases created before it. | Found while adding `asks:`; without it the questions wouldn't appear in her existing data either. |
 | F9 | **Questions of a section that already has text don't count as open**: they fold into "Abschnitte, die schon Text haben (n Fragen, freiwillig)" and don't show in the Start button or Bereitschaft. The Fragen step always offers "Entwurf schreiben lassen" for the empty sections, also in a half-written Bericht. "Fragen" counts as done when nothing is open or drafting has started. | Found in the E2E on the demo's half-written Umwandlungsbericht: 20 "open" questions, mostly for finished sections, was exactly the chaos the plan wants to avoid. |
 
-## 25. Bericht-Lotse "Abschnitte" decisions (slice 39, 2026-10-29; made while building, for the user to review)
+## 25. Bericht-Lotse "Abschnitte" decisions (slice 39, 2026-10-29; made while building, reviewed by the user 2026-10-31)
+
+*Approved as is.*
 
 | # | Decision | Why |
 |---|---|---|
@@ -390,7 +412,9 @@ Fixed while filming: after signing a note or Bericht, every editor turning read-
 | S8 | **Replace, don't add**: the draft card and the per-section "Entwurf…" buttons are gone from the full editor; "Ganzes Dokument" (bottom bar, steps 1–3, `?doc=true`) opens it as a view, and it still shows open proposals with whole-draft apply. Prüfen and Fertig stay the old editor until slice 40. | One drafting path. |
 | S9 | **"Was fehlt noch?"** lists the section's open questions only while it still needs text (as F9); answering there counts like in step 2. "Woher kommt das?" shows the current sentence's facts (with session and date) and her answers. | The rail shows what helps for the section at hand. |
 
-## 26. Bericht-Lotse "Prüfen" / "Fertig" and the Vorbericht (slice 40, 2026-10-29; made while building, for the user to review)
+## 26. Bericht-Lotse "Prüfen" / "Fertig" and the Vorbericht (slice 40, 2026-10-29; made while building, reviewed by the user 2026-10-31)
+
+*Approved as is.*
 
 | # | Decision | Why |
 |---|---|---|
@@ -404,16 +428,20 @@ Fixed while filming: after signing a note or Bericht, every editor turning read-
 | V8 | **Step 5 "Fertig"**: the preview left, signing (name from the settings) and export right. Signing needs every blocking check passed; the button says why it is disabled and leads back to Prüfen. Exporting before signing works but is marked: a hint in the card, "PDF (unsigniert)" on the button, and "-unsigniert" in the file name (also for an unsigned Sitzungsnotiz). A signed Bericht opens on Fertig. | Mockup 23; an unsigned file must not look like the final one. |
 | V9 | **Replace, don't add**: the checklist and export cards are gone from a Bericht's "Ganzes Dokument" (still there for the Sitzungsnotiz); "Ganzes Dokument" is reachable from every step; the old five-step bar flow of the Bericht page is removed. | One way to check, sign and export. |
 
-## 27. Deleting sessions, Berichte and patients (slice 41, 2026-10-30; user asked for easy deletes, details chosen while building, for the user to review)
+## 27. Deleting sessions, Berichte and patients (slice 41, 2026-10-30; user asked for easy deletes, details chosen while building, reviewed by the user 2026-10-31)
+
+*Approved, except D1 and D3 for signed documents, which were changed (Papierkorb, still to build).*
 
 | # | Decision | Why |
 |---|---|---|
 | D1 | **Every session can be deleted**, also with recordings, a note (signed too), facts, prep and summary; everything cascades and the audio folders are removed after the commit. Only refused while a recording or a job for it runs. Facts a Bericht cited go too; text already in a Bericht stays. Replaces the slice 22 rule "absagen statt löschen" (cancel still exists for an Ausfall). | The user wants sessions easy to delete; a session created or recorded by mistake must be removable. |
 | D2 | **A Bericht is deleted together with its Antrag** (`application` points at it without a foreign key, so it would dangle), with drafts, answers and checks; sessions and notes stay. A Sitzungsnotiz is not deleted on its own, only with its session. | One Bericht per Antrag; an Antrag without Bericht has no use. |
-| D3 | **Signed or exported documents can be deleted too**, but the confirm adds a warning about the 10-year retention (§ 630f BGB). | Easy deletes as asked, without hiding the legal duty; the therapist decides. |
+| D3 | ~~**Signed or exported documents can be deleted too**, but the confirm adds a warning about the 10-year retention (§ 630f BGB).~~ **Changed 2026-10-31 (user): Papierkorb.** Deleting a session with a signed note, or a signed or exported Bericht, moves it to a Papierkorb for 30 days, where it can be restored; after that it is purged. Unsigned things are still deleted right away (D1), and erasing a patient (Art. 17) still deletes everything at once. Not built yet. | A signed record deleted by mistake can't be recreated, and she has to keep it 10 years. The trash keeps deleting easy without making it irreversible. |
 | D4 | **One delete button everywhere** (`components/delete-button.tsx`, a trash icon + confirm dialog): session rows, the session page, the calendar dialog, the Berichte table and board cards (on hover), the Bericht page, the patient tiles (on hover), table and page. Audit `session.delete` / `report.delete` / `patient.erase`, IDs only. | "Replace, don't add": the patient page's own dialog and the calendar's two-click delete are gone. |
 
-## 28. Einstellungen as subpages (slice 42, 2026-10-30; user asked for routes, structure approved in plan)
+## 28. Einstellungen as subpages (slice 42, 2026-10-30; user asked for routes, structure approved in plan, reviewed by the user 2026-10-31)
+
+*Approved as is.*
 
 | # | Decision | Why |
 |---|---|---|
