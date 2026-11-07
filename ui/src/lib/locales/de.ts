@@ -730,6 +730,17 @@ export const de = {
       doneNone: 'Keine Hinweise: ein Gutachter fände nichts nachzufragen.',
       next: 'Weiter: Unterschreiben',
     },
+    letterCheck: {
+      title: 'Empfänger-Check',
+      whole: 'Brief',
+      hint: 'Die KI liest den Brief mit den Augen des Empfängers und nennt, was dort fehlen würde: unbeantwortete Fragen des Anschreibens, Einschränkungen ohne konkrete Beispiele, Aussagen ohne Begründung. Der Text bleibt, wie er ist.',
+      noModel: 'Für den Empfänger-Check ist noch kein Modell gewählt.',
+      notRun: 'Ohne Empfänger-Check unterschrieben.',
+      checkedAt: 'Empfänger-Check vom {{date}} ({{model}}).',
+      send: 'Brief prüfen lassen',
+      running: 'Brief wird geprüft…',
+      doneNone: 'Keine Hinweise: der Empfänger fände nichts nachzufragen.',
+    },
     finish: {
       signTitle: 'Unterschreiben',
       signHint: 'Mit der Unterschrift wird der Bericht schreibgeschützt. Datum und Name stehen im Export.',
@@ -904,7 +915,14 @@ export const de = {
       transcript_review_other: '{{count}} Transkripte prüfen',
       application_due_one: '{{count}} Antrag vorbereiten',
       application_due_other: '{{count}} Anträge vorbereiten',
+      letter_follow_up_one: '{{count}} Frist oder Wiedervorlage',
+      letter_follow_up_other: '{{count}} Fristen und Wiedervorlagen',
     },
+    letterDeadline: 'Frist {{date}}',
+    letterFollowUp: 'Wiedervorlage {{date}}',
+    overdue: 'überfällig',
+    followUpDone: 'Erledigt',
+    followUpDoneToast: 'Wiedervorlage erledigt',
     applicationDue: '{{kind}} vorbereiten · {{used}} von {{limit}} Sitzungen',
     prepareApplication: 'Antrag anlegen',
     dayNote: 'Tagesplanung',
@@ -1938,6 +1956,10 @@ export const de = {
       bericht: {
         title: 'Bericht',
         body: 'Berichte an den Gutachter entstehen aus den übernommenen Fakten, in fünf Schritten: Start, Fragen, Abschnitte, Prüfen, Fertig. Das Board zeigt, was im Entwurf ist und wann ein Antrag fällig wird.',
+      },
+      briefe: {
+        title: 'Briefe',
+        body: 'Befundberichte an Rentenversicherung, Pflegekasse, Versorgungsamt und Ärzt:innen, Bescheinigungen und freie Briefe, mit Ihrem Briefkopf. Fügen Sie das Anschreiben ein oder scannen Sie es: die KI beantwortet seine Fragen Punkt für Punkt, Fristen erscheinen auf Heute.',
       },
       ki: {
         title: 'KI-Anbieter',

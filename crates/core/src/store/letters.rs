@@ -410,6 +410,59 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// Letters with a Wiedervorlage on or before `until`, oldest first (Heute's "Fällig", slice 50).
+    pub(crate) fn letter_follow_ups(&self, until: time::Date) -> Result<Vec<DueItem>> {
+        let until = format!("{:04}-{:02}-{:02}", until.year(), until.month() as u8, until.day());
+        let titles: HashMap<String, String> = self.list_templates()?.into_iter().map(|t| (t.key, t.title)).collect();
+        let mut stmt = self.conn.prepare(
+            "SELECT p.id, p.first_name || ' ' || p.last_name, p.chiffre, r.id, r.template_key, l.recipient_json,
+                    l.follow_up_on, l.follow_up_note, l.sent_at
+             FROM report r JOIN letter l ON l.report_id = r.id JOIN patient p ON p.id = r.patient_id
+             WHERE r.kind = 'brief' AND l.follow_up_on IS NOT NULL AND l.follow_up_on <= ?1
+             ORDER BY l.follow_up_on, r.id",
+        )?;
+        let rows = stmt.query_map([until], |r| {
+            let template_key: String = r.get(4)?;
+            let recipient: LetterRecipient = json_col(r, 5)?;
+            let sent_at: Option<String> = r.get(8)?;
+            Ok(DueItem {
+                kind: DueKind::LetterFollowUp,
+                patient_id: r.get(0)?,
+                patient_name: r.get(1)?,
+                chiffre: r.get(2)?,
+                session_id: None,
+                report_id: r.get(3)?,
+                at: None,
+                application_kind: None,
+                seq: None,
+                contingent: None,
+                letter: Some(LetterDue {
+                    template_title: titles.get(&template_key).cloned().unwrap_or(template_key),
+                    recipient_name: recipient.name,
+                    follow_up_on: r.get(6)?,
+                    note: r.get(7)?,
+                    sent: sent_at.is_some(),
+                }),
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Moves or clears ("Erledigt") a letter's Wiedervorlage, also after signing (B6).
+    pub fn set_letter_follow_up(&self, report_id: &str, on: Option<String>, note: Option<String>) -> Result<Letter> {
+        let on = check_date("Wiedervorlage", &on)?;
+        let tx = self.conn.unchecked_transaction()?;
+        Self::letter_status(&tx, report_id)?;
+        let note = if on.is_some() { opt_text(&note) } else { None };
+        tx.execute("UPDATE letter SET follow_up_on = ?2, follow_up_note = ?3 WHERE report_id = ?1", params![report_id, on, note])?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "letter.follow_up", entity_type: "report", entity_id: Some(report_id),
+            meta: json!({ "done": on.is_none() }),
+        })?;
+        tx.commit()?;
+        self.letter(report_id)
+    }
+
     fn letter_status(conn: &rusqlite::Connection, report_id: &str) -> Result<ReportStatus> {
         let status: Option<String> = conn
             .query_row("SELECT r.status FROM report r JOIN letter l ON l.report_id = r.id WHERE r.id = ?1", [report_id], |r| r.get(0))
@@ -885,6 +938,41 @@ mod tests {
         assert!(audit.iter().any(|e| e.action == "letter.send"));
         assert!(audit.iter().all(|e| !e.meta_json.contains("Poppe") && !e.meta_json.contains("Beispiel")), "no names in the audit log");
         assert_eq!(crate::audit::verify(store.conn()).unwrap(), None);
+    }
+
+    #[test]
+    fn follow_ups_reach_heute_until_done() {
+        let (store, p, _) = setup();
+        let new = |key: &str| store.create_letter(LetterInput { patient_id: p.id.clone(), template_key: key.into(), episode_id: None, recipient_id: None }).unwrap();
+        let (a, b, c) = (new("bescheinigung"), new("freier-brief"), new("freier-brief"));
+        let set = |l: &Letter, on: &str, note: &str| store.set_letter_follow_up(&l.report_id, Some(on.into()), Some(note.into())).unwrap();
+        set(&a, "2026-11-10", "Frist laut Anschreiben");
+        set(&b, "2026-11-20", "zu spät für Heute");
+        set(&c, "2026-11-01", " ");
+        assert!(store.set_letter_follow_up(&c.report_id, Some("1.11.2026".into()), None).is_err());
+        // Heute on 2026-11-07, local midnight in Berlin = 23:00 UTC the day before.
+        let due = |store: &Store| {
+            store
+                .due_items("2026-09-01T00:00:00Z", "2026-11-06T23:00:00Z", "2026-11-08T23:00:00Z")
+                .unwrap()
+                .into_iter()
+                .filter(|i| i.kind == DueKind::LetterFollowUp)
+                .collect::<Vec<_>>()
+        };
+        let items = due(&store);
+        assert_eq!(items.iter().map(|i| i.report_id.clone().unwrap()).collect::<Vec<_>>(), [c.report_id.clone(), a.report_id.clone()], "past first, at most 7 days ahead");
+        let la = items[1].letter.as_ref().unwrap();
+        assert_eq!((la.template_title.as_str(), la.follow_up_on.as_str(), la.note.as_deref(), la.sent), ("Behandlungsbestätigung", "2026-11-10", Some("Frist laut Anschreiben"), false));
+        assert_eq!(items[0].letter.as_ref().unwrap().note, None);
+
+        // Signed and sent: still a Wiedervorlage, and "Erledigt" clears it.
+        store.sign_report(&a.report_id, "M. Muster").unwrap();
+        store.mark_letter_sent(&a.report_id, Some("2026-11-07"), Some(SentVia::Post)).unwrap();
+        assert!(due(&store).iter().any(|i| i.report_id.as_deref() == Some(&a.report_id) && i.letter.as_ref().unwrap().sent));
+        let done = store.set_letter_follow_up(&a.report_id, None, Some("weg".into())).unwrap();
+        assert_eq!((done.follow_up_on, done.follow_up_note), (None, None));
+        assert_eq!(due(&store).len(), 1);
+        assert!(crate::audit::list(store.conn(), 100).unwrap().iter().any(|e| e.action == "letter.follow_up" && e.meta_json.contains("true")));
     }
 
     #[test]

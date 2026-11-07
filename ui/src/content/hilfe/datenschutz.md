@@ -1,7 +1,7 @@
 ---
 title: Datenschutz & Pseudonymisierung
 summary: Was den Computer verlässt und was nicht
-order: 6
+order: 7
 keywords: datenschutz, dsgvo, pseudonym, platzhalter, verschlüsselung, einwilligung, protokoll, schweigepflicht, cloud
 ---
 Theralo ist so gebaut, dass Patientendaten auf diesem Computer bleiben.

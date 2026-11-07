@@ -268,7 +268,9 @@ impl Store {
 
     /// The target section exists, takes prose (never diagnoses) and its document isn't signed;
     /// the text is sane. Fills in the heading.
-    pub fn check_text_proposal(&self, mut p: TextProposal) -> Result<TextProposal> {
+    /// `kind`: `section_text` (Bericht or note), `note_text` (a session's note) or `letter_text`
+    /// (a draft letter, slice 50; the only kind for letters, which name the patient).
+    pub fn check_text_proposal(&self, kind: ProposalKind, mut p: TextProposal) -> Result<TextProposal> {
         let note = match &p.session_id {
             Some(s) => self.session(s)?.note_id.map(|id| self.report(&id)).transpose()?,
             None => None,
@@ -280,6 +282,14 @@ impl Store {
         if p.report_id.is_none() && p.session_id.is_none() {
             return Err(Error::Invalid("Kein Ziel für den Text".into()));
         }
+        let is_letter = report.as_ref().is_some_and(|r| r.kind == crate::letter::KIND);
+        if (kind == ProposalKind::LetterText) != is_letter {
+            return Err(Error::Invalid(if is_letter {
+                "Für Briefe gibt es propose_letter_text".into()
+            } else {
+                "propose_letter_text gibt es nur für Briefe".into()
+            }));
+        }
         if let Some(r) = &report {
             if matches!(r.status, ReportStatus::Signed | ReportStatus::Exported) {
                 return Err(Error::Invalid("Das Dokument ist unterschrieben und schreibgeschützt; dafür gibt es nur Nachträge".into()));
@@ -288,7 +298,11 @@ impl Store {
                 return Err(Error::Invalid(format!("Abschnitt „{}“ gibt es in diesem Dokument nicht", p.section_key)));
             }
         }
-        let template = self.template(report.as_ref().map_or("sitzungsnotiz", |r| r.template_key.as_str()))?;
+        let mut template = self.template(report.as_ref().map_or("sitzungsnotiz", |r| r.template_key.as_str()))?;
+        if let Some(r) = report.as_ref().filter(|_| is_letter) {
+            // Sections from the request's questions (slice 47) live only in the letter.
+            template = crate::letter::effective_template(template, &r.sections);
+        }
         let def = template
             .sections
             .iter()
@@ -348,8 +362,8 @@ impl Store {
                     None => Ok(None),
                 }
             }
-            ProposalKind::SectionText | ProposalKind::NoteText => {
-                let p = self.check_text_proposal(from_payload(payload)?)?;
+            ProposalKind::SectionText | ProposalKind::NoteText | ProposalKind::LetterText => {
+                let p = self.check_text_proposal(kind, from_payload(payload)?)?;
                 let patient = match (&p.report_id, &p.session_id) {
                     (Some(r), _) => self.report(r)?.patient_id,
                     (None, Some(s)) => self.session(s)?.patient_id,
@@ -387,8 +401,8 @@ impl Store {
                 self.update_session(&r.session_id, r.update)?.id
             }
             ProposalKind::Task => self.create_task(from_payload(&p.payload)?)?.id,
-            ProposalKind::SectionText | ProposalKind::NoteText => {
-                let t = self.check_text_proposal(from_payload(&p.payload)?)?;
+            ProposalKind::SectionText | ProposalKind::NoteText | ProposalKind::LetterText => {
+                let t = self.check_text_proposal(p.kind, from_payload(&p.payload)?)?;
                 let report = match (&t.report_id, &t.session_id) {
                     (Some(r), _) => self.report(r)?,
                     (None, Some(s)) => match self.session(s)?.note_id {

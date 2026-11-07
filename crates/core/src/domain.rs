@@ -474,6 +474,7 @@ str_enum!(
         ReportDraft => "report_draft",
         TranscriptReview => "transcript_review",
         ApplicationDue => "application_due",
+        LetterFollowUp => "letter_follow_up",
     }
 );
 
@@ -493,6 +494,21 @@ pub struct DueItem {
     pub seq: Option<i64>,
     /// `application_due`: the Behandlungsfall and where its contingent stands.
     pub contingent: Option<crate::contingent::Contingent>,
+    /// `letter_follow_up` (slice 50): the letter's Frist or Wiedervorlage.
+    #[serde(default)]
+    pub letter: Option<LetterDue>,
+}
+
+/// A letter's Wiedervorlage on Heute: a Frist while it isn't sent, a reminder after sending.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LetterDue {
+    pub template_title: String,
+    pub recipient_name: String,
+    /// YYYY-MM-DD.
+    pub follow_up_on: String,
+    pub note: Option<String>,
+    pub sent: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -864,6 +880,8 @@ str_enum!(
         Task => "task",
         SectionText => "section_text",
         NoteText => "note_text",
+        // letter_text: a section of a draft letter (slice 50), applied like section_text.
+        LetterText => "letter_text",
         DayPlan => "day_plan",
     }
 );

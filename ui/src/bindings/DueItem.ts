@@ -2,6 +2,7 @@
 import type { ApplicationKind } from "./ApplicationKind";
 import type { Contingent } from "./Contingent";
 import type { DueKind } from "./DueKind";
+import type { LetterDue } from "./LetterDue";
 
 export type DueItem = { kind: DueKind, patient_id: string, patient_name: string, chiffre: string | null, session_id: string | null, report_id: string | null, 
 /**
@@ -11,4 +12,8 @@ at: string | null, application_kind: ApplicationKind | null, seq: number | null,
 /**
  * `application_due`: the Behandlungsfall and where its contingent stands.
  */
-contingent: Contingent | null, };
+contingent: Contingent | null, 
+/**
+ * `letter_follow_up` (slice 50): the letter's Frist or Wiedervorlage.
+ */
+letter: LetterDue | null, };

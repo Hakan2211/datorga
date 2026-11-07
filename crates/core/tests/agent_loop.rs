@@ -265,3 +265,75 @@ fn the_loop_stops_after_max_steps_and_on_cancel() {
     let mut host = Scripted { store: &store, answers: VecDeque::new(), sent: vec![] };
     assert!(agent::run_turn(&mut host, &thread.id, "Wer ist [PERSON_1]?", &clock()).is_err());
 }
+
+#[test]
+fn letters_are_listed_by_kind_and_take_text_proposals_while_draft() {
+    let store = Store::open_in_memory().unwrap();
+    let p = patient(&store, "Johanna", "Brenner");
+    store.create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Vt, age_group: AgeGroup::Adult, setting: Setting::Einzel }).unwrap();
+    let r = store
+        .create_recipient(thera_core::letter::RecipientInput {
+            kind: RecipientKind::Arzt,
+            name: "Dr. med. Erika Poppe".into(),
+            department: String::new(),
+            lines: vec!["Lindenweg 2".into(), "12345 Musterstadt".into()],
+            salutation: None,
+            default_template: None,
+        })
+        .unwrap();
+    let new_letter = |key: &str| {
+        store
+            .create_letter(thera_core::letter::LetterInput { patient_id: p.id.clone(), template_key: key.into(), episode_id: None, recipient_id: Some(r.id.clone()) })
+            .unwrap()
+    };
+    let letter = new_letter("arztbrief");
+    let signed = new_letter("bescheinigung");
+    store.set_letter_follow_up(&letter.report_id, Some("2026-11-02".into()), Some("Frist laut Anschreiben".into())).unwrap();
+    store.sign_report(&signed.report_id, "T").unwrap();
+    let report = store.report(&letter.report_id).unwrap();
+    let section = report.sections.iter().find(|s| s.key != "diagnosen" && s.body.is_empty()).unwrap().key.clone();
+    let bericht = store.create_application(&store.list_episodes(&p.id).unwrap()[0].id, ApplicationKind::Erstantrag).unwrap().report_id.unwrap();
+    let prose = store.report(&bericht).unwrap().sections.iter().find(|s| s.key != "diagnose").unwrap().key.clone();
+    let thread = store.create_chat_thread(ChatScope::Patient, Some(&p.id)).unwrap();
+
+    let (_, sent) = run(
+        &store,
+        &thread.id,
+        "Welche Briefe gibt es, und schreib was in den Arztbrief.",
+        vec![
+            calls(&[
+                ("get_letters", json!({})),
+                ("get_report", json!({ "report_id": letter.report_id })),
+                ("due_items", json!({})),
+                ("propose_letter_text", json!({ "report_id": letter.report_id, "section_key": section, "text": "Frau Brenner schläft wieder besser." })),
+                ("propose_letter_text", json!({ "report_id": signed.report_id, "section_key": "bestaetigung", "text": "Noch ein Satz." })),
+                ("propose_letter_text", json!({ "report_id": bericht, "section_key": prose, "text": "Pat. schläft." })),
+                ("propose_section_text", json!({ "report_id": letter.report_id, "section_key": section, "text": "Pat. schläft." })),
+            ]),
+            text("Fertig."),
+        ],
+    );
+    let msgs = store.chat_messages(&thread.id).unwrap();
+    assert!(msgs[2].content.starts_with("2 Briefe\n"), "{}", msgs[2].content);
+    assert!(msgs[2].content.contains("Befundbericht an Ärzt:in für Johanna Brenner an eine Ärztin bzw. einen Arzt, Entwurf"), "{}", msgs[2].content);
+    assert!(msgs[2].content.contains("Wiedervorlage 2.11.2026") && msgs[2].content.contains("unterschrieben, nicht versendet"), "{}", msgs[2].content);
+    assert!(msgs[3].content.starts_with("Brief „Befundbericht an Ärzt:in“") && msgs[3].content.contains(&format!("[{section}]")), "{}", msgs[3].content);
+    assert!(msgs[4].content.contains("Frist für Brief: Befundbericht an Ärzt:in für Johanna Brenner") && msgs[4].content.contains("(Frist laut Anschreiben)"), "{}", msgs[4].content);
+    assert!(msgs[6].content.contains("schreibgeschützt"), "{}", msgs[6].content);
+    assert!(msgs[7].content.contains("nur für Briefe"), "{}", msgs[7].content);
+    assert!(msgs[8].content.contains("propose_letter_text"), "{}", msgs[8].content);
+    // Nothing of the recipient leaves the machine, nor the patient's name.
+    for body in &sent {
+        assert!(!body.contains("Poppe") && !body.contains("Lindenweg") && !body.contains("Brenner") && !body.contains("12.03.1984"), "{body}");
+    }
+
+    let props = store.proposals(&thread.id).unwrap();
+    assert_eq!(props.len(), 1);
+    assert_eq!(props[0].kind, ProposalKind::LetterText);
+    assert_eq!(props[0].payload["text"], "Frau Brenner schläft wieder besser.", "a letter keeps the name");
+    assert!(props[0].summary.starts_with("Befundbericht an Ärzt:in für Johanna Brenner: „"), "{}", props[0].summary);
+    let applied = store.apply_proposal(&props[0].id).unwrap();
+    assert_eq!(applied.result_id.as_deref(), Some(letter.report_id.as_str()));
+    let body = store.report(&letter.report_id).unwrap().sections.into_iter().find(|s| s.key == section).unwrap();
+    assert_eq!((body.body.as_str(), body.origin), ("<p>Frau Brenner schläft wieder besser.</p>", SectionOrigin::Ai));
+}

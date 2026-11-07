@@ -3,4 +3,4 @@
 /**
  * What an accepted proposal does, each through the normal store command.
  */
-export type ProposalKind = "session" | "reschedule" | "task" | "section_text" | "note_text" | "day_plan";
+export type ProposalKind = "session" | "reschedule" | "task" | "section_text" | "note_text" | "letter_text" | "day_plan";

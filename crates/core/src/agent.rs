@@ -226,11 +226,21 @@ fn s(description: &str) -> Value {
 }
 
 /// Names of the read tools.
-pub const READ_TOOLS: &[&str] =
-    &["search_patients", "get_patient_overview", "list_sessions", "get_session_note", "get_facts", "get_session_summaries", "get_report", "calendar_day", "due_items"];
+pub const READ_TOOLS: &[&str] = &[
+    "search_patients",
+    "get_patient_overview",
+    "list_sessions",
+    "get_session_note",
+    "get_facts",
+    "get_session_summaries",
+    "get_report",
+    "get_letters",
+    "calendar_day",
+    "due_items",
+];
 /// Names of the tools that create a proposal.
 pub const PROPOSE_TOOLS: &[&str] =
-    &["propose_session", "propose_reschedule", "propose_task", "propose_section_text", "propose_note_text", "propose_day_plan"];
+    &["propose_session", "propose_reschedule", "propose_task", "propose_section_text", "propose_note_text", "propose_letter_text", "propose_day_plan"];
 
 /// The tool definitions sent with every request (no patient data).
 pub fn tools() -> Value {
@@ -262,7 +272,13 @@ pub fn tools() -> Value {
             json!({ "patient_id": s("patient_id"), "limit": { "type": "integer", "description": "Anzahl Sitzungen (Standard 3, höchstens 10)" } }),
             &["patient_id"],
         ),
-        tool("get_report", "Ein Bericht oder eine Sitzungsnotiz mit allen Abschnitten (ohne Diagnosen).", json!({ "report_id": s("report_id") }), &["report_id"]),
+        tool("get_report", "Ein Bericht, Brief oder eine Sitzungsnotiz mit allen Abschnitten (ohne Diagnosen).", json!({ "report_id": s("report_id") }), &["report_id"]),
+        tool(
+            "get_letters",
+            "Briefe und weitere Berichte (Rentenversicherung, Pflegekasse, Versorgungsamt, Ärzt:in, Bescheinigungen), neueste zuerst: Art, Empfängerart, Stand, Wiedervorlage. Den Text liest get_report.",
+            json!({ "patient_id": s("optional; ohne: alle") }),
+            &[],
+        ),
         tool("calendar_day", "Termine, Aufgaben und Tagesplanung eines Tages.", json!({ "date": date() }), &["date"]),
         tool("due_items", "Was fällig ist: offene Sitzungsnotizen, fehlende Vorbereitung für morgen, Berichte im Entwurf.", json!({}), &[]),
         tool(
@@ -305,6 +321,17 @@ pub fn tools() -> Value {
             "Schlägt Text für die Sitzungsnotiz einer Sitzung vor (wird angehängt; die Notiz wird beim Übernehmen angelegt, falls es noch keine gibt).",
             json!({ "session_id": s("session_id"), "section_key": s("z. B. verlauf, vereinbarungen"), "text": s("Fachtext") }),
             &["session_id", "section_key", "text"],
+        ),
+        tool(
+            "propose_letter_text",
+            "Schlägt Text für einen Abschnitt eines Briefs im Entwurf vor (anhängen oder ersetzen). Nicht für Diagnosen, Anschrift oder Betreff.",
+            json!({
+                "report_id": s("report_id des Briefs"),
+                "section_key": s("Schlüssel des Abschnitts aus get_report"),
+                "text": s("Fachtext für die Empfängerin bzw. den Empfänger"),
+                "mode": { "type": "string", "enum": ["append", "replace"], "description": "Standard: append" },
+            }),
+            &["report_id", "section_key", "text"],
         ),
         tool("propose_day_plan", "Schlägt Text für die Tagesplanung eines Tages vor (wird angehängt).", json!({ "date": date(), "text": s("Planungstext") }), &["date", "text"]),
     ])
@@ -353,6 +380,26 @@ fn status_word(s: &str) -> &str {
         "recorded" => "aufgenommen",
         "cancelled" => "abgesagt",
         other => other,
+    }
+}
+
+/// The recipient as the assistant sees it: its kind only, never a name or an address.
+fn recipient_word(kind: Option<RecipientKind>) -> &'static str {
+    match kind {
+        Some(RecipientKind::Rentenversicherung) => "die Rentenversicherung",
+        Some(RecipientKind::Pflegekasse) => "die Pflegekasse bzw. den Medizinischen Dienst",
+        Some(RecipientKind::Versorgungsamt) => "das Versorgungsamt",
+        Some(RecipientKind::Arzt) => "eine Ärztin bzw. einen Arzt",
+        Some(RecipientKind::Krankenkasse) => "die Krankenkasse",
+        Some(RecipientKind::Sonstige) | None => "eine Empfängerin bzw. einen Empfänger",
+    }
+}
+
+/// YYYY-MM-DD → "7.11.2026".
+fn german_day(d: &str) -> String {
+    match d.split('-').collect::<Vec<_>>()[..] {
+        [y, m, day] => format!("{}.{}.{y}", day.trim_start_matches('0'), m.trim_start_matches('0')),
+        _ => d.to_string(),
     }
 }
 
@@ -475,9 +522,56 @@ impl ToolCtx<'_> {
             }
             "get_report" => {
                 let r = self.report(need(args, "report_id")?)?;
-                let what = if r.kind == "sitzungsnotiz" { "Sitzungsnotiz" } else { "Bericht" };
-                let t = format!("{what} (report_id {}), Status {}\n{}", r.id, report_status_word(r.status), self.report_text(&r)?);
+                let t = if r.kind == crate::letter::KIND {
+                    let l = self.store.letter(&r.id)?;
+                    let title = self.store.template(&r.template_key)?.title;
+                    format!(
+                        // Address, Anrede and Betreff stay local (they name the person).
+                        "Brief „{title}“ (report_id {}) an {}, Status {}{}\n{}",
+                        r.id,
+                        recipient_word(l.recipient.kind),
+                        report_status_word(r.status),
+                        if l.sent_at.is_some() { ", versendet" } else { "" },
+                        self.report_text(&r)?
+                    )
+                } else {
+                    let what = if r.kind == "sitzungsnotiz" { "Sitzungsnotiz" } else { "Bericht" };
+                    format!("{what} (report_id {}), Status {}\n{}", r.id, report_status_word(r.status), self.report_text(&r)?)
+                };
                 read(t, vec![r.patient_id])
+            }
+            "get_letters" => {
+                let patient = arg(args, "patient_id").or(self.scope_patient.as_deref()).map(|p| self.patient(p)).transpose()?;
+                let letters: Vec<_> = self
+                    .store
+                    .list_letters(patient.as_ref().map(|p| p.id.as_str()))?
+                    .into_iter()
+                    .filter(|l| self.allow(&l.patient_id).is_ok())
+                    .collect();
+                let mut t = format!("{} Briefe\n", letters.len());
+                for l in letters.iter().take(40) {
+                    let state = match l.state {
+                        crate::letter::LetterState::Draft => "Entwurf",
+                        crate::letter::LetterState::Signed => "unterschrieben, nicht versendet",
+                        crate::letter::LetterState::Sent => "versendet",
+                    };
+                    let when = self.clock.when(l.signed_at.as_deref().unwrap_or(&l.updated_at));
+                    t.push_str(&format!(
+                        "- report_id {}: {} für {} an {}, {state}, {when}",
+                        l.report_id,
+                        l.template_title,
+                        l.patient_name,
+                        recipient_word(l.recipient_kind)
+                    ));
+                    if let Some(f) = &l.follow_up_on {
+                        t.push_str(&format!(", Wiedervorlage {}", german_day(f)));
+                    }
+                    t.push('\n');
+                }
+                let mut patients: Vec<String> = letters.iter().map(|l| l.patient_id.clone()).collect();
+                patients.sort();
+                patients.dedup();
+                read(t, patients)
             }
             "calendar_day" => {
                 let d = self.clock.parse_date(need(args, "date")?)?;
@@ -648,6 +742,19 @@ impl ToolCtx<'_> {
                     i.report_id.as_deref().unwrap_or("")
                 ),
                 DueKind::TranscriptReview => format!("Transkript prüfen: {} (patient_id {}), Sitzung {when}, session_id {}", i.patient_name, i.patient_id, i.session_id.as_deref().unwrap_or("")),
+                DueKind::LetterFollowUp => {
+                    let l = i.letter.as_ref();
+                    format!(
+                        "{}: {} für {} (patient_id {}), report_id {}, am {}{}",
+                        if l.is_some_and(|l| l.sent) { "Wiedervorlage" } else { "Frist für Brief" },
+                        l.map_or("Brief", |l| l.template_title.as_str()),
+                        i.patient_name,
+                        i.patient_id,
+                        i.report_id.as_deref().unwrap_or(""),
+                        l.map(|l| german_day(&l.follow_up_on)).unwrap_or_default(),
+                        l.and_then(|l| l.note.as_deref()).map(|n| format!(" ({n})")).unwrap_or_default()
+                    )
+                }
                 DueKind::ApplicationDue => {
                     let c = i.contingent.as_ref();
                     format!(
@@ -670,7 +777,10 @@ impl ToolCtx<'_> {
 
     /// Sections in template order as plain text, diagnoses left out.
     fn report_text(&self, r: &Report) -> Result<String> {
-        let template = self.store.template(&r.template_key)?;
+        let mut template = self.store.template(&r.template_key)?;
+        if r.kind == crate::letter::KIND {
+            template = crate::letter::effective_template(template, &r.sections);
+        }
         let mut t = String::new();
         for def in &template.sections {
             let Some(sec) = r.sections.iter().find(|s| s.key == def.key) else { continue };
@@ -735,6 +845,24 @@ impl ToolCtx<'_> {
                 let summary = format!("Aufgabe für {}: {}", self.clock.day(d), input.title);
                 (ProposalKind::Task, serde_json::to_value(input)?, summary, None)
             }
+            "propose_letter_text" => {
+                let r = self.report(need(args, "report_id")?)?;
+                let mode = if arg(args, "mode") == Some("replace") { TextMode::Replace } else { TextMode::Append };
+                let p = TextProposal {
+                    report_id: Some(r.id.clone()),
+                    session_id: None,
+                    section_key: need(args, "section_key")?.to_string(),
+                    heading: String::new(),
+                    text: need(args, "text")?.to_string(),
+                    mode,
+                };
+                let p = self.store.check_text_proposal(ProposalKind::LetterText, p)?;
+                let title = self.store.template(&r.template_key)?.title;
+                let verb = if p.mode == TextMode::Replace { "ersetzen" } else { "ergänzen" };
+                let heading = if p.heading.is_empty() { "Einleitung".to_string() } else { p.heading.clone() };
+                let summary = format!("{title} für {}: „{heading}“ {verb}", name(&self.store.patient(&r.patient_id)?));
+                (ProposalKind::LetterText, serde_json::to_value(p)?, summary, None)
+            }
             "propose_section_text" | "propose_note_text" => {
                 let (report, session) = if tool == "propose_section_text" {
                     (Some(self.report(need(args, "report_id")?)?), None)
@@ -760,14 +888,14 @@ impl ToolCtx<'_> {
                     text,
                     mode,
                 };
-                let p = self.store.check_text_proposal(p)?;
+                let kind = if tool == "propose_section_text" { ProposalKind::SectionText } else { ProposalKind::NoteText };
+                let p = self.store.check_text_proposal(kind, p)?;
                 let target = match &session {
                     Some(s) => format!("Sitzungsnotiz vom {}", self.session_when(s)),
                     None => format!("{} von {}", if report.as_ref().is_some_and(|r| r.kind == "sitzungsnotiz") { "Sitzungsnotiz" } else { "Bericht" }, name(&self.store.patient(&patient_id)?)),
                 };
                 let verb = if p.mode == TextMode::Replace { "ersetzen" } else { "ergänzen" };
                 let summary = format!("{target}: „{}“ {verb}", p.heading);
-                let kind = if tool == "propose_section_text" { ProposalKind::SectionText } else { ProposalKind::NoteText };
                 (kind, serde_json::to_value(p)?, summary, None)
             }
             "propose_day_plan" => {
@@ -828,7 +956,8 @@ pub fn step_label(name: &str, args: &Value) -> String {
         "get_session_note" => "Sitzungsnotiz gelesen".into(),
         "get_facts" => "Fakten aus den Notizen gelesen".into(),
         "get_session_summaries" => "Kernpunkte der letzten Sitzungen gelesen".into(),
-        "get_report" => "Bericht gelesen".into(),
+        "get_report" => "Dokument gelesen".into(),
+        "get_letters" => "Briefe aufgelistet".into(),
         "calendar_day" => {
             let d = a("date");
             let parts: Vec<&str> = d.split('-').collect();
@@ -842,7 +971,7 @@ pub fn step_label(name: &str, args: &Value) -> String {
         "propose_session" => "Termin vorgeschlagen".into(),
         "propose_reschedule" => "Verschiebung vorgeschlagen".into(),
         "propose_task" => "Aufgabe vorgeschlagen".into(),
-        "propose_section_text" | "propose_note_text" => "Text vorgeschlagen".into(),
+        "propose_section_text" | "propose_note_text" | "propose_letter_text" => "Text vorgeschlagen".into(),
         "propose_day_plan" => "Tagesplanung vorgeschlagen".into(),
         other => format!("Unbekanntes Werkzeug abgelehnt: {other}"),
     }

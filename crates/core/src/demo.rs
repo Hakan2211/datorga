@@ -281,6 +281,7 @@ pub fn seed(store: &Store, audio_root: &Path, today: Date) -> Result<()> {
     let started = at(day(-3), 18, 30);
     store.conn().execute("UPDATE application SET created_at = ?2 WHERE id = ?1", params![application.id, started])?;
     store.conn().execute("UPDATE report SET created_at = ?2 WHERE id = ?1", params![report_id, started])?;
+    lena_letter(store, &lena, today)?;
 
     // Jonas: TP for adolescents in Probatorik; yesterday's recording waits for review.
     let jonas = store.create_patient(PatientInput {
@@ -339,6 +340,89 @@ pub fn seed(store: &Store, audio_root: &Path, today: Date) -> Result<()> {
         patient_id: Some(miriam.id.clone()),
         session_id: None,
     })?;
+    Ok(())
+}
+
+/// Lena's Befundbericht for the Versorgungsamt (slice 50): the Amt's request with three
+/// questions taken over as sections, Aktenzeichen, Schweigepflichtentbindung, and the Amt's
+/// deadline in five days as the Wiedervorlage (on Heute). The sections are left for her or the AI.
+fn lena_letter(store: &Store, lena: &Patient, today: Date) -> Result<()> {
+    use crate::letter::{LetterInput, LetterMeta, RecipientInput, RefLine, ReleaseInput, RequestSection};
+    let amt = store.create_recipient(RecipientInput {
+        kind: RecipientKind::Versorgungsamt,
+        name: "Landratsamt Musterkreis".into(),
+        department: "Versorgungsamt, Schwerbehindertenrecht".into(),
+        lines: vec!["Am Amtshaus 5".into(), "12345 Musterstadt".into()],
+        salutation: None,
+        default_template: Some("versorgungsamt-befund".into()),
+    })?;
+    let release = store.grant_release(&lena.id, ReleaseInput {
+        recipient_id: Some(amt.id.clone()),
+        granted_on: Some(ymd(today - Duration::days(9))),
+        note: Some("liegt dem Anschreiben bei".into()),
+        ..Default::default()
+    })?;
+    backdate_consent(store, &release.id, &at(today - Duration::days(6), 9, 0))?;
+    let letter = store.create_letter(LetterInput {
+        patient_id: lena.id.clone(),
+        template_key: "versorgungsamt-befund".into(),
+        episode_id: None,
+        recipient_id: Some(amt.id.clone()),
+    })?;
+    let (sent_on, due) = (today - Duration::days(6), today + Duration::days(5));
+    let german = |d: Date| format!("{:02}.{:02}.{}", d.day(), d.month() as u8, d.year());
+    let request = format!(
+        "Landratsamt Musterkreis · Versorgungsamt
+Az.: 52.1-4711/{yy}
+
+Feststellung nach dem SGB IX – Frau Lena Sommer
+
+         Sehr geehrte Damen und Herren,
+
+Frau Sommer hat die Feststellung eines Grades der Behinderung beantragt und Sie als          behandelnde Psychotherapeutin benannt. Eine Schweigepflichtentbindung liegt bei. Wir bitten um einen Befundbericht zu          folgenden Punkten:
+
+1. Seit wann und wie häufig findet die Behandlung statt? Datum der letzten Behandlung?
+         2. Art, Häufigkeit und Dauer der psychischen Beschwerden
+3. Auswirkungen auf die Teilhabe in Alltag, Familie und Beruf
+
+         Wir bitten um Ihre Antwort bis zum {due}.
+
+Mit freundlichen Grüßen
+Im Auftrag
+Mustermann",
+        yy = today.year() % 100,
+        due = german(due),
+    );
+    store.save_letter_request(&letter.report_id, &request)?;
+    let questions = [
+        "Seit wann und wie häufig findet die Behandlung statt? Datum der letzten Behandlung?",
+        "Art, Häufigkeit und Dauer der psychischen Beschwerden",
+        "Auswirkungen auf die Teilhabe in Alltag, Familie und Beruf",
+    ];
+    store.set_letter_questions(&letter.report_id, &questions.map(String::from))?;
+    let sections: Vec<RequestSection> =
+        questions.iter().enumerate().map(|(i, q)| RequestSection { key: None, heading: q.to_string(), question: Some(i) }).collect();
+    store.set_request_sections(&letter.report_id, &sections, false)?;
+    let l = store.letter(&letter.report_id)?;
+    store.save_letter_meta(&letter.report_id, LetterMeta {
+        episode_id: l.episode_id,
+        recipient_id: l.recipient_id,
+        recipient: l.recipient,
+        salutation: l.salutation,
+        subject: l.subject,
+        refs: vec![RefLine { label: "Aktenzeichen".into(), value: format!("52.1-4711/{}", today.year() % 100) }],
+        place: None,
+        letter_date: None,
+        follow_up_on: Some(ymd(due)),
+        follow_up_note: Some("Frist laut Anschreiben".into()),
+    })?;
+    // The opening names the Amt's letter; its date comes from the request.
+    let report = store.report(&letter.report_id)?;
+    if let Some(bezug) = report.sections.iter().find(|s| s.key == "bezug") {
+        store.save_section(&letter.report_id, "bezug", &bezug.body.replace("{Datum des Anschreibens}", &german(sent_on)))?;
+    }
+    let started = at(today - Duration::days(1), 17, 45);
+    store.conn().execute("UPDATE report SET created_at = ?2 WHERE id = ?1", params![letter.report_id, started])?;
     Ok(())
 }
 
@@ -534,5 +618,31 @@ mod tests {
         let source = &store.list_sources(&last.id).unwrap()[0];
         assert!(source.audio_deleted_at.is_none());
         assert_eq!(store.transcript_for_source(&source.id).unwrap().unwrap().status, TranscriptStatus::Draft);
+    }
+
+    #[test]
+    fn lena_has_a_versorgungsamt_letter_with_its_deadline_on_heute() {
+        let (store, _dir, today) = seeded();
+        let lena = store.list_patients(Some("Lena")).unwrap().remove(0);
+        let letters = store.list_letters(Some(&lena.id)).unwrap();
+        assert_eq!(letters.len(), 1);
+        let l = store.letter(&letters[0].report_id).unwrap();
+        assert_eq!((letters[0].template_key.as_str(), letters[0].recipient_name.as_str()), ("versorgungsamt-befund", "Landratsamt Musterkreis"));
+        assert_eq!(l.questions.len(), 3);
+        assert!(l.questions.iter().all(|q| q.section_key.is_some()), "taken over as sections");
+        assert!(l.request_text.contains("bis zum ") && l.request_text.lines().count() > 5);
+        assert!(l.refs[0].value.starts_with("52.1-4711/"));
+        let report = store.report(&l.report_id).unwrap();
+        let bezug = &report.sections.iter().find(|s| s.key == "bezug").unwrap().body;
+        assert!(bezug.contains("bezugnehmend auf Ihr Schreiben vom ") && !bezug.contains('{'), "{bezug}");
+        // The letter checks pass except the open questions (left for her or the AI).
+        let t = crate::letter::effective_template(store.template(&report.template_key).unwrap(), &report.sections);
+        let mut checks = crate::letter::checklist(&l, &report, &t);
+        checks.extend(crate::letter::release_check(&l, &t, store.letter_release(&l).unwrap().as_ref()));
+        let failing: Vec<&str> = checks.iter().filter(|c| !c.ok).map(|c| c.key.as_str()).collect();
+        assert_eq!(failing, ["letter_questions"], "{checks:?}");
+        let due = store.due_items(&at(today - Duration::days(30), 0, 0), &at(today, 0, 0), &at(today + Duration::days(1), 0, 0)).unwrap();
+        let f = due.iter().find(|d| d.kind == DueKind::LetterFollowUp).unwrap();
+        assert_eq!(f.letter.as_ref().unwrap().note.as_deref(), Some("Frist laut Anschreiben"));
     }
 }

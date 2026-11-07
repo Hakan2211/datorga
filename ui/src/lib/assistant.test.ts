@@ -80,5 +80,6 @@ describe('proposalTarget', () => {
     expect(proposalTarget(proposal({ status: 'applied', result_id: 's1' }))).toEqual({ to: '/sessions/$sessionId', id: 's1' })
     expect(proposalTarget(proposal({ status: 'applied', result_id: 'r1', kind: 'note_text' }))).toEqual({ to: '/reports/$reportId', id: 'r1' })
     expect(proposalTarget(proposal({ status: 'applied', result_id: '2026-10-30', kind: 'day_plan' }))).toEqual({ to: '/' })
+    expect(proposalTarget(proposal({ status: 'applied', result_id: 'b1', kind: 'letter_text' }))).toEqual({ to: '/briefe/$briefId', id: 'b1' })
   })
 })

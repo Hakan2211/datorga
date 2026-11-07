@@ -11,6 +11,7 @@ import type { RecipientKind } from '@/bindings/RecipientKind'
 import { Page, PageHeader } from '@/components/app-shell'
 import { SectionCard, formatDate } from '@/components/bits'
 import { ActiveSectionCard, LetterAiCard, RequestCard, UnbackedCard } from '@/components/briefe/letter-ai'
+import { RecipientCheckCard } from '@/components/briefe/recipient-check'
 import { LetterStatePill } from '@/components/briefe/letter-state'
 import { RecipientPicker } from '@/components/briefe/recipient-picker'
 import { ReleaseDialog } from '@/components/briefe/release'
@@ -65,6 +66,7 @@ function LetterEditor({ view, letter }: { view: ReportView; letter: Letter }) {
   const episodes = useQuery(q.episodes(patient.id))
   const linked = useQuery(q.patientRecipients(patient.id))
   const checklist = useQuery(q.checklist(reportId))
+  const llm = useQuery(q.llm())
   const [preview, setPreview] = useState(false)
   const [active, setActive] = useState<string | null>(null)
 
@@ -537,6 +539,15 @@ function LetterEditor({ view, letter }: { view: ReportView; letter: Letter }) {
                     ))}
                   </ul>
                 </SectionCard>
+              )}
+
+              {!readOnly && (
+                <RecipientCheckCard
+                  view={view}
+                  flush={flush}
+                  llmActive={!!llm.data?.config.active}
+                  onSection={(key) => document.getElementById(`section-${key}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+                />
               )}
 
               <SectionCard title={t('briefe.finishCard')} contentClassName="space-y-3 text-sm">

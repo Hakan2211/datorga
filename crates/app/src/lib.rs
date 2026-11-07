@@ -1839,6 +1839,12 @@ fn letter_meta_save(state: State<'_, AppState>, id: String, meta: LetterMeta) ->
     state.with(|s| s.save_letter_meta(&id, meta))
 }
 
+/// Heute's "Erledigt" (no date) or "später" on a letter's Frist / Wiedervorlage (slice 50).
+#[tauri::command]
+fn letter_follow_up_set(state: State<'_, AppState>, id: String, on: Option<String>, note: Option<String>) -> CmdResult<Letter> {
+    state.with(|s| s.set_letter_follow_up(&id, on, note))
+}
+
 /// Signs after the checklist; a typed-in recipient is saved to the address book unless she
 /// unticked it.
 #[tauri::command]
@@ -3338,13 +3344,21 @@ fn report_review_ignore(state: State<'_, AppState>, report_id: String, hint_id: 
 /// Exactly what the Gutachter-Check would send: the Bericht's text with the PTV 3 hints.
 fn prepare_review(s: &Store, report_id: &str) -> thera_core::Result<(review::Prepared, String, usize)> {
     let view = report_view(s, report_id)?;
-    let (Some(episode), Some(application)) = (&view.episode, &view.application) else {
-        return Err(thera_core::Error::Invalid("Den Gutachter-Check gibt es nur für Berichte zu einem Antrag".into()));
-    };
     let sections = review_sections(&view);
-    let frame = draft::Frame { method: episode.method, age_group: episode.age_group, target: draft::Target::Ptv3(application.kind) };
+    // Letters: the Empfänger-Check (slice 50), with the request's questions; no case needed.
+    let (frame, questions) = if view.report.kind == letter::KIND {
+        let (method, age_group) = view.episode.as_ref().map_or((Method::Vt, AgeGroup::Adult), |e| (e.method, e.age_group));
+        let frame = draft::Frame::of(&view.template, method, age_group, None, view.patient.gender).expect("letters always have a frame");
+        let questions: Vec<String> = s.letter(report_id)?.questions.into_iter().map(|q| q.text).collect();
+        (frame, questions)
+    } else {
+        let (Some(episode), Some(application)) = (&view.episode, &view.application) else {
+            return Err(thera_core::Error::Invalid("Den Gutachter-Check gibt es nur für Berichte zu einem Antrag".into()));
+        };
+        (draft::Frame { method: episode.method, age_group: episode.age_group, target: draft::Target::Ptv3(application.kind) }, Vec::new())
+    };
     let dict = s.pseudo_dictionary(&view.patient.id)?;
-    let prepared = review::prepare(&view.template, &frame, &sections, &view.patient, dict)?;
+    let prepared = review::prepare(&view.template, &frame, &sections, &questions, &view.patient, dict)?;
     Ok((prepared, review::text_digest(&sections), sections.len()))
 }
 
@@ -5030,6 +5044,7 @@ pub fn run() {
             letter_get,
             letters_list,
             letter_meta_save,
+            letter_follow_up_set,
             letter_sign,
             letter_mark_sent,
             recipients_list,

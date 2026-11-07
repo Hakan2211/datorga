@@ -130,6 +130,29 @@ export const SHOTS = {
     await d.hover(d.page.getByTestId('finish-pdf'), 1200)
   },
 
+  async briefe(d) {
+    await d.nav('Heute')
+    await d.wait(800)
+    const due = d.page.getByTestId('letter-due').first()
+    await d.hover(due, 1600)
+    await d.click(due.getByRole('link').first())
+    await d.wait(1500)
+    await d.hover(d.page.getByTestId('letter-window'), 1500)
+    await d.hover(d.page.getByTestId('letter-questions'), 2000)
+  },
+
+  async 'brief-ki'(d) {
+    await d.click(d.page.getByTestId('letter-ai-write'))
+    await d.wait(700)
+    await d.click(d.page.getByRole('button', { name: 'Senden und schreiben' }))
+    await d.hover(d.page.locator('mark[data-ohne-beleg]').first(), 1000)
+    await d.click(d.page.getByTestId('unbacked-delete').first(), { before: 400 })
+    await d.click(d.page.getByTestId('check-run'))
+    await d.wait(500)
+    await d.click(d.page.getByRole('button', { name: 'Brief prüfen lassen' }))
+    await d.hover(d.page.getByTestId('recipient-hint').first(), 1200)
+  },
+
   async gesendet(d) {
     await d.press('Escape')
     await d.nav('Sitzungen')

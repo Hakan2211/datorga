@@ -1,7 +1,7 @@
 ---
 title: Tastenkürzel
 summary: Schneller arbeiten mit der Tastatur
-order: 9
+order: 10
 keywords: tastatur, shortcut, strg, suche, palette, editor
 ---
 ## Überall

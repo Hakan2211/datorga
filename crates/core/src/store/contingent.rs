@@ -137,6 +137,7 @@ impl Store {
                 application_kind: Some(kind),
                 seq: None,
                 contingent: Some(c),
+                letter: None,
             });
         }
         Ok(items)

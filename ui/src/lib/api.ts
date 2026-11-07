@@ -596,6 +596,7 @@ export const api = {
 
   createLetter: (input: LetterInput) => invoke<Letter>('letter_create', { input }),
   letter: (id: string) => invoke<Letter>('letter_get', { id }),
+  letterFollowUpSet: (id: string, on: string | null, note: string | null) => invoke<Letter>('letter_follow_up_set', { id, on, note }),
   letters: (patientId?: string) => invoke<LetterSummary[]>('letters_list', { patientId: patientId ?? null }),
   saveLetterMeta: (id: string, meta: LetterMeta) => invoke<Letter>('letter_meta_save', { id, meta }),
   signLetter: (id: string, signedBy: string, saveRecipient: boolean) =>

@@ -15,6 +15,7 @@ import {
   FileText,
   ListTodo,
   Loader2,
+  Mail,
   Mic,
   MicOff,
   NotebookPen,
@@ -45,13 +46,14 @@ const KIND_ICON: Record<ProposalKind, typeof CalendarPlus> = {
   task: ListTodo,
   section_text: FileText,
   note_text: FileText,
+  letter_text: Mail,
   day_plan: NotebookPen,
 }
 
 /** What an applied proposal may have changed. */
 function invalidateApplied(qc: QueryClient) {
   invalidateSessions(qc)
-  for (const key of ['tasks', 'dayNote', 'report', 'reports', 'chat']) void qc.invalidateQueries({ queryKey: [key] })
+  for (const key of ['tasks', 'dayNote', 'report', 'reports', 'letter', 'letters', 'checklist', 'chat']) void qc.invalidateQueries({ queryKey: [key] })
 }
 
 type Pending = { requestId: string; question: string; text: string; stored: boolean }
@@ -331,6 +333,11 @@ function ProposalCard({ proposal: p, hint }: { proposal: AgentProposal; hint?: s
             )}
             {target?.to === '/reports/$reportId' && (
               <Link to={target.to} params={{ reportId: target.id }} className="text-xs underline">
+                {t('assistant.open')}
+              </Link>
+            )}
+            {target?.to === '/briefe/$briefId' && (
+              <Link to={target.to} params={{ briefId: target.id }} className="text-xs underline">
                 {t('assistant.open')}
               </Link>
             )}

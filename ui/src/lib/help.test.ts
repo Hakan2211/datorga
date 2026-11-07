@@ -42,13 +42,14 @@ describe('help articles', () => {
     expect(linkTarget('https://openrouter.ai')).toEqual({ kind: 'web', url: 'https://openrouter.ai' })
   })
 
-  it('bundles the nine planned articles in nav order', () => {
+  it('bundles the planned articles in nav order', () => {
     expect(HELP_ARTICLES.map((a) => a.title)).toEqual([
       'Erste Schritte',
       'Sitzung aufnehmen',
       'Autopilot',
       'Notiz & Fakten',
       'Bericht schreiben',
+      'Briefe & weitere Berichte',
       'Datenschutz & Pseudonymisierung',
       'KI-Anbieter & Kosten',
       'Datensicherung & Notfall-Kit',
@@ -58,7 +59,7 @@ describe('help articles', () => {
   })
 
   it('links only to articles and pages that exist', () => {
-    const pages = ['/', '/calendar', '/patients', '/sessions', '/reports', '/assistant', '/settings', '/hilfe', ...SETTINGS_PAGES.map((p) => p.to)]
+    const pages = ['/', '/calendar', '/patients', '/sessions', '/reports', '/briefe', '/assistant', '/settings', '/hilfe', ...SETTINGS_PAGES.map((p) => p.to)]
     for (const a of HELP_ARTICLES) {
       for (const b of a.blocks) {
         for (const text of 'items' in b ? b.items : [b.text]) {

@@ -8,10 +8,12 @@ import { EmptyState, FilterChip, formatDate } from '@/components/bits'
 import { LetterStatePill } from '@/components/briefe/letter-state'
 import { NewLetterDialog } from '@/components/briefe/new-letter-dialog'
 import { DeleteReport } from '@/components/delete-button'
+import { HelpLink } from '@/components/help-link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { q } from '@/lib/api'
+import { HELP } from '@/lib/help'
 import { germanDay, matchesLetter, type LetterFilter } from '@/lib/letters'
 
 type BriefeSearch = { neu?: boolean; patient?: string }
@@ -41,7 +43,11 @@ function Briefe() {
   return (
     <>
       <PageHeader
-        title={t('briefe.title')}
+        title={
+          <span className="flex items-center gap-1">
+            {t('briefe.title')} <HelpLink slug={HELP.letters} />
+          </span>
+        }
         subtitle={t('briefe.subtitle')}
         actions={
           <>

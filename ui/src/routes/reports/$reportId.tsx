@@ -490,7 +490,6 @@ function ReportEditor({ view }: { view: ReportView }) {
         ) : stepOn && viewing === 'pruefen' ? (
           <CheckStep
             view={view}
-            ai={!isLetter}
             bodies={bodies}
             content={content}
             flush={flush}

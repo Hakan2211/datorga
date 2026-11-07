@@ -3,6 +3,12 @@
 //! section ("Ein Gutachter würde fragen: …"). It never changes the text: the therapist goes to
 //! the section and edits herself, or ignores the hint.
 //!
+//! Letters (slice 50) get the same check as the "Empfänger-Check": the model reads as the
+//! recipient (Rentenversicherung, Versorgungsamt, Ärzt:in …), with the template's hints and the
+//! request's questions, and names what that reader would miss: unanswered questions, function
+//! and participation without concrete examples, claims without reasons. It never proposes an
+//! Einstufung (GdB, Pflegegrad, hours of work capacity). Address, Anrede and Betreff stay local.
+//!
 //! The diagnoses stay out (the therapist sets them; no AI comment on them), so does any section
 //! marked "nicht relevant". Empty sections, identifiers, the Chiffre and the length are checked
 //! by the app itself (`pii::checklist`), not by the model.
@@ -15,15 +21,18 @@ use sha2::{Digest, Sha256};
 use ts_rs::TS;
 
 use crate::domain::{AgeGroup, Patient};
-use crate::draft::{kind_name, method_name, patient_as_pat, Frame};
+use crate::draft::{kind_name, method_name, patient_as_pat, reader, Frame, Target};
 use crate::extract::{citation_number, json_list, sha256, Preview, TokenView, ICD};
 use crate::llm::{ChatOptions, Effort};
 use crate::pseudo::{Dictionary, Pseudonymized, Pseudonymizer, TokenMap};
-use crate::templates::{FieldKind, SectionDef, Template};
+use crate::templates::{Audience, FieldKind, SectionDef, Template};
 use crate::{Error, Result};
 
 /// Bump on any change to the prompt or the answer format.
-pub const PROMPT_VERSION: &str = "review-2026.1";
+pub const PROMPT_VERSION: &str = "review-2026.2";
+
+/// Most request questions sent with a letter.
+pub const MAX_QUESTIONS: usize = 20;
 
 /// Longest Bericht text sent (a PTV 3 Bericht is about two pages, ~7 000 characters).
 pub const MAX_TEXT_CHARS: usize = 30_000;
@@ -127,6 +136,9 @@ impl Prepared {
 
 /// The system prompt for a (resolved) Bericht template. Holds no patient data.
 pub fn system_prompt(template: &Template, frame: &Frame) -> String {
+    if let Target::Letter { audience, .. } = frame.target {
+        return letter_prompt(template, audience);
+    }
     let age = if frame.age_group == AgeGroup::Kjp { "Kinder und Jugendliche" } else { "Erwachsene" };
     format!(
         "Du bist erfahrene Gutachterin bzw. erfahrener Gutachter im Gutachterverfahren der gesetzlichen \
@@ -162,22 +174,86 @@ pub fn system_prompt(template: &Template, frame: &Frame) -> String {
     )
 }
 
+/// Who would ask, as the hints phrase it ("Die Rentenversicherung würde fragen: …").
+fn asker(a: Audience) -> &'static str {
+    match a {
+        Audience::Behoerde => "Die Sachbearbeitung würde fragen",
+        Audience::Arzt => "Die Ärztin bzw. der Arzt würde fragen",
+        Audience::Patient | Audience::Frei => "Die Empfängerin bzw. der Empfänger würde fragen",
+    }
+}
+
+/// The Empfänger-Check prompt for a letter (slice 50). Holds no patient data.
+fn letter_prompt(template: &Template, audience: Audience) -> String {
+    let behoerde = if audience == Audience::Behoerde {
+        "- Für Behörden und Sozialleistungsträger: Werden Funktionseinschränkungen und Teilhabe (Alltag, \
+         Selbstversorgung, Beruf bzw. Leistungsfähigkeit, soziale Kontakte, kognitive Belastbarkeit) konkret mit \
+         Beispielen, Häufigkeit und Dauer beschrieben, statt nur Diagnosen oder Symptome zu nennen? Fehlen Angaben zu \
+         Behandlungsbeginn, Frequenz, letzter Behandlung oder Prognose, die der Empfänger für seine Entscheidung braucht?\n"
+    } else {
+        ""
+    };
+    format!(
+        "Du liest als erfahrene Empfängerin bzw. erfahrener Empfänger ({reader}) den Entwurf eines Schreibens \
+         ({title}) einer Psychotherapeutin gegen, bevor sie es abschickt.\n\
+         Hinweise der Vorlage: {intro}\n\n\
+         Du erhältst die Abschnitte nummeriert ([A1], [A2] …), jeweils mit Überschrift, den Hinweisen der Vorlage und \
+         dem Text, und, falls vorhanden, die Fragen aus dem Anschreiben des Empfängers ([Q1], [Q2] …).\n\n\
+         Aufgabe: Nenne, was der Empfänger vermissen oder nachfragen würde:\n\
+         - Fragen des Anschreibens, die der Brief nicht oder nur ausweichend beantwortet (mit der Nummer der Frage).\n\
+         {behoerde}\
+         - Behauptungen ohne Begründung (etwa eine Prognose oder Behandlungsbedürftigkeit ohne Grund) und \
+         Widersprüche zwischen Abschnitten.\n\
+         Regeln:\n\
+         - Nur Hinweise. Keine Umformulierungen und kein Text für den Brief. Keine Inhalte vorschlagen, die nicht im \
+         Brief stehen; stattdessen danach fragen.\n\
+         - Keine Einstufungen vorschlagen oder verlangen (kein Grad der Behinderung, kein Pflegegrad, keine \
+         Stundenzahl der Leistungsfähigkeit, keine Merkzeichen): die Einstufung trifft der Empfänger.\n\
+         - Höchstens {max} Hinweise, die wichtigsten zuerst. Jeder Hinweis ein oder zwei Sätze, gern in der Form \
+         \"{asker}: …\".\n\
+         - Nicht kommentieren: leere Abschnitte, Länge, Rechtschreibung, Anschrift, Betreff, Formales. Das prüft die App \
+         selbst.\n\
+         - Keine Diagnosen, keine ICD-Codes, keine Vorschläge zu Medikamenten.\n\
+         - Die Person heißt \"Pat.\". Platzhalter in eckigen Klammern wie [PERSON_n] unverändert lassen.\n\
+         - \"level\": \"wichtig\" für das, was der Empfänger wahrscheinlich nachfordern würde (etwa eine \
+         unbeantwortete Frage), sonst \"hinweis\".\n\
+         - \"section\": die Nummer des Abschnitts ([A3] → 3), null für den ganzen Brief oder eine Frage ohne Abschnitt.\n\
+         - Ist nichts zu bemängeln, ist eine leere Liste die richtige Antwort.\n\n\
+         Antworte ausschließlich mit JSON in dieser Form, ohne weiteren Text:\n\
+         {{\"hints\": [{{\"section\": 3, \"level\": \"wichtig\", \"text\": \"…\"}}]}}\n",
+        reader = reader(audience),
+        title = template.title,
+        intro = template.intro.trim(),
+        max = MAX_HINTS,
+        asker = asker(audience),
+    )
+}
+
 /// Everything that leaves the machine for checking the Bericht's `sections` (see [`sections`]).
-pub fn prepare(template: &Template, frame: &Frame, sections: &[(&SectionDef, String)], patient: &Patient, dict: Dictionary) -> Result<Prepared> {
+/// `questions`: a letter's request questions in the Amt's wording (empty for PTV 3).
+pub fn prepare(
+    template: &Template,
+    frame: &Frame,
+    sections: &[(&SectionDef, String)],
+    questions: &[String],
+    patient: &Patient,
+    dict: Dictionary,
+) -> Result<Prepared> {
+    let letter = matches!(frame.target, Target::Letter { .. });
     if sections.is_empty() {
-        return Err(Error::Invalid("Der Bericht hat noch keinen Text zum Prüfen".into()));
+        return Err(Error::Invalid(if letter { "Der Brief hat noch keinen Text zum Prüfen" } else { "Der Bericht hat noch keinen Text zum Prüfen" }.into()));
     }
     let chars: usize = sections.iter().map(|(_, t)| t.chars().count()).sum();
     if chars > MAX_TEXT_CHARS {
         return Err(Error::Invalid(format!("Der Bericht ist zu lang für die Prüfung ({chars} Zeichen, höchstens {MAX_TEXT_CHARS})")));
     }
-    let mut user = String::from("Bericht:\n");
+    let mut user = String::from(if letter { "Brief:\n" } else { "Bericht:\n" });
     let mut keys = Vec::new();
     for (i, (def, text)) in sections.iter().enumerate() {
         let number = def.number.as_deref().map(|n| format!("{n}. ")).unwrap_or_default();
         user.push_str(&format!("\n[A{}] {number}{}\n", i + 1, def.heading.split_whitespace().collect::<Vec<_>>().join(" ")));
         if !def.hints.is_empty() {
-            user.push_str("Hinweise des Leitfadens:\n");
+            user.push_str(if letter { "Hinweise der Vorlage:\n" } else { "Hinweise des Leitfadens:\n" });
             for h in &def.hints {
                 user.push_str(&format!("- {}\n", h.text.trim()));
             }
@@ -185,7 +261,18 @@ pub fn prepare(template: &Template, frame: &Frame, sections: &[(&SectionDef, Str
         user.push_str(&format!("Text:\n{}\n", patient_as_pat(text.trim(), patient)));
         keys.push(def.key.clone());
     }
-    user.push_str("\nNenne, was ein Gutachter bemängeln oder nachfragen würde. Keinen Text für den Bericht schreiben.\n");
+    let questions: Vec<&str> = questions.iter().map(|q| q.trim()).filter(|q| !q.is_empty()).take(MAX_QUESTIONS).collect();
+    if letter && !questions.is_empty() {
+        user.push_str("\nFragen aus dem Anschreiben:\n");
+        for (i, q) in questions.iter().enumerate() {
+            user.push_str(&format!("[Q{}] {}\n", i + 1, patient_as_pat(q, patient)));
+        }
+    }
+    user.push_str(if letter {
+        "\nNenne, was der Empfänger vermissen oder nachfragen würde. Keinen Text für den Brief schreiben.\n"
+    } else {
+        "\nNenne, was ein Gutachter bemängeln oder nachfragen würde. Keinen Text für den Bericht schreiben.\n"
+    });
 
     let mut p = Pseudonymizer::new(dict);
     let system_raw = system_prompt(template, frame);
@@ -265,7 +352,7 @@ mod tests {
     }
 
     fn frame() -> Frame {
-        Frame { method: Method::Vt, age_group: AgeGroup::Adult, target: crate::draft::Target::Ptv3(ApplicationKind::Umwandlung) }
+        Frame { method: Method::Vt, age_group: AgeGroup::Adult, target: Target::Ptv3(ApplicationKind::Umwandlung) }
     }
 
     fn patient() -> Patient {
@@ -304,7 +391,7 @@ mod tests {
         assert_eq!(secs.iter().map(|(d, _)| d.key.as_str()).collect::<Vec<_>>(), ["soziodemographie", "symptomatik_befund", "behandlungsplan_prognose"]);
         let mut dict = Dictionary::from_patient(&patient());
         dict.add(EntityKind::Arbeitgeber, "Kita Sonnenschein");
-        let p = prepare(&t, &frame(), &secs, &patient(), dict).unwrap();
+        let p = prepare(&t, &frame(), &secs, &[], &patient(), dict).unwrap();
         let m = p.user.get();
         assert!(m.starts_with("Bericht:\n\n[A1] 1. Relevante soziodemographische Daten"), "{m}");
         assert!(m.contains("Text:\nPat., 41 Jahre, Erzieherin bei der [ARBEITGEBER_1].\n"), "{m}");
@@ -312,11 +399,34 @@ mod tests {
         assert!(!m.contains("Anna") && !m.contains("Sonnenschein") && !m.contains("F41") && !m.contains("Medikation"));
         assert!(p.system.get().contains("Umwandlungsantrag") && p.system.get().contains("Verhaltenstherapie"));
         assert_eq!(p.preview().messages.len(), 1);
-        assert!(prepare(&t, &frame(), &[], &patient(), Dictionary::new()).is_err());
+        assert!(prepare(&t, &frame(), &[], &[], &patient(), Dictionary::new()).is_err());
 
         let d1 = text_digest(&secs);
         assert_eq!(d1, text_digest(&sections(&t, |k| k == "somatik", texts)));
         assert_ne!(d1, text_digest(&sections(&t, |_| false, texts)));
+    }
+
+    #[test]
+    fn letters_get_the_empfaenger_check_with_the_request_questions() {
+        let t = templates::builtin().unwrap().into_iter().find(|t| t.key == "versorgungsamt-befund").unwrap();
+        let frame = Frame { method: Method::Vt, age_group: AgeGroup::Adult, target: Target::Letter { audience: Audience::Behoerde, gender: Some(Gender::W) } };
+        let first = t.sections.iter().find(|d| d.field == FieldKind::Prose && !d.heading.trim().is_empty()).unwrap().key.clone();
+        let text_of = |k: &str| if k == first { "Frau Anna Beispiel geht kaum noch aus dem Haus.".to_string() } else { String::new() };
+        let secs = sections(&t, |_| false, text_of);
+        assert_eq!(secs.len(), 1);
+        let questions = vec!["Art, Häufigkeit und Dauer der Depression bei Anna Beispiel?".to_string(), "  ".to_string(), "Datum der letzten Behandlung?".to_string()];
+        let p = prepare(&t, &frame, &secs, &questions, &patient(), Dictionary::from_patient(&patient())).unwrap();
+        let (sys, user) = (p.system.get(), p.user.get());
+        assert!(sys.contains("Versorgungsamt") && sys.contains("Keine Einstufungen") && sys.contains("Teilhabe"), "{sys}");
+        assert!(!sys.contains("Gutachterverfahren") && !sys.contains("Psychotherapie-Richtlinie"));
+        assert!(user.starts_with("Brief:\n\n[A1] ") && user.contains("Hinweise der Vorlage:"), "{user}");
+        assert!(user.contains("Fragen aus dem Anschreiben:\n[Q1] Art, Häufigkeit und Dauer der Depression bei Pat.?\n[Q2] Datum der letzten Behandlung?\n"), "{user}");
+        assert!(!user.contains("Anna") && !user.contains("Beispiel") && !user.contains("[Q3]"));
+        // A PTV 3 Bericht gets no questions, and its prompt is the Gutachter's.
+        let ptv3 = prepare(&bericht(), &self::frame(), &sections(&bericht(), |_| false, texts), &questions, &patient(), Dictionary::from_patient(&patient())).unwrap();
+        assert!(!ptv3.user.get().contains("Anschreiben") && ptv3.system.get().contains("Gutachterverfahren"));
+        let arzt = system_prompt(&t, &Frame { target: Target::Letter { audience: Audience::Arzt, gender: None }, ..frame });
+        assert!(arzt.contains("Die Ärztin bzw. der Arzt würde fragen") && !arzt.contains("Selbstversorgung"));
     }
 
     #[test]
@@ -325,7 +435,7 @@ mod tests {
         let secs = sections(&t, |_| false, texts);
         let mut dict = Dictionary::from_patient(&patient());
         dict.add(EntityKind::Arbeitgeber, "Kita Sonnenschein");
-        let p = prepare(&t, &frame(), &secs, &patient(), dict).unwrap();
+        let p = prepare(&t, &frame(), &secs, &[], &patient(), dict).unwrap();
         let answer = r#"<think>…</think>{"hints": [
           {"section": 1, "level": "hinweis", "text": "Beruf bei [ARBEITGEBER_1]  genauer?"},
           {"section": "A4", "level": "wichtig", "text": "Ein Gutachter würde fragen: Woran machen Sie die günstige Prognose fest?"},

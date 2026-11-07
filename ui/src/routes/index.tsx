@@ -7,12 +7,14 @@ import { addDays, format, isToday, startOfDay, subDays } from 'date-fns'
 import { de } from 'date-fns/locale'
 import {
   CalendarPlus,
+  Check,
   ChevronRight,
   ClipboardList,
   FileCheck2,
   FilePlus2,
   FileText,
   ListTodo,
+  Mail,
   MoreHorizontal,
   NotebookPen,
   PenLine,
@@ -241,6 +243,7 @@ function DueCard({ today }: { today: Date }) {
   // Today's sessions are on the timeline with their own "Vorbereiten" already.
   const items = (due.data ?? []).filter((i) => !(i.kind === 'prep_missing' && i.at && isToday(new Date(i.at))))
   const groups: { kind: DueItem['kind']; icon: typeof PenLine; items: DueItem[] }[] = [
+    { kind: 'letter_follow_up', icon: Mail, items: items.filter((i) => i.kind === 'letter_follow_up') },
     { kind: 'transcript_review', icon: FileCheck2, items: items.filter((i) => i.kind === 'transcript_review') },
     { kind: 'application_due', icon: FilePlus2, items: items.filter((i) => i.kind === 'application_due') },
     { kind: 'note_open', icon: PenLine, items: items.filter((i) => i.kind === 'note_open') },
@@ -263,7 +266,13 @@ function DueCard({ today }: { today: Date }) {
             <ul className="space-y-0.5 pl-9">
               {g.items.slice(0, DUE_SHOWN).map((i) => (
                 <li key={`${i.kind}-${i.session_id ?? i.report_id ?? i.contingent?.episode_id}`}>
-                  {i.kind === 'application_due' ? <ApplicationDueRow item={i} /> : <DueLink item={i} />}
+                  {i.kind === 'application_due' ? (
+                    <ApplicationDueRow item={i} />
+                  ) : i.kind === 'letter_follow_up' ? (
+                    <LetterDueRow item={i} today={today} />
+                  ) : (
+                    <DueLink item={i} />
+                  )}
                 </li>
               ))}
               {g.items.length > DUE_SHOWN && (
@@ -299,6 +308,59 @@ function ApplicationDueRow({ item }: { item: DueItem }) {
       >
         {t('today.prepareApplication')}
       </Button>
+    </div>
+  )
+}
+
+/** A letter's Frist (not sent yet) or Wiedervorlage (sent): open it, or mark it done. */
+function LetterDueRow({ item, today }: { item: DueItem; today: Date }) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const l = item.letter
+  const done = useMutation({
+    mutationFn: () => api.letterFollowUpSet(item.report_id!, null, null),
+    onSuccess: () => {
+      for (const key of ['calendar', 'letter', 'letters']) void qc.invalidateQueries({ queryKey: [key] })
+      toast.success(t('today.followUpDoneToast'))
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+  if (!l || !item.report_id) return null
+  const day = new Date(`${l.follow_up_on}T00:00:00`)
+  const overdue = day < startOfDay(today)
+  const date = format(day, 'EEE d.M.', { locale: de })
+  return (
+    <div className="rounded px-1 py-0.5 text-sm" data-testid="letter-due">
+      <div className="flex items-center gap-2">
+        <Link to="/briefe/$briefId" params={{ briefId: item.report_id }} className="min-w-0 flex-1 hover:underline">
+          <PatientLabel name={item.patient_name} chiffre={item.chiffre} />
+        </Link>
+        <span className={cn('shrink-0 text-xs', overdue ? 'font-medium text-destructive' : 'text-muted-foreground')}>
+          {t(l.sent ? 'today.letterFollowUp' : 'today.letterDeadline', { date })}
+          {overdue && ` · ${t('today.overdue')}`}
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <Link
+          to="/briefe/$briefId"
+          params={{ briefId: item.report_id }}
+          className="min-w-0 flex-1 truncate text-xs text-muted-foreground hover:underline"
+          title={`${l.template_title}${l.note ? ` · ${l.note}` : ''}`}
+        >
+          {l.template_title}
+          {l.note ? ` · ${l.note}` : ''}
+        </Link>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 shrink-0 px-1.5 text-xs"
+          disabled={done.isPending}
+          onClick={() => done.mutate()}
+          data-testid="letter-due-done"
+        >
+          <Check className="size-3.5" /> {t('today.followUpDone')}
+        </Button>
+      </div>
     </div>
   )
 }

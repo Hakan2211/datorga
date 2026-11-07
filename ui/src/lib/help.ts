@@ -192,6 +192,7 @@ export const HELP = {
   autopilot: 'autopilot',
   note: 'notiz-und-fakten',
   report: 'bericht',
+  letters: 'briefe',
   privacy: 'datenschutz',
   ai: 'ki-anbieter',
   backup: 'datensicherung',

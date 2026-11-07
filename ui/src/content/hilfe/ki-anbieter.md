@@ -1,7 +1,7 @@
 ---
 title: KI-Anbieter & Kosten
 summary: Anbieter einrichten, Modelle wählen, Guthaben im Blick
-order: 7
+order: 8
 keywords: openrouter, requesty, openai, api-schlüssel, schlüssel, modell, kosten, guthaben, aufladen, lokal, zdr
 ---
 Für Fakten, Zusammenfassungen und Berichtsentwürfe braucht Theralo ein KI-Modell. Sie wählen es unter [Einstellungen → KI & Kosten](/settings/ki).

@@ -21,6 +21,7 @@ export const TOUR_STEPS: Step[] = [
   { id: 'autopilot', to: '/settings/allgemein', target: 'autopilot', side: 'bottom' },
   { id: 'notiz', to: '/sessions', target: 'session-filters', fallback: 'nav-sessions', side: 'bottom' },
   { id: 'bericht', to: '/reports', target: 'nav-reports', side: 'right' },
+  { id: 'briefe', to: '/briefe', target: 'nav-briefe', side: 'right' },
   { id: 'ki', to: '/settings/ki', target: 'llm-settings', side: 'bottom' },
 ]
 

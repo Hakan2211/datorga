@@ -6,7 +6,7 @@ Erklärvideo für die Hilfe (`VIDEO_URL` in `ui/src/lib/help.ts`) und den letzte
 
 **Format dieser Datei** (das Skript liest es): `## Kapitel` gruppiert, `### <id> · Titel` ist eine Einstellung, Zeilen mit `> ` sind der Sprechertext, `Bild:` beschreibt, was zu sehen ist. Die Kapitel folgen den Hilfe-Artikeln.
 
-Stimme: `coral` (warm, weiblich), Modell `gpt-4o-mini-tts`, ruhiges Tempo. Gesamtlänge etwa 4½ Minuten.
+Stimme: `coral` (warm, weiblich), Modell `gpt-4o-mini-tts`, ruhiges Tempo. Gesamtlänge etwa 5 Minuten.
 
 ## 1 · Erste Schritte
 
@@ -74,13 +74,23 @@ Bild: Umwandlungsantrag von Lena Sommer öffnen (Schritt „Abschnitte“), „L
 Bild: Schritt „Prüfen“, „Mit KI prüfen“, „Bericht prüfen lassen“, ein Hinweis „Ein Gutachter würde fragen …“, dann „Weiter: Unterschreiben“, Maus über den PDF-Export.
 > Beim Prüfen liest die KI den Bericht wie ein Gutachter und nennt, was nachgefragt würde. Den Text ändert sie nicht. Zum Schluss sehen Sie den Bericht im Format des Musters PTV 3, unterschreiben und exportieren als PDF oder Word.
 
-## 6 · Datenschutz
+## 6 · Briefe & weitere Berichte
+
+### briefe · Briefe
+Bild: Heute, die Zeile „Fristen und Wiedervorlagen“ mit dem Befundbericht für das Versorgungsamt; Klick darauf, der Brief mit Briefkopf, rechts das Anschreiben mit drei Fragen.
+> Auch Befundberichte an Rentenversicherung, Pflegekasse, Versorgungsamt oder Ärztinnen schreiben Sie in Theralo, mit Ihrem Briefkopf. Die Frist aus dem Anschreiben steht auf Heute. Die Fragen des Amtes werden zu Abschnitten, in seiner Reihenfolge.
+
+### brief-ki · Mit KI schreiben
+Bild: „Mit KI schreiben“, „Senden und schreiben“, der Text erscheint in den Abschnitten, ein gelb markierter Satz „ohne Beleg“, dann der Empfänger-Check mit einem Hinweis.
+> Mit einem Klick schreibt die KI alle leeren Abschnitte aus Ihren Notizen. Anschrift und Betreff verlassen den Rechner nie. Was keine Quelle stützt, ist gelb markiert; Sie behalten oder löschen es. Der Empfänger-Check liest den Brief mit den Augen des Amtes.
+
+## 7 · Datenschutz
 
 ### gesendet · Was wurde gesendet?
 Bild: Zurück zur Sitzung von Jonas Albrecht, „Was wurde gesendet?“ öffnen, der pseudonymisierte Text.
 > Bevor ein Text an einen KI-Dienst geht, ersetzt Theralo Namen, Orte und Daten durch Platzhalter. Unter „Was wurde gesendet?“ sehen Sie genau, was Ihren Rechner verlassen hat.
 
-## 7 · KI-Anbieter & Kosten
+## 8 · KI-Anbieter & Kosten
 
 ### anbieter · Eigener Schlüssel
 Bild: Hilfe-Artikel „KI-Anbieter & Kosten“, die Anleitung „OpenRouter einrichten“ mit fünf Schritten.
@@ -90,13 +100,13 @@ Bild: Hilfe-Artikel „KI-Anbieter & Kosten“, die Anleitung „OpenRouter einr
 Bild: Einstellungen, Karte „KI-Kosten & Guthaben“.
 > Was die KI kostet, sehen Sie in den Einstellungen, nach Aufgabe und nach Modell. Wird das Guthaben knapp, warnt Theralo rechtzeitig.
 
-## 8 · Datensicherung & Notfall-Kit
+## 9 · Datensicherung & Notfall-Kit
 
 ### sicherung · Datensicherung
 Bild: Einstellungen, Karte „Datensicherung“, Maus über „Sicherung erstellen“.
 > Sichern Sie Ihre Daten regelmäßig. Die Sicherung ist verschlüsselt, und Ihr Notfall-Kit vom ersten Start ist der Schlüssel dazu. Bewahren Sie es gut auf.
 
-## 9 · Hilfe
+## 10 · Hilfe
 
 ### hilfe · Hilfe und Suche
 Bild: „Hilfe“ öffnen, „Schlüssel“ suchen, dann Strg + K mit der Befehlssuche.

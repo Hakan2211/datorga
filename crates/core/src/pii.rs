@@ -131,7 +131,9 @@ pub fn checklist(report: &Report, template: &Template, patient: &Patient) -> Vec
                 severity: "block".into(),
                 message: match &def.number {
                     Some(n) => format!("Abschnitt {n} ausgefüllt"),
-                    None => format!("{} ausgefüllt", def.heading),
+                    // A letter's opening has no heading.
+                    None if def.heading.trim().is_empty() => "Einleitung ausgefüllt".into(),
+                    None => format!("{} ausgefüllt", def.heading.trim()),
                 },
                 section_key: Some(def.key.clone()),
             });

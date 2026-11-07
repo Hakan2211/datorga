@@ -69,7 +69,9 @@ export function groupTurns(messages: ChatMessage[], steps: Record<string, string
 }
 
 /** Where an applied proposal leads. */
-export function proposalTarget(p: AgentProposal): { to: '/sessions/$sessionId'; id: string } | { to: '/reports/$reportId'; id: string } | { to: '/' } | null {
+export function proposalTarget(
+  p: AgentProposal,
+): { to: '/sessions/$sessionId'; id: string } | { to: '/reports/$reportId'; id: string } | { to: '/briefe/$briefId'; id: string } | { to: '/' } | null {
   if (p.status !== 'applied' || !p.result_id) return null
   switch (p.kind) {
     case 'session':
@@ -78,6 +80,8 @@ export function proposalTarget(p: AgentProposal): { to: '/sessions/$sessionId'; 
     case 'section_text':
     case 'note_text':
       return { to: '/reports/$reportId', id: p.result_id }
+    case 'letter_text':
+      return { to: '/briefe/$briefId', id: p.result_id }
     default:
       return { to: '/' }
   }

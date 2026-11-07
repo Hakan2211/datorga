@@ -1,7 +1,7 @@
 ---
 title: Datensicherung & Notfall-Kit
 summary: Sichern, wiederherstellen und den Schlüssel verwahren
-order: 8
+order: 9
 keywords: backup, sicherung, wiederherstellen, papierkorb, gelöscht, notfall-schlüssel, notfall-kit, neuer computer, usb, schlüsselbund, update, aktualisieren, neue version
 ---
 Ihre Daten liegen nur auf diesem Computer. Ohne Sicherung gehen sie bei einem Defekt verloren.

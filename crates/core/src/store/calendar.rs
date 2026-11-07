@@ -15,6 +15,9 @@ use crate::{Error, Result};
 /// Longest series "Serie anlegen" creates (a year of weekly sessions).
 pub const MAX_SERIES: u32 = 52;
 
+/// A letter's Frist or Wiedervorlage shows on Heute this many days ahead (and stays once past).
+pub const LETTER_FOLLOW_UP_DAYS: i64 = 7;
+
 /// RFC 3339 in UTC without fractions, the one format stored in `session.scheduled_at`, so range
 /// queries can compare strings (and use the index).
 pub fn normalize_ts(s: &str) -> Result<String> {
@@ -410,12 +413,15 @@ impl Store {
 
     // ---------- due items ----------
 
+
     /// "Fällig" on the Heute page, derived (nothing is stored):
     /// - sessions in `[from, day_start)` that weren't cancelled and have no signed note,
     /// - planned sessions in `[day_start, until)` with nothing done yet (no prep, recording or note),
     /// - Berichte for an application still in draft or review,
     /// - draft transcripts nothing is working on any more ("Transkript prüfen"),
-    /// - open cases whose contingent is nearly used up ("Antrag vorbereiten").
+    /// - open cases whose contingent is nearly used up ("Antrag vorbereiten"),
+    /// - letters whose Frist or Wiedervorlage is at most [`LETTER_FOLLOW_UP_DAYS`] days ahead or
+    ///   past (slice 50). The local day is the one `day_start` (local midnight) falls on.
     pub fn due_items(&self, from: &str, day_start: &str, until: &str) -> Result<Vec<DueItem>> {
         let (from, day_start, until) = (normalize_ts(from)?, normalize_ts(day_start)?, normalize_ts(until)?);
         let mut items = Vec::new();
@@ -445,6 +451,7 @@ impl Store {
                 application_kind: None,
                 seq: None,
                 contingent: None,
+                letter: None,
             })
         })?;
         for row in rows {
@@ -468,6 +475,7 @@ impl Store {
                 application_kind: Some(super::parse_col(r, 5)?),
                 seq: r.get(6)?,
                 contingent: None,
+                letter: None,
             })
         })?;
         for row in rows {
@@ -494,12 +502,15 @@ impl Store {
                 application_kind: None,
                 seq: None,
                 contingent: None,
+                letter: None,
             })
         })?;
         for row in rows {
             items.push(row?);
         }
         items.extend(self.applications_due(&now())?);
+        let today = (OffsetDateTime::parse(&day_start, &Rfc3339).map_err(|e| Error::Invalid(e.to_string()))? + time::Duration::hours(12)).date();
+        items.extend(self.letter_follow_ups(today + time::Duration::days(LETTER_FOLLOW_UP_DAYS))?);
         Ok(items)
     }
 }

@@ -19,11 +19,21 @@ import { checkEntries, type CheckEntry } from '@/lib/lotse'
 import { parseDiagnoses } from '@/lib/report'
 import { cn } from '@/lib/utils'
 
+/** Texts of the AI check that differ for letters (Empfänger-Check, slice 50). */
+const LETTER_TEXTS = new Set(['title', 'whole', 'hint', 'noModel', 'notRun', 'checkedAt', 'send', 'running', 'doneNone'])
+
+/** `lotse.check.*`, or its `lotse.letterCheck.*` variant for a letter. */
+export function useCheckText(isLetter: boolean) {
+  const { t } = useTranslation()
+  return (key: string, opts?: Record<string, unknown>): string =>
+    t(isLetter && LETTER_TEXTS.has(key) ? `lotse.letterCheck.${key}` : `lotse.check.${key}`, opts ?? {})
+}
+
 /**
  * Lotse step 4: one ranked list of what is still open before signing. The app's own checks
- * (empty sections, names, Chiffre, length, diagnoses) and the optional AI Gutachter-Check, whose
- * hints never change the text: "Zum Abschnitt" leads back to the section, "Ignorieren" folds a
- * hint away.
+ * (empty sections, names, Chiffre, length, diagnoses) and the optional AI Gutachter-Check (for
+ * letters the Empfänger-Check), whose hints never change the text: "Zum Abschnitt" leads back to
+ * the section, "Ignorieren" folds a hint away.
  */
 export function CheckStep({
   view,
@@ -37,7 +47,7 @@ export function CheckStep({
   onChange,
 }: {
   view: ReportView
-  /** The AI Gutachter-Check (PTV 3 only; letters get their Empfänger-Check later). */
+  /** The AI Gutachter-Check (for letters: the Empfänger-Check). */
   ai?: boolean
   bodies: Record<string, string>
   /** Changes whenever the text changes (re-renders the preview). */
@@ -51,6 +61,7 @@ export function CheckStep({
   const { t } = useTranslation()
   const qc = useQueryClient()
   const { report, template, patient, episode } = view
+  const ck = useCheckText(report.kind === 'brief')
   const checklist = useQuery(q.checklist(report.id))
   const review = useQuery({ ...q.review(report.id), enabled: ai })
   const letter = useQuery({ ...q.letter(report.id), enabled: report.kind === 'brief' })
@@ -120,7 +131,7 @@ export function CheckStep({
           <>
             {e.hint.section_key && <ToSection onClick={() => onSection(e.hint.section_key!)} />}
             <Button size="sm" variant="ghost" onClick={() => void ignore(e.hint, true)} data-testid="hint-ignore">
-              {t('lotse.check.ignore')}
+              {ck('ignore')}
             </Button>
           </>
         )
@@ -131,8 +142,8 @@ export function CheckStep({
     <div className="grid gap-6 lg:grid-cols-[minmax(0,7fr)_minmax(0,4fr)]" data-testid="lotse-check">
       <Card className="self-start">
         <CardHeader>
-          <CardTitle className="text-base">{t('lotse.check.title')}</CardTitle>
-          <CardDescription>{t('lotse.check.subtitle')}</CardDescription>
+          <CardTitle className="text-base">{ck('title')}</CardTitle>
+          <CardDescription>{ck('subtitle')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {checklist.data && !blocking && (
@@ -142,12 +153,12 @@ export function CheckStep({
             </p>
           )}
           {entries.length === 0 && checklist.data && (
-            <p className="text-sm text-muted-foreground">{review.data?.review ? t('lotse.check.nothingLeft') : t('lotse.check.nothingYet')}</p>
+            <p className="text-sm text-muted-foreground">{review.data?.review ? ck('nothingLeft') : ck('nothingYet')}</p>
           )}
           <ul className="space-y-2.5" data-testid="check-list">
             {entries.map((e) => {
               const section = e.kind === 'hint' ? e.hint.section_key : e.kind === 'check' ? e.item.section_key : (diagDef?.key ?? null)
-              const badge = section ? heading(section) : e.kind === 'hint' ? t('lotse.check.whole') : null
+              const badge = section ? heading(section) : e.kind === 'hint' ? ck('whole') : null
               return (
                 <li
                   key={e.id}
@@ -185,7 +196,7 @@ export function CheckStep({
                 data-testid="check-ignored-toggle"
               >
                 <ChevronDown className={cn('size-3.5 transition-transform', !showIgnored && '-rotate-90')} />
-                {t('lotse.check.ignored', { count: ignored.length })}
+                {ck('ignored', { count: ignored.length })}
               </button>
               {showIgnored && (
                 <ul className="space-y-1.5 pl-5 text-[13px] text-muted-foreground">
@@ -197,7 +208,7 @@ export function CheckStep({
                       </span>
                       {!readOnly && (
                         <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => void ignore(h, false)}>
-                          {t('lotse.check.restore')}
+                          {ck('restore')}
                         </Button>
                       )}
                     </li>
@@ -209,6 +220,7 @@ export function CheckStep({
           {ai && (
             <AiLine
               review={review.data}
+              isLetter={report.kind === 'brief'}
               readOnly={readOnly}
               llmActive={llmActive}
               onCheck={() => flush().then(() => setChecking(true), (e) => toast.error(errorMessage(e)))}
@@ -221,30 +233,38 @@ export function CheckStep({
         <ReportPreview reportId={report.id} content={content} flush={flush} />
       </div>
 
-      {checking && (
-        <RedactionDialog
-          reportId={report.id}
-          patientId={patient.id}
-          previewKey={['reviewPreview', report.id]}
-          loadPreview={() => api.reviewPreview(report.id)}
-          progressEvent="review-progress"
-          labels={{
-            send: t('lotse.check.send'),
-            runLocal: t('lotse.check.runLocal'),
-            running: t('lotse.check.running'),
-            part: () => t('lotse.check.running'),
-            parts: () => t('lotse.check.parts', { count: review.data?.sections ?? 0 }),
-          }}
-          onRun={async (digest, requestId) => {
-            const r = await api.reviewRun(report.id, digest, requestId)
-            qc.setQueryData(q.review(report.id).queryKey, r)
-            const n = r.review?.hints.length ?? 0
-            toast.success(n ? t('lotse.check.done', { count: n }) : t('lotse.check.doneNone'))
-          }}
-          onClose={() => setChecking(false)}
-        />
-      )}
+      {checking && <ReviewRun reportId={report.id} patientId={patient.id} isLetter={report.kind === 'brief'} onClose={() => setChecking(false)} />}
     </div>
+  )
+}
+
+/** Redaction preview → one check request; stores the hints in the `review` query. */
+export function ReviewRun({ reportId, patientId, isLetter, onClose }: { reportId: string; patientId: string; isLetter: boolean; onClose: () => void }) {
+  const qc = useQueryClient()
+  const ck = useCheckText(isLetter)
+  const review = useQuery(q.review(reportId))
+  return (
+    <RedactionDialog
+      reportId={reportId}
+      patientId={patientId}
+      previewKey={['reviewPreview', reportId]}
+      loadPreview={() => api.reviewPreview(reportId)}
+      progressEvent="review-progress"
+      labels={{
+        send: ck('send'),
+        runLocal: ck('runLocal'),
+        running: ck('running'),
+        part: () => ck('running'),
+        parts: () => ck('parts', { count: review.data?.sections ?? 0 }),
+      }}
+      onRun={async (digest, requestId) => {
+        const r = await api.reviewRun(reportId, digest, requestId)
+        qc.setQueryData(q.review(reportId).queryKey, r)
+        const n = r.review?.hints.length ?? 0
+        toast.success(n ? ck('done', { count: n }) : ck('doneNone'))
+      }}
+      onClose={onClose}
+    />
   )
 }
 
@@ -275,18 +295,21 @@ function EntryIcon({ tone, kind }: { tone: CheckEntry['tone']; kind: CheckEntry[
 }
 
 /** The AI part: run the check, or when it ran and whether the text changed since. */
-function AiLine({
+export function AiLine({
   review,
+  isLetter = false,
   readOnly,
   llmActive,
   onCheck,
 }: {
   review: ReviewView | undefined
+  isLetter?: boolean
   readOnly: boolean
   llmActive: boolean
   onCheck: () => void
 }) {
   const { t } = useTranslation()
+  const ck = useCheckText(isLetter)
   if (!review) return null
   const r = review.review
   const canRun = !readOnly && llmActive && review.sections > 0
@@ -295,18 +318,18 @@ function AiLine({
       <p className={cn('flex items-center gap-2', r && review.stale ? 'text-warning-foreground' : 'text-muted-foreground')}>
         {r ? <CheckCircle2 className="size-4 shrink-0 text-primary" /> : <Sparkles className="size-4 shrink-0" />}
         {r
-          ? `${t('lotse.check.checkedAt', { date: formatDate(r.checked_at, true), model: r.model })}${review.stale ? ` ${t('lotse.check.stale')}` : ''}`
+          ? `${ck('checkedAt', { date: formatDate(r.checked_at, true), model: r.model })}${review.stale ? ` ${ck('stale')}` : ''}`
           : readOnly
-            ? t('lotse.check.notRun')
+            ? ck('notRun')
             : !llmActive
-              ? t('lotse.check.noModel')
+              ? ck('noModel')
               : review.sections === 0
-                ? t('lotse.check.noText')
-                : t('lotse.check.hint')}
+                ? ck('noText')
+                : ck('hint')}
       </p>
       {canRun ? (
         <Button size="sm" variant="outline" onClick={onCheck} data-testid="check-run">
-          <Sparkles /> {r ? t('lotse.check.again') : t('lotse.check.run')}
+          <Sparkles /> {r ? ck('again') : ck('run')}
         </Button>
       ) : (
         !readOnly &&

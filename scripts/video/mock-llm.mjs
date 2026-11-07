@@ -1,8 +1,12 @@
 // A local OpenAI-compatible endpoint for the recording: fixed answers for Jonas Albrecht's
 // session (facts, key points), Bericht drafts built from the facts thera sends and a Gutachter-Check.
-// It answers by the system prompt like the E2E mocks: "sentences" = draft, "points" = summary,
-// "hints" = Gutachter-Check, else facts.
+// It answers by the system prompt like the E2E mocks: "sections" = a letter (Briefe), "sentences" =
+// draft, "points" = summary, "hints" = Gutachter- or Empfänger-Check, else facts.
+import fs from 'node:fs'
 import http from 'node:http'
+
+/** Debug aid: `THERA_MOCK_LOG=<file>` appends every request body (one JSON per line). */
+const LOG = process.env.THERA_MOCK_LOG
 
 /** Jonas's demo transcript, 1-based segment numbers ([S1] …). */
 const FACTS = [
@@ -26,9 +30,33 @@ function draft(user) {
   return { sentences: facts.map(([, n, text]) => ({ text: text.trim(), facts: [Number(n)] })) }
 }
 
+/** A letter: one sentence per section from the facts sent, and one unbacked in the last section. */
+function letter(user) {
+  const keys = [...user.matchAll(/^- ([a-z0-9-]+): /gm)].map(([, k]) => k)
+  const facts = [...user.matchAll(/^\[F(\d+)\] \([^)]*\) (.+)$/gm)]
+  const sections = keys.map((key, i) => {
+    const f = facts[i % Math.max(1, facts.length)]
+    const sentences = f ? [{ text: f[2].trim(), sources: [`F${f[1]}`] }] : []
+    if (i === keys.length - 1) sentences.push({ text: 'Eine Besserung ist in den nächsten Monaten zu erwarten.', sources: [] })
+    return { key, sentences }
+  })
+  return { sections }
+}
+
 /** Gutachter-Check hints for the first two sections sent ([A1] …). */
-function hints(user) {
+function hints(user, system) {
   const sections = [...user.matchAll(/^\[A(\d+)\] /gm)].map(([, n]) => Number(n))
+  if (system.includes('Empfänger')) {
+    return {
+      hints: [
+        {
+          section: sections.at(-1) ?? null,
+          level: 'wichtig',
+          text: 'Die Sachbearbeitung würde fragen: Wie oft und wie lange schränken die Beschwerden den Alltag ein, an einem konkreten Beispiel?',
+        },
+      ],
+    }
+  }
   return {
     hints: [
       { section: sections[1] ?? null, level: 'wichtig', text: 'Ein Gutachter würde fragen: Woran zeigt sich, dass die Kurzzeittherapie nicht ausreicht?' },
@@ -40,9 +68,10 @@ function hints(user) {
 function answer(messages) {
   const system = messages.find((m) => m.role === 'system')?.content ?? ''
   const user = messages.filter((m) => m.role === 'user').map((m) => m.content).join('\n')
+  if (system.includes('"sections"')) return letter(user)
   if (system.includes('"sentences"')) return draft(user)
   if (system.includes('"points"')) return { points: user.includes('Mathearbeit') ? POINTS : [] }
-  if (system.includes('"hints"')) return hints(user)
+  if (system.includes('"hints"')) return hints(user, system)
   return { facts: user.includes('Mathearbeit') ? FACTS : [] }
 }
 
@@ -59,6 +88,7 @@ export function startMockLlm({ delayMs = 1800 } = {}) {
         res.writeHead(404)
         return res.end()
       }
+      if (LOG) fs.appendFileSync(LOG, `${JSON.stringify(JSON.parse(body))}\n`)
       const content = JSON.stringify(answer(JSON.parse(body).messages ?? []))
       setTimeout(() => {
         res.writeHead(200, { 'Content-Type': 'application/json' })

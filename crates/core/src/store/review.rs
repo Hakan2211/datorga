@@ -88,8 +88,9 @@ impl Store {
     /// Replaces the Bericht's Gutachter-Check. The text itself is not touched.
     pub fn save_review(&self, report_id: &str, meta: &ReviewMeta, hints: &[Hint]) -> Result<ReportReview> {
         let report = self.report(report_id)?;
-        if report.kind != "bericht" {
-            return Err(Error::Invalid("Den Gutachter-Check gibt es nur für Berichte".into()));
+        // Letters get the same check as the Empfänger-Check (slice 50).
+        if report.kind != "bericht" && report.kind != crate::letter::KIND {
+            return Err(Error::Invalid("Die Prüfung gibt es nur für Berichte und Briefe".into()));
         }
         let tx = self.conn.unchecked_transaction()?;
         tx.execute("DELETE FROM report_review WHERE report_id = ?1", [report_id])?;
@@ -168,6 +169,23 @@ mod tests {
         assert_eq!((r.text_digest.as_str(), r.hints.len(), r.hints[0].ignored), ("d2", 1, false));
         let left: i64 = store.conn().query_row("SELECT COUNT(*) FROM report_review_hint", [], |r| r.get(0)).unwrap();
         assert_eq!(left, 1);
+    }
+
+    #[test]
+    fn letters_keep_their_empfaenger_check_but_notes_get_none() {
+        let store = Store::open_in_memory().unwrap();
+        let (p, _, _) = bericht(&store);
+        let letter = store
+            .create_letter(crate::letter::LetterInput { patient_id: p.id.clone(), template_key: "arztbrief".into(), episode_id: None, recipient_id: None })
+            .unwrap();
+        let meta = ReviewMeta { provider: "local", model: "m", prompt_hash: "ph", text_digest: "d1", sections: 1, dropped: 0 };
+        let hint = Hint { section_key: None, level: HintLevel::Important, text: "Wie oft?".into() };
+        assert_eq!(store.save_review(&letter.report_id, &meta, std::slice::from_ref(&hint)).unwrap().hints.len(), 1);
+        let s = store
+            .create_session(SessionInput { patient_id: p.id.clone(), episode_id: None, scheduled_at: None, modality: None, planned_minutes: None })
+            .unwrap();
+        let note = store.create_session_note(&s.id).unwrap();
+        assert!(store.save_review(&note.id, &meta, &[hint]).is_err());
     }
 
     #[test]
