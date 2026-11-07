@@ -54,10 +54,9 @@ impl Store {
 
     pub fn create_style_exemplar(&self, input: StyleExemplarInput) -> Result<StyleExemplar> {
         let input = input.clean()?;
-        crate::templates::builtin()?
-            .iter()
-            .find(|t| t.key == input.template_key)
-            .ok_or_else(|| Error::Invalid(format!("Unbekannte Art des Schreibens: {}", input.template_key)))?;
+        if !self.template_offered(&input.template_key)? {
+            return Err(Error::Invalid(format!("Unbekannte Art des Schreibens: {}", input.template_key)));
+        }
         let (id, ts) = (new_id(), now());
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
@@ -134,7 +133,7 @@ impl Store {
         if report.signed_at.is_none() {
             return Err(Error::Invalid("Nur unterschriebene Berichte und Briefe können Stilbeispiele werden".into()));
         }
-        let template = self.template(&report.template_key)?;
+        let template = self.template_at(&report.template_key, &report.template_version)?;
         let mut out = String::new();
         // Section order as stored (a letter's request sections have their own headings).
         for sec in &report.sections {

@@ -339,17 +339,23 @@ fn repair_brackets(raw: &str) -> Option<String> {
     Some(out)
 }
 
-pub(crate) fn json_list(answer: &str, field: &str) -> Result<Vec<Value>> {
+/// The JSON value in a model answer (thinking removed, text around it ignored, an answer cut
+/// off inside brackets closed again).
+pub(crate) fn json_value(answer: &str) -> Result<Value> {
     let answer = THINK.replace_all(answer, "");
     let invalid = || Error::Llm("Die Antwort des Modells war kein gültiges JSON".into());
-    let v: Value = match (answer.find(['{', '[']), answer.rfind(['}', ']'])) {
+    match (answer.find(['{', '[']), answer.rfind(['}', ']'])) {
         (Some(a), Some(b)) if a < b => {
             let raw = &answer[a..=b];
-            serde_json::from_str(raw).or_else(|_| repair_brackets(raw).ok_or(()).and_then(|r| serde_json::from_str(&r).map_err(|_| ()))).map_err(|_| invalid())?
+            serde_json::from_str(raw).or_else(|_| repair_brackets(raw).ok_or(()).and_then(|r| serde_json::from_str(&r).map_err(|_| ()))).map_err(|_| invalid())
         }
-        _ => return Err(invalid()),
-    };
-    match v {
+        _ => Err(invalid()),
+    }
+}
+
+pub(crate) fn json_list(answer: &str, field: &str) -> Result<Vec<Value>> {
+    let invalid = || Error::Llm("Die Antwort des Modells war kein gültiges JSON".into());
+    match json_value(answer)? {
         Value::Array(a) => Ok(a),
         Value::Object(mut o) => match o.remove(field) {
             Some(Value::Array(a)) => Ok(a),

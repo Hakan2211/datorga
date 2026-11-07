@@ -498,7 +498,7 @@ pub fn questions_system_prompt() -> String {
 // with a digit; further space-separated parts start with a digit or are one capital letter.
 static REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)\b(Az\.?|Aktenzeichen|Gesch(?:äfts|\.)-?\s?(?:Z\.?|Zeichen)|Kennzeichen|(?:Ihr|Unser)e?\s+Zeichen|Vers(?:icherungs|icherten)?-?\s?Nr\.?|Versicherungsnummer|Versichertennummer|Rentenversicherungsnummer|(?:RV|KV|Mitglieds)-?\s?Nr\.?|BSNR|LANR)(\s*[:.]?\s*)(?-i:\d[\w./-]*(?: (?:\d[\w./-]*|[A-Z]\b))*)",
+        r"(?i)\b(Az\.?|Aktenzeichen|Gesch(?:äfts|\.)-?\s?(?:Z\.?|Zeichen)|Kennzeichen|(?:Ihr|Unser)e?\s+Zeichen|Vers(?:icherungs|icherten)?-?\s?Nr\.?|Versicherungsnummer|Versichertennummer|Rentenversicherungsnummer|(?:RV|KV|Mitglieds)-?\s?Nr\.?|BSNR|LANR)(\s*[:.]?\s*)(?-i:(?:[A-Z]{1,4}[- ]?)?\d[\w./-]*(?: (?:\d[\w./-]*|[A-Z]\b))*)",
     )
     .expect("valid regex")
 });
@@ -797,7 +797,13 @@ mod tests {
     fn reference_numbers_stay_local() {
         assert_eq!(redact_references("Az. 52-123/26\nSehr geehrte"), "Az. [ZEICHEN]\nSehr geehrte");
         assert_eq!(redact_references("Versicherungsnummer: 12 030485 S 123 Sehr"), "Versicherungsnummer: [ZEICHEN] Sehr");
-        assert_eq!(redact_references("Ihr Zeichen 4711-B, unser Zeichen: KV 1"), "Ihr Zeichen [ZEICHEN], unser Zeichen: KV 1");
+        // A letter prefix ("SB-4711/26", "VA 12/3") is part of the number (slice 51).
+        assert_eq!(redact_references("Ihr Zeichen 4711-B, unser Zeichen: KV 1"), "Ihr Zeichen [ZEICHEN], unser Zeichen: [ZEICHEN]");
+        assert_eq!(redact_references("Aktenzeichen: SB-4711/26
+Sehr"), "Aktenzeichen: [ZEICHEN]
+Sehr");
+        assert_eq!(redact_references("Az. VA 12/3, bitte"), "Az. [ZEICHEN], bitte");
+        assert_eq!(redact_references("Aktenzeichen: SB folgt"), "Aktenzeichen: SB folgt");
         assert_eq!(redact_references("Aktenzeichen fehlt noch"), "Aktenzeichen fehlt noch");
         assert_eq!(redact_references("Behandlung seit 2013"), "Behandlung seit 2013");
         let p = prepare_questions("Geschäftszeichen 9/88-X\n1. Befund", &patient(), dict()).unwrap();

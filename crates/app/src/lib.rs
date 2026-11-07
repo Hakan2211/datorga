@@ -14,6 +14,7 @@ use thera_capture::system::{self, ProcessJob};
 use thera_capture::{InputDevice, Recorder};
 use thera_core::audio::{self, ChunkWriter};
 use thera_core::backup::{self, BackupSummary, Unlocked};
+use thera_core::builder;
 use thera_core::consent::{self, ConsentText};
 use thera_core::crypto::{self, KeyStore, MasterKey, Unlock};
 use thera_core::diarize;
@@ -1709,7 +1710,7 @@ fn report_view(s: &Store, id: &str) -> thera_core::Result<ReportView> {
         Some(sess) => s.source_segments(&sess.id)?,
         None => vec![],
     };
-    let mut template = s.template(&report.template_key)?;
+    let mut template = s.template_at(&report.template_key, &report.template_version)?;
     if report.kind == letter::KIND {
         // Sections from a request's questions, in place of template sections she let go.
         template = letter::effective_template(template, &report.sections);
@@ -1902,7 +1903,11 @@ fn recipient_link(state: State<'_, AppState>, patient_id: String, recipient_id: 
 async fn document_read(app: AppHandle, path: String, purpose: String) -> CmdResult<thera_core::ingest::Imported> {
     blocking(app, move |state| {
         let imported = thera_core::ingest::read(std::path::Path::new(&path))?;
-        let purpose = if purpose == "style" { "style" } else { "request" };
+        let purpose = match purpose.as_str() {
+            "style" => "style",
+            "template" => "template",
+            _ => "request",
+        };
         state.with(|s| s.log_document_read(purpose, &imported))?;
         Ok(imported)
     })
@@ -1928,6 +1933,13 @@ fn style_review(
     extra: Vec<(thera_core::pseudo::EntityKind, String)>,
     keep: Vec<String>,
 ) -> CmdResult<thera_core::style::StyleReview> {
+    let dict = upload_dictionary(&state)?;
+    Ok(thera_core::style::review(&text, &dict, &extra, &keep))
+}
+
+/// All her patients and terms, and her own full name, for documents she uploads (exemplars,
+/// forms for the template builder): none of it belongs in a style or a template.
+fn upload_dictionary(state: &AppState) -> CmdResult<thera_core::pseudo::Dictionary> {
     let (mut dict, me) = state.with(|s| Ok((s.assistant_dictionary()?, s.setting("therapist_name")?)))?;
     // Her own name (signature, letterhead) is no patient data, but no style either.
     if let Some(name) = me.as_ref().and_then(|v| v.as_str()) {
@@ -1937,7 +1949,7 @@ fn style_review(
             dict.add(thera_core::pseudo::EntityKind::Person, &words.join(" "));
         }
     }
-    Ok(thera_core::style::review(&text, &dict, &extra, &keep))
+    Ok(dict)
 }
 
 /// The text of a signed Bericht or letter, for "Als Stilbeispiel übernehmen".
@@ -1971,6 +1983,110 @@ fn style_update(state: State<'_, AppState>, id: String, input: thera_core::style
 #[tauri::command]
 fn style_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
     state.with(|s| s.delete_style_exemplar(&id))
+}
+
+// ---------- her own templates (slice 51) ----------
+
+/// The outline the app reads from her (redacted) form or letter: a draft for the editor.
+#[tauri::command]
+fn template_outline(text: String, title: String) -> CmdResult<Template> {
+    Ok(builder::outline(&text, &title)?)
+}
+
+/// A built-in letter template as her own draft, to adapt.
+#[tauri::command]
+fn template_copy(state: State<'_, AppState>, key: String) -> CmdResult<Template> {
+    let t = state.with(|s| s.template(&key))?;
+    Ok(builder::copy_of(&t)?)
+}
+
+/// Words in a template that are a patient's (or her own) name or a term she marked: a template
+/// is used for every patient, so they are listed before saving.
+#[tauri::command]
+fn template_check(state: State<'_, AppState>, def: Template) -> CmdResult<Vec<String>> {
+    let dict = upload_dictionary(&state)?;
+    let mut text = vec![def.title.clone(), def.description.clone().unwrap_or_default(), def.subject.clone().unwrap_or_default(), def.closing.clone().unwrap_or_default()];
+    for s in &def.sections {
+        text.push(s.heading.clone());
+        text.push(s.starter.clone().unwrap_or_default());
+        text.extend(s.hints.iter().map(|h| h.text.clone()));
+        for a in &s.asks {
+            text.push(a.question.clone());
+            text.extend(a.chips.iter().cloned());
+        }
+    }
+    let p = thera_core::pseudo::Pseudonymizer::new(dict);
+    let mut out: Vec<String> = Vec::new();
+    for d in text.iter().flat_map(|t| p.detect(t)) {
+        if d.source != thera_core::pseudo::DetectionSource::Rule && !out.iter().any(|o| o.eq_ignore_ascii_case(&d.text)) {
+            out.push(d.text);
+        }
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+fn template_save(state: State<'_, AppState>, def: Template) -> CmdResult<Template> {
+    state.with(|s| s.save_own_template(def))
+}
+
+#[tauri::command]
+fn template_delete(state: State<'_, AppState>, key: String) -> CmdResult<()> {
+    state.with(|s| s.delete_own_template(&key))
+}
+
+#[tauri::command]
+fn template_uses(state: State<'_, AppState>, key: String) -> CmdResult<i64> {
+    state.with(|s| s.template_uses(&key))
+}
+
+/// The AI proposal's request: her redacted text with the local outline, pseudonymized again.
+fn prepare_builder(state: &AppState, text: &str, title: &str) -> CmdResult<(builder::Prepared, Template)> {
+    let outline = builder::outline(text, title)?;
+    let dict = upload_dictionary(state)?;
+    Ok((builder::prepare(text, &outline, dict)?, outline))
+}
+
+#[tauri::command]
+fn builder_preview(state: State<'_, AppState>, text: String, title: String) -> CmdResult<ExtractPreview> {
+    let (prepared, _) = prepare_builder(&state, &text, &title)?;
+    let config = state.with(|s| s.llm_config())?;
+    let provider = config.active.map(llm::provider);
+    let model = config.active.and_then(|id| config.settings(id).model).filter(|m| !m.is_empty());
+    Ok(ExtractPreview { preview: prepared.preview(), terms: Vec::new(), provider, model })
+}
+
+/// Sends the previewed proposal (one request) and returns the draft for the editor. Nothing is
+/// saved. Cancelled: the local outline.
+#[tauri::command]
+async fn builder_run(app: AppHandle, text: String, title: String, digest: String, request_id: String) -> CmdResult<Template> {
+    let events = app.clone();
+    blocking(app, move |state| {
+        let run = LlmRun::start(state, &request_id)?;
+        let (provider, model) = active_llm(state)?;
+        let (prepared, outline) = prepare_builder(state, &text, &title)?;
+        if prepared.digest != digest {
+            return Err(CmdError::Other("Der Text hat sich seit der Vorschau geändert. Bitte die Vorschau erneut prüfen.".into()));
+        }
+        let progress = |stage, done| {
+            let _ = events.emit("builder-progress", ExtractProgress { report_id: "builder".into(), stage, done, total: 1 });
+        };
+        if provider == ProviderId::Local {
+            progress("loading", 0);
+        }
+        let ep = match llm_endpoint(state, provider, &run.cancel) {
+            Err(_) if run.cancelled() => return Ok(outline),
+            r => r?.0,
+        };
+        progress("running", 0);
+        let messages = [(llm::Role::System, &prepared.system), (llm::Role::User, &prepared.user)];
+        let Some(completion) = stream_call(state, &events, &run, "llm.builder", (provider, &model), &ep, &messages, &builder::chat_options())? else {
+            return Ok(outline);
+        };
+        progress("running", 1);
+        Ok(builder::parse(&completion.text, &outline)?)
+    })
+    .await
 }
 
 // ---------- Textbausteine (slice 48) ----------
@@ -2948,7 +3064,7 @@ fn previous_application_at(s: &Store, report: &Report) -> thera_core::Result<Opt
 fn prior_input(s: &Store, view: &ReportView) -> thera_core::Result<(Vec<PriorRef>, Vec<draft::InputFact>)> {
     let (Some(prior), Some(episode)) = (s.prior_report(&view.report.id)?, &view.episode) else { return Ok((vec![], vec![])) };
     let kind = s.list_applications(&episode.id)?.into_iter().find(|a| Some(&a.id) == prior.application_id.as_ref()).map(|a| a.kind);
-    let old = s.template(&prior.template_key)?.resolve(&Context { method: episode.method, age_group: episode.age_group, kind });
+    let old = s.template_at(&prior.template_key, &prior.template_version)?.resolve(&Context { method: episode.method, age_group: episode.age_group, kind });
     let targets = draft::target_sections(&view.template);
     let (mut refs, mut input) = (Vec::new(), Vec::new());
     for def in old.sections.iter().filter(|d| d.field == thera_core::templates::FieldKind::Prose) {
@@ -5057,6 +5173,14 @@ pub fn run() {
             style_create,
             style_update,
             style_delete,
+            template_outline,
+            template_copy,
+            template_check,
+            template_save,
+            template_delete,
+            template_uses,
+            builder_preview,
+            builder_run,
             textblock_create,
             textblock_update,
             textblock_delete,

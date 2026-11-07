@@ -35,6 +35,7 @@ import { Route as SettingsSicherheitRouteImport } from './routes/settings/sicher
 import { Route as SettingsSicherungRouteImport } from './routes/settings/sicherung'
 import { Route as SettingsSpracheRouteImport } from './routes/settings/sprache'
 import { Route as TemplatesIndexRouteImport } from './routes/templates/index'
+import { Route as TemplatesEditRouteImport } from './routes/templates/edit'
 import { Route as ReportsReportIdWerkstattRouteImport } from './routes/reports/$reportId_.werkstatt'
 import { Route as SessionsSessionIdWerkstattRouteImport } from './routes/sessions/$sessionId_.werkstatt'
 
@@ -168,6 +169,11 @@ const TemplatesIndexRoute = TemplatesIndexRouteImport.update({
   path: '/templates/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TemplatesEditRoute = TemplatesEditRouteImport.update({
+  id: '/templates/edit',
+  path: '/templates/edit',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ReportsReportIdWerkstattRoute =
   ReportsReportIdWerkstattRouteImport.update({
     id: '/reports/$reportId_/werkstatt',
@@ -201,6 +207,7 @@ export interface FileRoutesByFullPath {
   '/settings/sicherheit': typeof SettingsSicherheitRoute
   '/settings/sicherung': typeof SettingsSicherungRoute
   '/settings/sprache': typeof SettingsSpracheRoute
+  '/templates/edit': typeof TemplatesEditRoute
   '/briefe/': typeof BriefeIndexRoute
   '/hilfe/': typeof HilfeIndexRoute
   '/patients/': typeof PatientsIndexRoute
@@ -230,6 +237,7 @@ export interface FileRoutesByTo {
   '/settings/sicherheit': typeof SettingsSicherheitRoute
   '/settings/sicherung': typeof SettingsSicherungRoute
   '/settings/sprache': typeof SettingsSpracheRoute
+  '/templates/edit': typeof TemplatesEditRoute
   '/briefe': typeof BriefeIndexRoute
   '/hilfe': typeof HilfeIndexRoute
   '/patients': typeof PatientsIndexRoute
@@ -261,6 +269,7 @@ export interface FileRoutesById {
   '/settings/sicherheit': typeof SettingsSicherheitRoute
   '/settings/sicherung': typeof SettingsSicherungRoute
   '/settings/sprache': typeof SettingsSpracheRoute
+  '/templates/edit': typeof TemplatesEditRoute
   '/briefe/': typeof BriefeIndexRoute
   '/hilfe/': typeof HilfeIndexRoute
   '/patients/': typeof PatientsIndexRoute
@@ -293,6 +302,7 @@ export interface FileRouteTypes {
     | '/settings/sicherheit'
     | '/settings/sicherung'
     | '/settings/sprache'
+    | '/templates/edit'
     | '/briefe/'
     | '/hilfe/'
     | '/patients/'
@@ -322,6 +332,7 @@ export interface FileRouteTypes {
     | '/settings/sicherheit'
     | '/settings/sicherung'
     | '/settings/sprache'
+    | '/templates/edit'
     | '/briefe'
     | '/hilfe'
     | '/patients'
@@ -352,6 +363,7 @@ export interface FileRouteTypes {
     | '/settings/sicherheit'
     | '/settings/sicherung'
     | '/settings/sprache'
+    | '/templates/edit'
     | '/briefe/'
     | '/hilfe/'
     | '/patients/'
@@ -376,6 +388,7 @@ export interface RootRouteChildren {
   PatientsPatientIdRoute: typeof PatientsPatientIdRoute
   ReportsReportIdRoute: typeof ReportsReportIdRoute
   SessionsSessionIdRoute: typeof SessionsSessionIdRoute
+  TemplatesEditRoute: typeof TemplatesEditRoute
   BriefeIndexRoute: typeof BriefeIndexRoute
   HilfeIndexRoute: typeof HilfeIndexRoute
   PatientsIndexRoute: typeof PatientsIndexRoute
@@ -570,6 +583,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TemplatesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/templates/edit': {
+      id: '/templates/edit'
+      path: '/templates/edit'
+      fullPath: '/templates/edit'
+      preLoaderRoute: typeof TemplatesEditRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/reports/$reportId_/werkstatt': {
       id: '/reports/$reportId_/werkstatt'
       path: '/reports/$reportId/werkstatt'
@@ -626,6 +646,7 @@ const rootRouteChildren: RootRouteChildren = {
   PatientsPatientIdRoute: PatientsPatientIdRoute,
   ReportsReportIdRoute: ReportsReportIdRoute,
   SessionsSessionIdRoute: SessionsSessionIdRoute,
+  TemplatesEditRoute: TemplatesEditRoute,
   BriefeIndexRoute: BriefeIndexRoute,
   HilfeIndexRoute: HilfeIndexRoute,
   PatientsIndexRoute: PatientsIndexRoute,

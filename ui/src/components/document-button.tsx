@@ -17,7 +17,7 @@ export function DocumentButton({
   className,
   testId,
 }: {
-  purpose: 'request' | 'style'
+  purpose: 'request' | 'style' | 'template'
   onRead: (imported: Imported) => void | Promise<void>
   label?: string
   variant?: 'outline' | 'ghost' | 'secondary' | 'default'

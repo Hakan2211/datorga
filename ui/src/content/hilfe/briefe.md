@@ -2,7 +2,7 @@
 title: Briefe & weitere Berichte
 summary: Befundberichte an Rentenversicherung, Pflegekasse, Versorgungsamt und Ärzt:innen, Bescheinigungen und freie Briefe
 order: 6
-keywords: brief, briefe, befundbericht, rentenversicherung, drv, em-rente, pflegegrad, pflegekasse, md, versorgungsamt, landratsamt, gdb, schwerbehinderung, arztbrief, hausärztin, bescheinigung, behandlungsbestätigung, briefkopf, din 5008, empfänger, adressbuch, betreff, aktenzeichen, anschreiben, scan, ocr, textbaustein, schweigepflichtentbindung, wiedervorlage, frist, versendet, empfänger-check, stilbeispiel
+keywords: brief, briefe, befundbericht, rentenversicherung, drv, em-rente, pflegegrad, pflegekasse, md, versorgungsamt, landratsamt, gdb, schwerbehinderung, arztbrief, hausärztin, bescheinigung, behandlungsbestätigung, briefkopf, din 5008, empfänger, adressbuch, betreff, aktenzeichen, anschreiben, scan, ocr, textbaustein, schweigepflichtentbindung, wiedervorlage, frist, versendet, empfänger-check, stilbeispiel, eigene vorlage, formular, fragebogen, vorlage anpassen
 ---
 Neben den PTV-3-Berichten schreiben Sie in Theralo alle anderen Schreiben einer Praxis: **Befundberichte** an Rentenversicherung, Pflegekasse, Versorgungsamt und Ärzt:innen, **Behandlungsbestätigungen** und **freie Briefe**. Alle erscheinen unter **Briefe** in der Seitenleiste und im Verlauf der Patientin. Die Befundberichte stehen zusätzlich auf dem Board unter **Berichte**.
 
@@ -28,9 +28,20 @@ Betreff, Anrede und der erste Satz sind mit Name, Geburtsdatum und Behandlungsbe
 - **Textbausteine** fügen Sie über die Werkzeugleiste oder mit `/` im Text ein. Platzhalter wie `{Nachname}` oder `{sie/er}` füllt Theralo aus der Akte. Eigene Bausteine legen Sie unter **Briefe → Textbausteine** an, oder Sie markieren Text im Brief und wählen **Als Textbaustein speichern**.
 - Eigene alte Briefe können Sie unter **Vorlagen → Ihr Schreibstil** als Stilbeispiel hochladen. Namen werden vorher geschwärzt; die KI übernimmt daraus nur den Stil, nie Inhalte.
 
+## Eigene Vorlagen
+
+Unter **Vorlagen → Eigene Vorlagen** machen Sie aus Ihren eigenen Formularen und Briefen Vorlagen, die unter **Neuer Brief** und **Neuer Bericht** zur Wahl stehen.
+
+1. **Aus Dokument**: ein Formular (etwa einen Fragebogen vom Amt) oder einen Ihrer Briefe wählen oder einfügen. Er wird auf diesem Computer gelesen; die Datei selbst wird nicht gespeichert.
+2. **Schwärzen** wie bei den Stilbeispielen: Namen, Daten und Nummern werden zu Platzhaltern.
+3. **Gliederung**: Theralo erkennt Überschriften, die Fragen darunter, Betreff, Aktenzeichen und den Schlusssatz. **Mit KI ergänzen** schlägt zu jedem Abschnitt Hinweise und Fragen für den Lotsen vor (nur der geschwärzte Text geht hinaus, mit Vorschau).
+4. Im **Editor** ändern Sie alles: Name, Art (Bericht oder Brief), wer ihn liest, Betreff mit Platzhaltern, Bezugszeichen, Abschnitte mit Anfangstext, Hinweisen und Fragen. **Speichern** legt eine neue Fassung an.
+
+**Als eigene anpassen** auf einer mitgelieferten Brief- oder Berichtvorlage macht eine Kopie, die Sie frei ändern; die mitgelieferte bleibt. Ein Diagnosen-Abschnitt bleibt immer Ihnen vorbehalten: ohne KI und ohne Fragen. Briefe, die Sie mit einer früheren Fassung geschrieben haben, behalten deren Abschnitte, auch wenn Sie die Vorlage später ändern oder löschen.
+
 ## Geführt bearbeiten
 
-Für die vier Befundberichte gibt es auch den Weg über den **Bericht-Lotsen** (Start · Fragen · Abschnitte · Prüfen · Fertig), wie beim PTV-3-Bericht ([Bericht schreiben](hilfe:bericht)). **Geführt bearbeiten** auf der Briefseite öffnet ihn, **Als Brief öffnen** führt zurück. Es ist dasselbe Dokument.
+Für die Befundberichte (auch Ihre eigenen Berichtvorlagen) gibt es auch den Weg über den **Bericht-Lotsen** (Start · Fragen · Abschnitte · Prüfen · Fertig), wie beim PTV-3-Bericht ([Bericht schreiben](hilfe:bericht)). **Geführt bearbeiten** auf der Briefseite öffnet ihn, **Als Brief öffnen** führt zurück. Es ist dasselbe Dokument.
 
 ## Prüfen, unterschreiben, versenden
 

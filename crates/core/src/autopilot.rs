@@ -71,7 +71,7 @@ pub fn prepare_extraction(s: &Store, report_id: &str) -> Result<(extract::Prepar
         return Err(Error::Invalid("Fakten gibt es nur für Sitzungsnotizen".into()));
     };
     let episode = report.episode_id.as_deref().map(|e| s.episode(e)).transpose()?;
-    let mut template = s.template(&report.template_key)?;
+    let mut template = s.template_at(&report.template_key, &report.template_version)?;
     if let Some(ep) = &episode {
         template = template.resolve(&Context { method: ep.method, age_group: ep.age_group, kind: None });
     }

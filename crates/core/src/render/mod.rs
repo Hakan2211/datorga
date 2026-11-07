@@ -459,7 +459,7 @@ mod tests {
         .unwrap();
         store.save_section(&rid, "diagnose", &diag).unwrap();
         let report = store.sign_report(&rid, "Dipl.-Psych. M. Muster").unwrap();
-        let t = store.template(&report.template_key).unwrap().resolve(&Context {
+        let t = store.template_at(&report.template_key, &report.template_version).unwrap().resolve(&Context {
             method: ep.method,
             age_group: ep.age_group,
             kind: Some(app.kind),
@@ -494,7 +494,7 @@ mod tests {
         let note = store.create_session_note(&s.id).unwrap();
         store.save_section(&note.id, "risiko", "<p>Keine Suizidalität</p>").unwrap();
         let note = store.report(&note.id).unwrap();
-        let t = store.template(&note.template_key).unwrap();
+        let t = store.template_at(&note.template_key, &note.template_version).unwrap();
         let doc = build_doc(&note, &t, &p, None, None, Some(&store.session(&s.id).unwrap()), None);
         assert_eq!((doc.title.as_str(), doc.subtitle.as_str()), ("Sitzungsnotiz", "Sitzung vom 27.10.2026"));
         let headings: Vec<_> = doc.sections.iter().map(|s| s.heading.as_str()).collect();
@@ -516,7 +516,7 @@ mod tests {
         store.sign_report(&note.id, "M. Muster").unwrap();
         store.add_addendum(&note.id, "<p>Korrektur: <strong>Dienstag</strong></p>", "M. Muster").unwrap();
         let note = store.report(&note.id).unwrap();
-        let t = store.template(&note.template_key).unwrap();
+        let t = store.template_at(&note.template_key, &note.template_version).unwrap();
         let doc = build_doc(&note, &t, &p, None, None, Some(&store.session(&s.id).unwrap()), None);
 
         assert_eq!(doc.sections.len(), 1);

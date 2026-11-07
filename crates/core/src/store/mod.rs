@@ -23,6 +23,7 @@ mod calendar;
 mod contingent;
 mod focus;
 mod letters;
+mod own_templates;
 mod textblocks;
 mod style;
 mod review;
@@ -378,7 +379,8 @@ impl Store {
         let def: String = self
             .conn
             .query_row(
-                "SELECT definition FROM template WHERE key = ?1 AND active = 1 ORDER BY created_at DESC LIMIT 1",
+                // The offered version first; a deleted own template still opens its letters.
+                "SELECT definition FROM template WHERE key = ?1 ORDER BY active DESC, created_at DESC LIMIT 1",
                 [key],
                 |r| r.get(0),
             )
@@ -2110,7 +2112,7 @@ impl Store {
     pub fn list_reports(&self, status: Option<ReportStatus>, now: &str) -> Result<Vec<ReportSummary>> {
         // Letter-type Berichte (DRV, Pflegegrad, …) are on the board too; short letters only in Briefe.
         let letter_berichte: std::collections::HashMap<String, String> = self
-            .list_templates()?
+            .known_templates()?
             .into_iter()
             .filter(|t| t.category == templates::Category::Bericht)
             .map(|t| (t.key, t.title))
@@ -2251,7 +2253,7 @@ impl Store {
         }
         // A letter's Papierkorb entry names its type.
         let letter_title =
-            if letter { Some(self.template(&report.template_key).map(|t| t.title).unwrap_or(report.template_key.clone())) } else { None };
+            if letter { Some(self.template_at(&report.template_key, &report.template_version).map(|t| t.title).unwrap_or(report.template_key.clone())) } else { None };
         let signed = matches!(report.status, ReportStatus::Signed | ReportStatus::Exported);
         let tx = self.conn.unchecked_transaction()?;
         if signed {
@@ -3849,7 +3851,7 @@ mod tests {
         assert!(store.list_reports(None, &now()).unwrap().is_empty(), "notes stay out of the Berichte queue");
 
         // Only the required section blocks signing; the name may appear (internal record).
-        let t = store.template(&note.template_key).unwrap();
+        let t = store.template_at(&note.template_key, &note.template_version).unwrap();
         store.save_section(&note.id, "verlauf", "").unwrap();
         let blocking = |r: &Report| crate::pii::checklist(r, &t, &p).into_iter().filter(|c| !c.ok && c.severity == "block").count();
         assert_eq!(blocking(&store.report(&note.id).unwrap()), 1);

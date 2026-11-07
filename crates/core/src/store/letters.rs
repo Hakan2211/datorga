@@ -287,6 +287,9 @@ impl Store {
     /// from the record), Betreff and references from the patient, address from the book entry.
     pub fn create_letter(&self, input: LetterInput) -> Result<Letter> {
         let patient = self.patient(&input.patient_id)?;
+        if !self.template_offered(&input.template_key)? {
+            return Err(Error::Invalid("Diese Vorlage wurde gelöscht".into()));
+        }
         let template = self.template(&input.template_key)?;
         if template.layout != Layout::Letter {
             return Err(Error::Invalid(format!("{} ist keine Briefvorlage", template.title)));
@@ -373,7 +376,7 @@ impl Store {
 
     /// Newest change first; `patient_id` narrows to one patient (timeline, patient page).
     pub fn list_letters(&self, patient_id: Option<&str>) -> Result<Vec<LetterSummary>> {
-        let titles: HashMap<String, String> = self.list_templates()?.into_iter().map(|t| (t.key, t.title)).collect();
+        let titles: HashMap<String, String> = self.known_templates()?.into_iter().map(|t| (t.key, t.title)).collect();
         let mut stmt = self.conn.prepare(
             "SELECT r.id, r.patient_id, p.first_name || ' ' || p.last_name, l.episode_id, r.template_key, l.recipient_json,
                     l.subject, r.status, r.created_at, r.updated_at, r.signed_at, r.exported_at, l.sent_at, l.sent_via, l.follow_up_on
@@ -413,7 +416,7 @@ impl Store {
     /// Letters with a Wiedervorlage on or before `until`, oldest first (Heute's "Fällig", slice 50).
     pub(crate) fn letter_follow_ups(&self, until: time::Date) -> Result<Vec<DueItem>> {
         let until = format!("{:04}-{:02}-{:02}", until.year(), until.month() as u8, until.day());
-        let titles: HashMap<String, String> = self.list_templates()?.into_iter().map(|t| (t.key, t.title)).collect();
+        let titles: HashMap<String, String> = self.known_templates()?.into_iter().map(|t| (t.key, t.title)).collect();
         let mut stmt = self.conn.prepare(
             "SELECT p.id, p.first_name || ' ' || p.last_name, p.chiffre, r.id, r.template_key, l.recipient_json,
                     l.follow_up_on, l.follow_up_note, l.sent_at
@@ -590,7 +593,7 @@ impl Store {
     pub fn set_request_sections(&self, report_id: &str, sections: &[RequestSection], keep_template: bool) -> Result<Letter> {
         let mut letter = self.letter(report_id)?;
         let report = self.report(report_id)?;
-        let template = self.template(&report.template_key)?;
+        let template = self.template_at(&report.template_key, &report.template_version)?;
         let existing: Vec<&crate::domain::ReportSection> = report.sections.iter().filter(|s| s.heading.is_some()).collect();
         for s in sections {
             if s.heading.trim().is_empty() {
@@ -849,6 +852,33 @@ mod tests {
             .create_episode(EpisodeInput { patient_id: p.id.clone(), method: Method::Vt, age_group: AgeGroup::Adult, setting: Setting::Einzel })
             .unwrap();
         (store, p, ep)
+    }
+
+    #[test]
+    fn letters_from_her_own_template_survive_edits_and_deleting() {
+        let (store, p, _ep) = setup();
+        let mut own = crate::builder::copy_of(&store.template("drv-befund").unwrap()).unwrap();
+        own.title = "DRV mein Format".into();
+        store.save_own_template(own.clone()).unwrap();
+        let l = store.create_letter(LetterInput { patient_id: p.id.clone(), template_key: own.key.clone(), episode_id: None, recipient_id: None }).unwrap();
+        let report = store.report(&l.report_id).unwrap();
+        assert_eq!(report.template_version, "1");
+        assert!(report.sections.iter().any(|s| s.key == "somatik"));
+        assert!(store.list_reports(None, &now()).unwrap().iter().any(|r| r.id == l.report_id), "an own Bericht is on the board");
+        // v2 without Somatik: the letter keeps its section, heading and export.
+        own.sections.retain(|s| s.key != "somatik");
+        store.save_own_template(own.clone()).unwrap();
+        let t = store.template_at(&report.template_key, &report.template_version).unwrap();
+        assert!(t.sections.iter().any(|s| s.key == "somatik" && s.heading == "Somatische Begleiterkrankungen"));
+        let head = crate::render::letter::Letterhead { practice: Default::default(), logo: None, signature: None, therapist: None };
+        let doc = crate::render::letter::build_letter(&report, &t, &store.letter(&l.report_id).unwrap(), head, "2026-11-07");
+        assert!(format!("{doc:?}").contains("Somatische Begleiterkrankungen"));
+        store.delete_own_template(&own.key).unwrap();
+        assert!(store.create_letter(LetterInput { patient_id: p.id.clone(), template_key: own.key.clone(), episode_id: None, recipient_id: None }).is_err());
+        let listed = store.list_letters(None).unwrap();
+        assert_eq!(listed.iter().find(|x| x.report_id == l.report_id).unwrap().template_title, "DRV mein Format");
+        assert!(store.list_reports(None, &now()).unwrap().iter().any(|r| r.id == l.report_id), "still on the board");
+        assert_eq!(store.template_uses(&own.key).unwrap(), 1);
     }
 
     #[test]

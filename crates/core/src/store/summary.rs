@@ -65,7 +65,7 @@ impl Store {
         let note = match &session.note_id {
             Some(id) => {
                 let report = self.report(id)?;
-                let mut template = self.template(&report.template_key)?;
+                let mut template = self.template_at(&report.template_key, &report.template_version)?;
                 if let Some(ep) = &session.episode_id {
                     let ep = self.episode(ep)?;
                     template = template.resolve(&templates::Context { method: ep.method, age_group: ep.age_group, kind: None });

@@ -10,6 +10,7 @@ import { toast } from 'sonner'
 import { ClipboardPaste, EyeOff, Feather, Pencil, Plus } from 'lucide-react'
 import type { EntityKind } from '@/bindings/EntityKind'
 import type { StyleExemplar } from '@/bindings/StyleExemplar'
+import type { StyleReview } from '@/bindings/StyleReview'
 import type { Template } from '@/bindings/Template'
 import { SectionCard, formatDate } from '@/components/bits'
 import { DeleteButton } from '@/components/delete-button'
@@ -76,23 +77,11 @@ function StyleForm({ exemplar, start, onDone }: { exemplar?: StyleExemplar; star
   const [sha, setSha] = useState<string | null>(null)
   const [extra, setExtra] = useState<[EntityKind, string][]>([])
   const [keep, setKeep] = useState<string[]>([])
-  const [term, setTerm] = useState('')
-  const [kind, setKind] = useState<EntityKind>('person')
+  const [reviewed, setReviewed] = useState<StyleReview | null>(null)
   const [text, setText] = useState(exemplar?.text ?? '')
   const [templateKey, setTemplateKey] = useState(exemplar?.template_key ?? start?.template_key ?? '')
   const [title, setTitle] = useState(exemplar?.title ?? start?.title ?? '')
   const [leftover, setLeftover] = useState<string[] | null>(null)
-
-  const review = useQuery({
-    queryKey: ['styleReview', source, extra, keep],
-    queryFn: () => api.styleReview(source, extra, keep),
-    enabled: step === 'redact' && !!source.trim(),
-    placeholderData: keepPreviousData,
-    gcTime: 0,
-  })
-  const parts = useMemo(() => (review.data ? reviewParts(source, review.data.marks, keep) : []), [review.data, source, keep])
-  const marked = parts.filter((p) => p.mark && !p.kept).length
-  const kept = parts.filter((p) => p.mark && p.kept).length
 
   const duplicate = sha ? list.data?.find((e) => e.source_sha256 === sha && e.template_key === templateKey) : undefined
 
@@ -121,14 +110,6 @@ function StyleForm({ exemplar, start, onDone }: { exemplar?: StyleExemplar; star
     onError: (e) => toast.error(errorMessage(e)),
   })
   useEffect(() => setLeftover(null), [text])
-
-  const addTerm = () => {
-    const v = term.trim()
-    if (!v) return
-    setExtra((x) => [...x, [kind, v]])
-    setKeep((k) => k.filter((x) => x.toLowerCase() !== v.toLowerCase()))
-    setTerm('')
-  }
 
   return (
     <>
@@ -179,70 +160,7 @@ function StyleForm({ exemplar, start, onDone }: { exemplar?: StyleExemplar; star
         )}
 
         {step === 'redact' && (
-          <>
-            <p className="text-[13px] text-muted-foreground">{t('style.redactIntro')}</p>
-            <p className="flex flex-wrap gap-2 text-[13px]" data-testid="style-counts">
-              <Badge variant="secondary">{t('style.marks', { count: marked })}</Badge>
-              {kept > 0 && <Badge variant="outline">{t('style.kept', { count: kept })}</Badge>}
-            </p>
-            <div
-              className="max-h-[45vh] overflow-y-auto rounded-md border bg-muted/30 p-3 text-[13px] leading-relaxed whitespace-pre-wrap"
-              onMouseUp={() => {
-                const sel = document.getSelection()?.toString().trim() ?? ''
-                if (sel && sel.length < 80) setTerm(sel)
-              }}
-              data-testid="style-review"
-            >
-              {review.isError && <p className="text-destructive">{errorMessage(review.error)}</p>}
-              {parts.map((p, i) =>
-                p.mark ? (
-                  <button
-                    key={i}
-                    type="button"
-                    title={t(`style.kind.${p.mark.kind}`)}
-                    onClick={() => setKeep((k) => toggleKeep(k, p.mark!.text))}
-                    className={cn(
-                      'rounded px-0.5',
-                      p.kept ? 'bg-transparent underline decoration-dotted' : 'bg-primary/15 text-primary line-through decoration-primary/40',
-                    )}
-                    data-testid="style-mark"
-                  >
-                    {p.text}
-                  </button>
-                ) : (
-                  <span key={i}>{p.text}</span>
-                ),
-              )}
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">{t('style.addTerm')}</Label>
-              <form
-                className="flex gap-2"
-                onSubmit={(e) => {
-                  e.preventDefault()
-                  addTerm()
-                }}
-              >
-                <Select value={kind} onValueChange={(v) => setKind(v as EntityKind)}>
-                  <SelectTrigger className="w-36">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {KINDS.map((k) => (
-                      <SelectItem key={k} value={k}>
-                        {t(`style.kind.${k}`)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Input value={term} onChange={(e) => setTerm(e.target.value)} placeholder={t('style.addTermPlaceholder')} className="flex-1" data-testid="style-term" />
-                <Button type="submit" variant="outline" disabled={!term.trim()}>
-                  <EyeOff /> {t('style.addTermButton')}
-                </Button>
-              </form>
-              <p className="text-[11px] text-muted-foreground">{t('style.selectHint')}</p>
-            </div>
-          </>
+          <RedactReview source={source} extra={extra} setExtra={setExtra} keep={keep} setKeep={setKeep} onReview={setReviewed} />
         )}
 
         {step === 'save' && (
@@ -304,9 +222,9 @@ function StyleForm({ exemplar, start, onDone }: { exemplar?: StyleExemplar; star
         )}
         {step === 'redact' && (
           <Button
-            disabled={!review.data || review.isFetching}
+            disabled={!reviewed}
             onClick={() => {
-              setText(review.data!.redacted)
+              setText(reviewed!.redacted)
               setStep('save')
             }}
             data-testid="style-next"
@@ -324,6 +242,115 @@ function StyleForm({ exemplar, start, onDone }: { exemplar?: StyleExemplar; star
           </Button>
         )}
       </DialogFooter>
+    </>
+  )
+}
+
+/**
+ * The redaction review of an uploaded text (slice 49, also the template builder's): every mark
+ * is replaced by a placeholder unless she clicks it to keep it; she adds what was missed.
+ * `onReview` gets the current result (`null` while it is computed).
+ */
+export function RedactReview({
+  source,
+  extra,
+  setExtra,
+  keep,
+  setKeep,
+  onReview,
+}: {
+  source: string
+  extra: [EntityKind, string][]
+  setExtra: (f: (x: [EntityKind, string][]) => [EntityKind, string][]) => void
+  keep: string[]
+  setKeep: (f: (k: string[]) => string[]) => void
+  onReview: (r: StyleReview | null) => void
+}) {
+  const { t } = useTranslation()
+  const [term, setTerm] = useState('')
+  const [kind, setKind] = useState<EntityKind>('person')
+  const review = useQuery({
+    queryKey: ['styleReview', source, extra, keep],
+    queryFn: () => api.styleReview(source, extra, keep),
+    enabled: !!source.trim(),
+    placeholderData: keepPreviousData,
+    gcTime: 0,
+  })
+  useEffect(() => onReview(review.data && !review.isFetching ? review.data : null), [review.data, review.isFetching, onReview])
+  const parts = useMemo(() => (review.data ? reviewParts(source, review.data.marks, keep) : []), [review.data, source, keep])
+  const marked = parts.filter((p) => p.mark && !p.kept).length
+  const kept = parts.filter((p) => p.mark && p.kept).length
+  const addTerm = () => {
+    const v = term.trim()
+    if (!v) return
+    setExtra((x) => [...x, [kind, v]])
+    setKeep((k) => k.filter((x) => x.toLowerCase() !== v.toLowerCase()))
+    setTerm('')
+  }
+  return (
+    <>
+      <p className="text-[13px] text-muted-foreground">{t('style.redactIntro')}</p>
+      <p className="flex flex-wrap gap-2 text-[13px]" data-testid="style-counts">
+        <Badge variant="secondary">{t('style.marks', { count: marked })}</Badge>
+        {kept > 0 && <Badge variant="outline">{t('style.kept', { count: kept })}</Badge>}
+      </p>
+      <div
+        className="max-h-[45vh] overflow-y-auto rounded-md border bg-muted/30 p-3 text-[13px] leading-relaxed whitespace-pre-wrap"
+        onMouseUp={() => {
+          const sel = document.getSelection()?.toString().trim() ?? ''
+          if (sel && sel.length < 80) setTerm(sel)
+        }}
+        data-testid="style-review"
+      >
+        {review.isError && <p className="text-destructive">{errorMessage(review.error)}</p>}
+        {parts.map((p, i) =>
+          p.mark ? (
+            <button
+              key={i}
+              type="button"
+              title={t(`style.kind.${p.mark.kind}`)}
+              onClick={() => setKeep((k) => toggleKeep(k, p.mark!.text))}
+              className={cn(
+                'rounded px-0.5',
+                p.kept ? 'bg-transparent underline decoration-dotted' : 'bg-primary/15 text-primary line-through decoration-primary/40',
+              )}
+              data-testid="style-mark"
+            >
+              {p.text}
+            </button>
+          ) : (
+            <span key={i}>{p.text}</span>
+          ),
+        )}
+      </div>
+      <div className="space-y-1.5">
+        <Label className="text-xs">{t('style.addTerm')}</Label>
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            addTerm()
+          }}
+        >
+          <Select value={kind} onValueChange={(v) => setKind(v as EntityKind)}>
+            <SelectTrigger className="w-36">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {KINDS.map((k) => (
+                <SelectItem key={k} value={k}>
+                  {t(`style.kind.${k}`)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Input value={term} onChange={(e) => setTerm(e.target.value)} placeholder={t('style.addTermPlaceholder')} className="flex-1" data-testid="style-term" />
+          <Button type="submit" variant="outline" disabled={!term.trim()}>
+            <EyeOff /> {t('style.addTermButton')}
+          </Button>
+        </form>
+        <p className="text-[11px] text-muted-foreground">{t('style.selectHint')}</p>
+      </div>
     </>
   )
 }

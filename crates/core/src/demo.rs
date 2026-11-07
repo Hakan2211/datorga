@@ -636,7 +636,7 @@ mod tests {
         let bezug = &report.sections.iter().find(|s| s.key == "bezug").unwrap().body;
         assert!(bezug.contains("bezugnehmend auf Ihr Schreiben vom ") && !bezug.contains('{'), "{bezug}");
         // The letter checks pass except the open questions (left for her or the AI).
-        let t = crate::letter::effective_template(store.template(&report.template_key).unwrap(), &report.sections);
+        let t = crate::letter::effective_template(store.template_at(&report.template_key, &report.template_version).unwrap(), &report.sections);
         let mut checks = crate::letter::checklist(&l, &report, &t);
         checks.extend(crate::letter::release_check(&l, &t, store.letter_release(&l).unwrap().as_ref()));
         let failing: Vec<&str> = checks.iter().filter(|c| !c.ok).map(|c| c.key.as_str()).collect();

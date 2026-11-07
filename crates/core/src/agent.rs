@@ -524,7 +524,7 @@ impl ToolCtx<'_> {
                 let r = self.report(need(args, "report_id")?)?;
                 let t = if r.kind == crate::letter::KIND {
                     let l = self.store.letter(&r.id)?;
-                    let title = self.store.template(&r.template_key)?.title;
+                    let title = self.store.template_at(&r.template_key, &r.template_version)?.title;
                     format!(
                         // Address, Anrede and Betreff stay local (they name the person).
                         "Brief „{title}“ (report_id {}) an {}, Status {}{}\n{}",
@@ -777,7 +777,7 @@ impl ToolCtx<'_> {
 
     /// Sections in template order as plain text, diagnoses left out.
     fn report_text(&self, r: &Report) -> Result<String> {
-        let mut template = self.store.template(&r.template_key)?;
+        let mut template = self.store.template_at(&r.template_key, &r.template_version)?;
         if r.kind == crate::letter::KIND {
             template = crate::letter::effective_template(template, &r.sections);
         }
@@ -857,7 +857,7 @@ impl ToolCtx<'_> {
                     mode,
                 };
                 let p = self.store.check_text_proposal(ProposalKind::LetterText, p)?;
-                let title = self.store.template(&r.template_key)?.title;
+                let title = self.store.template_at(&r.template_key, &r.template_version)?.title;
                 let verb = if p.mode == TextMode::Replace { "ersetzen" } else { "ergänzen" };
                 let heading = if p.heading.is_empty() { "Einleitung".to_string() } else { p.heading.clone() };
                 let summary = format!("{title} für {}: „{heading}“ {verb}", name(&self.store.patient(&r.patient_id)?));

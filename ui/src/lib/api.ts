@@ -633,7 +633,7 @@ export const api = {
   deleteTextblock: (id: string) => invoke<void>('textblock_delete', { id }),
   restoreTextblocks: () => invoke<number>('textblocks_restore'),
   /** Reads a PDF, DOCX, text file, photo or scan locally (text layer, else Windows OCR). */
-  readDocument: (path: string, purpose: 'request' | 'style') => invoke<Imported>('document_read', { path, purpose }),
+  readDocument: (path: string, purpose: 'request' | 'style' | 'template') => invoke<Imported>('document_read', { path, purpose }),
   ocrAvailable: () => invoke<boolean>('ocr_available'),
   styleExemplars: () => invoke<StyleExemplar[]>('style_list'),
   styleReview: (text: string, extra: [EntityKind, string][], keep: string[]) => invoke<StyleReview>('style_review', { text, extra, keep }),
@@ -641,6 +641,17 @@ export const api = {
   createStyleExemplar: (input: StyleExemplarInput) => invoke<StyleExemplar>('style_create', { input }),
   updateStyleExemplar: (id: string, input: StyleExemplarInput, active: boolean) => invoke<StyleExemplar>('style_update', { id, input, active }),
   deleteStyleExemplar: (id: string) => invoke<void>('style_delete', { id }),
+  /** Her own templates (slice 51): outline from her redacted form, copy of a built-in letter. */
+  templateOutline: (text: string, title: string) => invoke<Template>('template_outline', { text, title }),
+  templateCopy: (key: string) => invoke<Template>('template_copy', { key }),
+  /** Names of patients (or hers) and her marked terms found in the template. */
+  templateCheck: (def: Template) => invoke<string[]>('template_check', { def }),
+  templateSave: (def: Template) => invoke<Template>('template_save', { def }),
+  templateDelete: (key: string) => invoke<void>('template_delete', { key }),
+  templateUses: (key: string) => invoke<number>('template_uses', { key }),
+  builderPreview: (text: string, title: string) => invoke<ExtractPreview>('builder_preview', { text, title }),
+  builderRun: (text: string, title: string, digest: string, requestId: string) =>
+    invoke<Template>('builder_run', { text, title, digest, requestId }),
   /** The block's HTML for this letter, placeholders filled from the patient (counts the use). */
   insertTextblock: (id: string, reportId: string) => invoke<string>('textblock_insert', { id, reportId }),
   practice: () => invoke<Practice>('practice_get'),

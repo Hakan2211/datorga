@@ -4,6 +4,7 @@ pub mod agent;
 pub mod audio;
 pub mod autopilot;
 pub mod backup;
+pub mod builder;
 pub mod audit;
 pub mod calendar;
 pub mod catalog;

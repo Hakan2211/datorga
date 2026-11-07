@@ -514,10 +514,12 @@ export function RedactionDialog({
   canRun = true,
 }: {
   reportId: string;
-  patientId: string;
+  /** The patient whose terms the dialog adds to; none (template builder): no term form, she
+   * already marked everything in the Schwärzen step. */
+  patientId?: string;
   previewKey: readonly unknown[];
   loadPreview: () => Promise<ExtractPreview>;
-  progressEvent: "extract-progress" | "draft-progress" | "summary-progress" | "gaps-progress" | "review-progress";
+  progressEvent: "extract-progress" | "draft-progress" | "summary-progress" | "gaps-progress" | "review-progress" | "builder-progress";
   labels: RedactionLabels;
   onRun: (digest: string, requestId: string) => Promise<void>;
   onClose: () => void;
@@ -541,7 +543,7 @@ export function RedactionDialog({
 
   const refresh = () => void qc.invalidateQueries({ queryKey: previewKey });
   const add = useMutation({
-    mutationFn: () => api.addPseudoTerm(patientId, kind, term),
+    mutationFn: () => api.addPseudoTerm(patientId!, kind, term),
     onSuccess: () => {
       setTerm("");
       refresh();
@@ -715,7 +717,7 @@ export function RedactionDialog({
                 </div>
               </section>
 
-              <section className="space-y-2">
+              {patientId && <section className="space-y-2">
                 <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                   {t("facts.preview.terms")}
                 </h3>
@@ -784,7 +786,7 @@ export function RedactionDialog({
                     ))}
                   </ul>
                 )}
-              </section>
+              </section>}
             </>
           )}
         </div>

@@ -279,7 +279,7 @@ mod tests {
         };
         let l = store.save_letter_meta(&l.report_id, meta).unwrap();
         let report = store.sign_report(&l.report_id, "Dipl.-Psych. M. Muster").unwrap();
-        let t = store.template(&report.template_key).unwrap();
+        let t = store.template_at(&report.template_key, &report.template_version).unwrap();
         let practice = Practice {
             name: "Praxis für Psychotherapie".into(),
             subtitle: "Dipl.-Psych. M. Muster".into(),
