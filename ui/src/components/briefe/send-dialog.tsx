@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import type { SentVia } from '@/bindings/SentVia'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
+import { DatePicker } from '@/components/ui/date-picker'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { api, errorMessage } from '@/lib/api'
@@ -35,7 +35,7 @@ export function SendDialog({ reportId, onClose, onSent }: { reportId: string; on
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
             <Label htmlFor="sent-at">{t('briefe.sentAt')}</Label>
-            <Input id="sent-at" type="date" value={day} onChange={(e) => setDay(e.target.value)} />
+            <DatePicker id="sent-at" value={day} onChange={(d) => setDay(d ?? '')} />
           </div>
           <div className="space-y-1.5">
             <Label>{t('briefe.via')}</Label>

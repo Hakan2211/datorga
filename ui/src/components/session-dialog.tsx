@@ -1,26 +1,27 @@
-// Plan or change a session (slice 22): date via the calendar popover, time, length, modality, and
+// Plan or change a session (slice 22): date via the calendar popover, start, length or end, modality, and
 // for a new one an optional weekly series. Editing also cancels, re-plans or deletes it.
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { format } from 'date-fns'
+import { addMinutes, format } from 'date-fns'
 import { de } from 'date-fns/locale'
-import { CalendarDays, Undo2, XCircle } from 'lucide-react'
+import { Building2, CalendarDays, Undo2, Video, XCircle } from 'lucide-react'
 import type { Session } from '@/bindings/Session'
 import { DeleteSession } from '@/components/delete-button'
 import { Button } from '@/components/ui/button'
 import { Calendar } from '@/components/ui/calendar'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { DurationPicker, TimePicker } from '@/components/ui/date-picker'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { api, errorMessage, q } from '@/lib/api'
 import { DEFAULT_MINUTES, atMinute, minuteOfDay, parseTime, seriesDates } from '@/lib/calendar'
 
-const LENGTHS = [25, 50, 75, 100]
 const SERIES_COUNTS = [1, 2, 4, 6, 8, 10, 12, 15, 20, 25]
 
 export type SessionDialogMode =
@@ -79,6 +80,25 @@ function SessionForm({ mode, close, openAfterCreate }: { mode: SessionDialogMode
 
   const minute = parseTime(time)
   const start = () => atMinute(day, minute ?? 0)
+  const length = Number(minutes)
+  const lengthOk = Number.isInteger(length) && length >= 5 && length <= 480
+  const endOf = () => format(addMinutes(start(), lengthOk ? length : 0), 'HH:mm')
+  // Ende and Dauer follow each other: a typed end sets the length, a new start or length moves the end.
+  const [end, setEnd] = useState(endOf)
+  const endMinute = parseTime(end)
+  const endLength = minute !== null && endMinute !== null ? (endMinute - minute + 24 * 60) % (24 * 60) : null
+  const endOk = endLength !== null && endLength >= 5 && endLength <= 480
+  useEffect(() => {
+    if (minute !== null && lengthOk && !(endOk && endLength === length)) setEnd(endOf())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [time, minutes, day])
+  const changeEnd = (v: string) => {
+    setEnd(v)
+    const m = parseTime(v)
+    if (minute === null || m === null) return
+    const len = (m - minute + 24 * 60) % (24 * 60)
+    if (len >= 5 && len <= 480) setMinutes(String(len))
+  }
   const done = () => {
     invalidateSessions(qc)
     close()
@@ -164,7 +184,7 @@ function SessionForm({ mode, close, openAfterCreate }: { mode: SessionDialogMode
           <div className="grid gap-2">
             <Label>{t('calendar.patient')}</Label>
             <Select value={patientId} onValueChange={setPatientId}>
-              <SelectTrigger data-testid="session-patient">
+              <SelectTrigger className="w-full" data-testid="session-patient">
                 <SelectValue placeholder={t('calendar.pickPatient')} />
               </SelectTrigger>
               <SelectContent>
@@ -178,7 +198,7 @@ function SessionForm({ mode, close, openAfterCreate }: { mode: SessionDialogMode
             </Select>
           </div>
         )}
-        <div className="grid grid-cols-[1fr_7rem] gap-3">
+        <div className="grid grid-cols-[1fr_8rem] gap-3">
           <div className="grid gap-2">
             <Label>{t('calendar.date')}</Label>
             <Popover open={dayOpen} onOpenChange={setDayOpen}>
@@ -189,65 +209,76 @@ function SessionForm({ mode, close, openAfterCreate }: { mode: SessionDialogMode
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-auto p-0" align="start">
-                <Calendar mode="single" selected={day} onSelect={(d) => {
+                <Calendar
+                  mode="single"
+                  selected={day}
+                  onSelect={(d) => {
                     // The picked date keeps the typed time.
                     if (d) setDay(d)
                     setDayOpen(false)
-                  }} defaultMonth={day} weekStartsOn={1} />
+                  }}
+                  defaultMonth={day}
+                  weekStartsOn={1}
+                />
               </PopoverContent>
             </Popover>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="session-time">{t('calendar.time')}</Label>
-            <Input
+            <TimePicker
               id="session-time"
-              inputMode="numeric"
-              maxLength={5}
-              placeholder="09:00"
               value={time}
-              onChange={(e) => setTime(e.target.value)}
+              onChange={setTime}
               onBlur={() => minute !== null && setTime(format(start(), 'HH:mm'))}
-              aria-invalid={minute === null}
-              className="tabular-nums"
+              invalid={minute === null}
               data-testid="session-time"
             />
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-[1fr_8rem] gap-3">
           <div className="grid gap-2">
-            <Label>{t('calendar.length')}</Label>
-            <Select value={minutes} onValueChange={setMinutes}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {[...new Set([...LENGTHS, Number(minutes)])].sort((a, b) => a - b).map((m) => (
-                  <SelectItem key={m} value={String(m)}>
-                    {t('calendar.minutes', { count: m })}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label htmlFor="session-length">{t('calendar.length')}</Label>
+            <DurationPicker id="session-length" value={minutes} onChange={setMinutes} invalid={!lengthOk} data-testid="session-length" />
           </div>
           <div className="grid gap-2">
-            <Label>{t('calendar.modality')}</Label>
-            <Select value={modality} onValueChange={setModality}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="praesenz">{t('calendar.praesenz')}</SelectItem>
-                <SelectItem value="video">{t('calendar.video')}</SelectItem>
-              </SelectContent>
-            </Select>
+            <Label htmlFor="session-end">{t('calendar.end')}</Label>
+            <TimePicker
+              id="session-end"
+              value={end}
+              onChange={changeEnd}
+              onBlur={() => setEnd(endOf())}
+              invalid={!endOk}
+              data-testid="session-end"
+            />
           </div>
+          {!lengthOk && (
+            <p className="col-span-2 -mt-1 text-xs text-destructive">{t('calendar.lengthRange')}</p>
+          )}
+        </div>
+        <div className="grid gap-2">
+          <Label>{t('calendar.modality')}</Label>
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            value={modality}
+            onValueChange={(v) => v && setModality(v)}
+            className="w-full"
+            aria-label={t('calendar.modality')}
+          >
+            <ToggleGroupItem value="praesenz" className="flex-1" data-testid="session-praesenz">
+              <Building2 /> {t('calendar.praesenz')}
+            </ToggleGroupItem>
+            <ToggleGroupItem value="video" className="flex-1" data-testid="session-video">
+              <Video /> {t('calendar.video')}
+            </ToggleGroupItem>
+          </ToggleGroup>
         </div>
         {!editing && (
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-2">
               <Label>{t('calendar.series')}</Label>
               <Select value={count} onValueChange={setCount}>
-                <SelectTrigger data-testid="session-count">
+                <SelectTrigger className="w-full" data-testid="session-count">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -262,7 +293,7 @@ function SessionForm({ mode, close, openAfterCreate }: { mode: SessionDialogMode
             <div className="grid gap-2">
               <Label>{t('calendar.every')}</Label>
               <Select value={every} onValueChange={setEvery} disabled={count === '1'}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -295,7 +326,7 @@ function SessionForm({ mode, close, openAfterCreate }: { mode: SessionDialogMode
           )}
           {editing && <DeleteSession session={editing} documented={documented} onDeleted={close} />}
         </div>
-        <Button onClick={() => save.mutate()} disabled={busy || (!editing && !patientId) || minute === null} data-testid="session-save">
+        <Button onClick={() => save.mutate()} disabled={busy || (!editing && !patientId) || minute === null || !lengthOk} data-testid="session-save">
           {editing ? t('common.save') : count === '1' ? t('calendar.create') : t('calendar.createSeries', { count: Number(count) })}
         </Button>
       </DialogFooter>

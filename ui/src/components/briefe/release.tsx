@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { DatePicker } from '@/components/ui/date-picker'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -128,7 +129,7 @@ export function ReleaseDialog({
             <Label className="text-xs" htmlFor="release-day">
               {t('release.grantedOn')}
             </Label>
-            <Input id="release-day" type="date" value={day} max={isoDay()} onChange={(e) => setDay(e.target.value)} />
+            <DatePicker id="release-day" value={day} max={isoDay()} onChange={(d) => setDay(d ?? '')} />
           </div>
           <Input placeholder={t('release.note')} value={note} onChange={(e) => setNote(e.target.value)} />
           <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => printForm.mutate()} disabled={printForm.isPending}>

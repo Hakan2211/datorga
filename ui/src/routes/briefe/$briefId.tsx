@@ -24,6 +24,7 @@ import { ReportPreview } from '@/components/report-preview'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { DatePicker } from '@/components/ui/date-picker'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -497,7 +498,7 @@ function LetterEditor({ view, letter }: { view: ReportView; letter: Letter }) {
                     <Input value={meta.place ?? ''} disabled={readOnly} onChange={(e) => setMeta({ place: e.target.value || null })} />
                   </Field>
                   <Field label={t('briefe.date')} hint={t('briefe.dateHint')}>
-                    <Input type="date" value={meta.letter_date ?? ''} disabled={readOnly} onChange={(e) => setMeta({ letter_date: e.target.value || null })} />
+                    <DatePicker value={meta.letter_date} disabled={readOnly} onChange={(letter_date) => setMeta({ letter_date })} />
                   </Field>
                 </div>
                 <Field label={t('briefe.case')}>
@@ -518,7 +519,7 @@ function LetterEditor({ view, letter }: { view: ReportView; letter: Letter }) {
                 </Field>
                 <Field label={t('briefe.followUp')} hint={t('briefe.followUpHint')}>
                   <div className="space-y-1.5">
-                    <Input type="date" value={meta.follow_up_on ?? ''} onChange={(e) => setMeta({ follow_up_on: e.target.value || null })} data-testid="letter-follow-up" />
+                    <DatePicker value={meta.follow_up_on} onChange={(follow_up_on) => setMeta({ follow_up_on })} data-testid="letter-follow-up" />
                     {meta.follow_up_on && (
                       <Input
                         placeholder={t('briefe.followUpNote')}

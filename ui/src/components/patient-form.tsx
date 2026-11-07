@@ -12,6 +12,8 @@ import { api, errorMessage } from '@/lib/api'
 import { PatientAvatar } from '@/components/patient-avatar'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { DatePicker } from '@/components/ui/date-picker'
+import { dateToDay } from '@/lib/dates'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -131,7 +133,7 @@ export function PatientFormDialog({
             <Input required {...field('last_name')} value={form.last_name} />
           </Field>
           <Field label={t('patients.birthDate')}>
-            <Input type="date" {...field('birth_date')} />
+            <DatePicker value={form.birth_date} onChange={(birth_date) => setForm({ ...form, birth_date })} max={dateToDay(new Date())} dropdowns />
           </Field>
           <Field label={t('patients.gender')}>
             <GenderSelect value={form.gender} onChange={(gender) => setForm({ ...form, gender })} />

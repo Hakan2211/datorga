@@ -27,7 +27,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
+import { DatePicker } from '@/components/ui/date-picker'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -273,7 +273,7 @@ function EpisodeStage({ episode }: { episode: Episode }) {
           {stage !== 'probatorik' && (
             <div className="space-y-1.5">
               <Label htmlFor="therapy-since">{t('episodes.therapySince')}</Label>
-              <Input id="therapy-since" type="date" value={since} onChange={(e) => setSince(e.target.value)} className="w-48" />
+              <DatePicker id="therapy-since" value={since} onChange={(d) => setSince(d ?? '')} className="w-48" />
             </div>
           )}
           <DialogFooter>
