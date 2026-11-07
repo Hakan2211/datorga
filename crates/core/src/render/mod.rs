@@ -1,6 +1,9 @@
 //! Report export: one neutral document model, rendered to PDF (typst) and DOCX (docx-rs).
 
+pub mod letter;
 pub mod richtext;
+
+pub use letter::{build_letter, letter_docx, letter_pdf, letter_preview_pngs, LetterDoc, Letterhead};
 
 use serde::Serialize;
 use typst::foundations::{Dict, IntoValue};
@@ -48,22 +51,13 @@ pub struct RenderSection {
     pub blocks: Vec<Block>,
 }
 
-/// `template` must be resolved for the episode context.
-pub fn build_doc(
-    report: &Report,
-    template: &Template,
-    patient: &Patient,
-    episode: Option<&Episode>,
-    application: Option<&Application>,
-    session: Option<&Session>,
-    practice: Option<String>,
-) -> RenderDoc {
+/// The template's sections as printed: optional ones left empty are omitted (Sitzungsnotiz);
+/// PTV 3 sections always print, except those marked "nicht relevant".
+fn render_sections(report: &Report, template: &Template) -> Vec<RenderSection> {
     let body_of = |key: &str| report.sections.iter().find(|s| s.key == key).map(|s| s.body.as_str()).unwrap_or("");
-    let sections = template
+    template
         .sections
         .iter()
-        // Optional sections left empty are omitted (Sitzungsnotiz); PTV 3 sections always print,
-        // except those marked "nicht relevant".
         .filter(|def| def.required || !crate::pii::section_text(def.field, body_of(&def.key)).is_empty())
         .filter(|def| !(def.optional && report.sections.iter().any(|s| s.key == def.key && s.not_relevant)))
         .map(|def| {
@@ -77,8 +71,20 @@ pub fn build_doc(
             };
             RenderSection { number: def.number.clone(), heading: def.heading.clone(), diagnoses, blocks: richtext::parse(&html) }
         })
-        .collect();
+        .collect()
+}
 
+/// `template` must be resolved for the episode context.
+pub fn build_doc(
+    report: &Report,
+    template: &Template,
+    patient: &Patient,
+    episode: Option<&Episode>,
+    application: Option<&Application>,
+    session: Option<&Session>,
+    practice: Option<String>,
+) -> RenderDoc {
+    let sections = render_sections(report, template);
     let (title, subtitle) = if let Some(s) = session {
         let when = s.scheduled_at.as_deref().or(s.started_at.as_deref()).unwrap_or(&report.created_at);
         (template.title.clone(), format!("Sitzung vom {}", german_date(when)))
@@ -232,82 +238,98 @@ fn typst_pdf_from(main: &str, data: &impl Serialize) -> Result<Vec<u8>> {
 }
 
 fn compile(main: &str, data: &impl Serialize) -> Result<typst_layout::PagedDocument> {
+    compile_with(main, data, Vec::new())
+}
+
+/// Compiles `main` with `data` as JSON in `sys.inputs.data` and each image as bytes in
+/// `sys.inputs.<name>`.
+fn compile_with(main: &str, data: &impl Serialize, images: Vec<(&str, Vec<u8>)>) -> Result<typst_layout::PagedDocument> {
     let engine = TypstEngine::builder()
         .main_file(main)
         .search_fonts_with(TypstKitFontOptions::default().include_system_fonts(false).include_embedded_fonts(true))
         .build();
     let mut input = Dict::new();
     input.insert("data".into(), serde_json::to_string(data)?.into_value());
+    for (name, bytes) in images {
+        input.insert(name.into(), typst::foundations::Bytes::new(bytes).into_value());
+    }
     engine.compile_with_input(input).output.map_err(|e| Error::Render(format!("typst: {e:?}")))
 }
 
-pub fn docx(doc: &RenderDoc) -> Result<Vec<u8>> {
-    use docx_rs::{AbstractNumbering, Docx, IndentLevel, Level, LevelJc, LevelText, NumberFormat, Numbering, NumberingId, Paragraph, Run, Start, Table, TableCell, TableRow};
+use docx_rs::{Docx, Paragraph, Run};
 
-    fn runs_para(runs: &[richtext::Run]) -> Paragraph {
-        runs.iter().fold(Paragraph::new(), |p, r| {
-            let mut run = Run::new().size(22);
-            for (i, part) in r.text.split('\n').enumerate() {
-                if i > 0 {
-                    run = run.add_break(docx_rs::BreakType::TextWrapping);
-                }
-                run = run.add_text(part);
+fn runs_para(runs: &[richtext::Run]) -> Paragraph {
+    runs.iter().fold(Paragraph::new(), |p, r| {
+        let mut run = Run::new().size(22);
+        for (i, part) in r.text.split('\n').enumerate() {
+            if i > 0 {
+                run = run.add_break(docx_rs::BreakType::TextWrapping);
             }
-            if r.bold {
-                run = run.bold();
-            }
-            if r.italic {
-                run = run.italic();
-            }
-            if r.underline {
-                run = run.underline("single");
-            }
-            p.add_run(run)
-        })
-    }
+            run = run.add_text(part);
+        }
+        if r.bold {
+            run = run.bold();
+        }
+        if r.italic {
+            run = run.italic();
+        }
+        if r.underline {
+            run = run.underline("single");
+        }
+        p.add_run(run)
+    })
+}
 
-    // Same default as the PDF: justified.
-    fn aligned(p: Paragraph, align: Option<richtext::Align>) -> Paragraph {
-        use docx_rs::AlignmentType;
-        p.align(match align {
-            Some(richtext::Align::Left) => AlignmentType::Left,
-            Some(richtext::Align::Center) => AlignmentType::Center,
-            Some(richtext::Align::Right) => AlignmentType::Right,
-            Some(richtext::Align::Justify) | None => AlignmentType::Both,
-        })
-    }
+// Same default as the PDF: justified.
+fn aligned(p: Paragraph, align: Option<richtext::Align>) -> Paragraph {
+    use docx_rs::AlignmentType;
+    p.align(match align {
+        Some(richtext::Align::Left) => AlignmentType::Left,
+        Some(richtext::Align::Center) => AlignmentType::Center,
+        Some(richtext::Align::Right) => AlignmentType::Right,
+        Some(richtext::Align::Justify) | None => AlignmentType::Both,
+    })
+}
 
-    fn add_blocks(mut d: Docx, blocks: &[Block]) -> Docx {
-        for b in blocks {
-            match b {
-                Block::P { runs, align } => d = d.add_paragraph(aligned(runs_para(runs), *align)),
-                Block::H { runs, align } => {
-                    let bold: Vec<_> = runs.iter().map(|r| richtext::Run { bold: true, ..r.clone() }).collect();
-                    d = d.add_paragraph(aligned(runs_para(&bold), *align).keep_next(true));
-                }
-                Block::Ul { items } | Block::Ol { items } => {
-                    let num = if matches!(b, Block::Ul { .. }) { 1 } else { 2 };
-                    for it in items {
-                        d = d.add_paragraph(runs_para(it).numbering(NumberingId::new(num), IndentLevel::new(0)));
-                    }
+fn docx_blocks(mut d: Docx, blocks: &[Block]) -> Docx {
+    use docx_rs::{IndentLevel, NumberingId};
+    for b in blocks {
+        match b {
+            Block::P { runs, align } => d = d.add_paragraph(aligned(runs_para(runs), *align)),
+            Block::H { runs, align } => {
+                let bold: Vec<_> = runs.iter().map(|r| richtext::Run { bold: true, ..r.clone() }).collect();
+                d = d.add_paragraph(aligned(runs_para(&bold), *align).keep_next(true));
+            }
+            Block::Ul { items } | Block::Ol { items } => {
+                let num = if matches!(b, Block::Ul { .. }) { 1 } else { 2 };
+                for it in items {
+                    d = d.add_paragraph(runs_para(it).numbering(NumberingId::new(num), IndentLevel::new(0)));
                 }
             }
         }
-        d
     }
+    d
+}
 
+/// An empty document with the bullet (1) and decimal (2) list numberings [`docx_blocks`] uses.
+fn docx_base() -> Docx {
+    use docx_rs::{AbstractNumbering, Level, LevelJc, LevelText, NumberFormat, Numbering, Start};
     let bullet = |id: usize, fmt: &str, text: &str| {
         AbstractNumbering::new(id).add_level(
             Level::new(0, Start::new(1), NumberFormat::new(fmt), LevelText::new(text), LevelJc::new("left"))
                 .indent(Some(560), Some(docx_rs::SpecialIndentType::Hanging(280)), None, None),
         )
     };
-
-    let mut d = Docx::new()
+    Docx::new()
         .add_abstract_numbering(bullet(1, "bullet", "•"))
         .add_numbering(Numbering::new(1, 1))
         .add_abstract_numbering(bullet(2, "decimal", "%1."))
-        .add_numbering(Numbering::new(2, 2));
+        .add_numbering(Numbering::new(2, 2))
+}
+
+pub fn docx(doc: &RenderDoc) -> Result<Vec<u8>> {
+    use docx_rs::{Table, TableCell, TableRow};
+    let mut d = docx_base();
 
     let header = format!(
         "Chiffre: {}{}{}",
@@ -338,7 +360,7 @@ pub fn docx(doc: &RenderDoc) -> Result<Vec<u8>> {
             rows.extend(s.diagnoses.iter().map(|x| TableRow::new(vec![cell(&x.code, false), cell(&x.label, false), cell(&x.certainty, false)])));
             d = d.add_table(Table::new(rows));
         }
-        d = add_blocks(d, &s.blocks);
+        d = docx_blocks(d, &s.blocks);
     }
     d = d.add_paragraph(Paragraph::new()).add_paragraph(Paragraph::new().add_run(
         Run::new()
@@ -353,7 +375,7 @@ pub fn docx(doc: &RenderDoc) -> Result<Vec<u8>> {
         d = d.add_paragraph(Paragraph::new()).add_paragraph(
             Paragraph::new().keep_next(true).add_run(Run::new().add_text(&a.heading).bold().size(22)),
         );
-        d = add_blocks(d, &a.blocks);
+        d = docx_blocks(d, &a.blocks);
     }
 
     let mut buf = std::io::Cursor::new(Vec::new());
@@ -361,7 +383,7 @@ pub fn docx(doc: &RenderDoc) -> Result<Vec<u8>> {
     Ok(buf.into_inner())
 }
 
-fn german_date(rfc3339: &str) -> String {
+pub fn german_date(rfc3339: &str) -> String {
     match rfc3339.get(..10).map(|s| s.split('-').collect::<Vec<_>>()) {
         Some(p) if p.len() == 3 => format!("{}.{}.{}", p[2], p[1], p[0]),
         _ => rfc3339.to_string(),
@@ -535,6 +557,7 @@ mod tests {
             status: "active".into(),
             created_at: "2026-10-27T10:00:00Z".into(),
             archived_at: None,
+            contact: Default::default(),
         };
         let form = ConsentForm::new(&text, &patient, Some("M. Muster".into()), Some("Praxis Muster".into()), true, "2026-10-27T13:05:00Z");
         assert_eq!(form.title, "Einwilligung in die Tonaufnahme von Therapiesitzungen");

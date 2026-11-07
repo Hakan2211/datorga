@@ -4,6 +4,7 @@
 key: sitzungsnotiz
 version: "2026.1"
 title: Sitzungsnotiz
+category: note
 source: Verlaufsdokumentation (§ 630f BGB)
 rules:
   keyword_style_allowed: true

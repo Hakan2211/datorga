@@ -2,18 +2,23 @@ import { useState, type ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { CalendarX2, FileText, History, Pencil, ShieldCheck } from 'lucide-react'
+import { CalendarX2, FileText, History, Mail, Pencil, ShieldCheck } from 'lucide-react'
 import type { TimelineGroup } from '@/bindings/TimelineGroup'
 import type { TimelineItem } from '@/bindings/TimelineItem'
 import type { Contingent } from '@/bindings/Contingent'
 import { EmptyState, StatusBadge, StatusPill, formatDate } from '@/components/bits'
 import { SummaryPoints, SummaryStatus } from '@/components/session-summary'
+import { LetterStatePill } from '@/components/briefe/letter-state'
+import { germanDay } from '@/lib/letters'
 import { Button } from '@/components/ui/button'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { q } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-type Filter = 'all' | 'sessions'
+type Filter = 'all' | 'sessions' | 'documents'
+
+const shownIn = (filter: Filter, type: TimelineItem['type']) =>
+  filter === 'all' || (filter === 'sessions' ? type === 'session' : type === 'application' || type === 'letter')
 
 /** "11:00": the date is already in the timeline's left column. */
 function timeOf(iso: string | null) {
@@ -47,6 +52,9 @@ export function PatientTimeline({ patientId }: { patientId: string }) {
           <ToggleGroupItem value="sessions" className="px-3" data-testid="timeline-sessions">
             {t('timeline.sessionsOnly')}
           </ToggleGroupItem>
+          <ToggleGroupItem value="documents" className="px-3" data-testid="timeline-documents">
+            {t('timeline.documents')}
+          </ToggleGroupItem>
         </ToggleGroup>
       </div>
       {empty ? (
@@ -60,7 +68,7 @@ export function PatientTimeline({ patientId }: { patientId: string }) {
 
 function Group({ group, patientId, filter }: { group: TimelineGroup; patientId: string; filter: Filter }) {
   const { t } = useTranslation()
-  const items = group.items.filter((i) => filter === 'all' || i.type === 'session')
+  const items = group.items.filter((i) => shownIn(filter, i.type))
   const e = group.episode
   return (
     <section className="space-y-3">
@@ -107,6 +115,7 @@ function Node({ item, patientId, contingent }: { item: TimelineItem; patientId: 
       {item.type === 'session' && <SessionNode item={item} patientId={patientId} contingent={contingent} />}
       {item.type === 'application' && <ApplicationNode item={item} />}
       {item.type === 'consent' && <ConsentNode item={item} />}
+      {item.type === 'letter' && <LetterNode item={item} />}
     </li>
   )
 }
@@ -199,6 +208,22 @@ function ApplicationNode({ item }: { item: Extract<TimelineItem, { type: 'applic
           {t('timeline.openReport')}
         </Link>
       )}
+    </Line>
+  )
+}
+
+function LetterNode({ item }: { item: Extract<TimelineItem, { type: 'letter' }> }) {
+  const { t } = useTranslation()
+  const l = item.letter
+  return (
+    <Line icon={<Mail className="size-4 text-muted-foreground" />}>
+      <span className="font-medium">{l.template_title}</span>
+      {l.recipient_name && <span className="text-muted-foreground">{t('timeline.letterTo', { name: l.recipient_name })}</span>}
+      <LetterStatePill state={l.state} />
+      {l.sent_at && <span className="text-xs text-muted-foreground">{t('timeline.sentAt', { date: germanDay(l.sent_at) })}</span>}
+      <Link to="/briefe/$briefId" params={{ briefId: l.report_id }} className="text-xs underline-offset-2 hover:underline">
+        {t('timeline.openLetter')}
+      </Link>
     </Line>
   )
 }

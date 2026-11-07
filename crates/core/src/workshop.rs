@@ -261,6 +261,7 @@ mod tests {
             status: "active".into(),
             created_at: String::new(),
             archived_at: None,
+            contact: Default::default(),
         }
     }
 

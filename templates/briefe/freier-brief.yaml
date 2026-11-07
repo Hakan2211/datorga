@@ -1,0 +1,20 @@
+# Freier Brief (slice 45): the practice letterhead around free text.
+key: freier-brief
+version: "2026.1"
+title: Freier Brief
+description: Briefkopf, Empfänger und Betreff, der Text ist frei
+category: brief
+layout: letter
+recipients: [sonstige, arzt, krankenkasse, rentenversicherung, pflegekasse, versorgungsamt]
+subject: "{Name}, geb. {Geburtsdatum}"
+closing: Bei Fragen stehe ich Ihnen gerne zur Verfügung.
+rules:
+  signature_required: true
+intro: Ein Brief ohne feste Gliederung.
+sections:
+  - key: text
+    heading: ""
+    field: prose
+    hints:
+      - text: Anlass des Schreibens
+      - text: Was die Empfängerin bzw. der Empfänger wissen oder tun soll

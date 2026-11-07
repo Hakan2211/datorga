@@ -36,12 +36,17 @@ pub enum TimelineItem {
         /// `false`: the consent was revoked at `at`.
         granted: bool,
     },
+    /// A Brief (slice 45), at the time it was signed (a draft: when it was started).
+    Letter {
+        at: String,
+        letter: crate::letter::LetterSummary,
+    },
 }
 
 impl TimelineItem {
     pub(crate) fn at(&self) -> &str {
         match self {
-            Self::Session { at, .. } | Self::Application { at, .. } | Self::Consent { at, .. } => at,
+            Self::Session { at, .. } | Self::Application { at, .. } | Self::Consent { at, .. } | Self::Letter { at, .. } => at,
         }
     }
 }
@@ -128,6 +133,12 @@ impl Store {
                     application: a,
                 });
             }
+        }
+
+        for letter in self.list_letters(Some(patient_id))? {
+            let at = letter.signed_at.clone().unwrap_or_else(|| letter.created_at.clone());
+            let g = group_of(letter.episode_id.as_deref());
+            groups[g].items.push(TimelineItem::Letter { at, letter });
         }
 
         for c in self.list_consents(patient_id)? {

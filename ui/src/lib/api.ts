@@ -89,6 +89,15 @@ import type { Zone } from '@/bindings/Zone'
 import type { SessionUpdate } from '@/bindings/SessionUpdate'
 import type { Task } from '@/bindings/Task'
 import type { TaskInput } from '@/bindings/TaskInput'
+import type { Letter } from '@/bindings/Letter'
+import type { LetterInput } from '@/bindings/LetterInput'
+import type { LetterMeta } from '@/bindings/LetterMeta'
+import type { LetterSummary } from '@/bindings/LetterSummary'
+import type { Practice } from '@/bindings/Practice'
+import type { PracticeAsset } from '@/bindings/PracticeAsset'
+import type { Recipient } from '@/bindings/Recipient'
+import type { RecipientInput } from '@/bindings/RecipientInput'
+import type { SentVia } from '@/bindings/SentVia'
 
 export type InitResult = {
   status: 'ready' | 'recovery_required' | 'new'
@@ -565,6 +574,30 @@ export const api = {
   /** The pages an export would write now, as PNG data URLs (`scale` pixels per point). */
   previewReport: (id: string, scale: number) => invoke<string[]>('report_preview', { id, scale }),
 
+  createLetter: (input: LetterInput) => invoke<Letter>('letter_create', { input }),
+  letter: (id: string) => invoke<Letter>('letter_get', { id }),
+  letters: (patientId?: string) => invoke<LetterSummary[]>('letters_list', { patientId: patientId ?? null }),
+  saveLetterMeta: (id: string, meta: LetterMeta) => invoke<Letter>('letter_meta_save', { id, meta }),
+  signLetter: (id: string, signedBy: string, saveRecipient: boolean) =>
+    invoke<Letter>('letter_sign', { id, signedBy, saveRecipient }),
+  markLetterSent: (id: string, sentAt: string | null, via: SentVia | null) =>
+    invoke<Letter>('letter_mark_sent', { id, sentAt, via }),
+  recipients: (query = '') => invoke<Recipient[]>('recipients_list', { query }),
+  createRecipient: (input: RecipientInput) => invoke<Recipient>('recipient_create', { input }),
+  updateRecipient: (id: string, input: RecipientInput) => invoke<Recipient>('recipient_update', { id, input }),
+  deleteRecipient: (id: string) => invoke<void>('recipient_delete', { id }),
+  patientRecipients: (patientId: string) => invoke<Recipient[]>('patient_recipients', { patientId }),
+  linkRecipient: (patientId: string, recipientId: string, role: string | null) =>
+    invoke<void>('recipient_link', { patientId, recipientId, role }),
+  unlinkRecipient: (patientId: string, recipientId: string) => invoke<void>('recipient_unlink', { patientId, recipientId }),
+  practice: () => invoke<Practice>('practice_get'),
+  setPractice: (practice: Practice) => invoke<Practice>('practice_set', { practice }),
+  practiceAsset: (kind: PracticeAsset) => invoke<string | null>('practice_asset_get', { kind }),
+  setPracticeAsset: (kind: PracticeAsset, path: string) => invoke<void>('practice_asset_set', { kind, path }),
+  removePracticeAsset: (kind: PracticeAsset) => invoke<void>('practice_asset_remove', { kind }),
+  /** Page one of a sample letter with the current letterhead, as PNG data URLs. */
+  practicePreview: (scale: number) => invoke<string[]>('practice_preview', { scale }),
+
   chatThreads: (scope?: ChatScope, refId?: string) =>
     invoke<ChatThread[]>('chat_threads', { scope: scope ?? null, refId: refId ?? null }),
   createChatThread: (scope: ChatScope, refId: string | null) => invoke<ChatThread>('chat_thread_create', { scope, refId }),
@@ -691,6 +724,15 @@ export const q = {
   reports: (status?: ReportStatus) =>
     queryOptions({ queryKey: ['reports', status ?? 'all'], queryFn: () => api.reports(status) }),
   report: (id: string) => queryOptions({ queryKey: ['report', id], queryFn: () => api.report(id) }),
+  letter: (id: string) => queryOptions({ queryKey: ['letter', id], queryFn: () => api.letter(id) }),
+  letters: (patientId?: string) =>
+    queryOptions({ queryKey: ['letters', patientId ?? 'all'], queryFn: () => api.letters(patientId) }),
+  recipients: (query = '') => queryOptions({ queryKey: ['recipients', query], queryFn: () => api.recipients(query) }),
+  patientRecipients: (patientId: string) =>
+    queryOptions({ queryKey: ['recipients', 'patient', patientId], queryFn: () => api.patientRecipients(patientId) }),
+  practice: () => queryOptions({ queryKey: ['practice'], queryFn: api.practice }),
+  practiceAsset: (kind: PracticeAsset) =>
+    queryOptions({ queryKey: ['practice', 'asset', kind], queryFn: () => api.practiceAsset(kind), staleTime: Infinity }),
   checklist: (id: string) => queryOptions({ queryKey: ['checklist', id], queryFn: () => api.checklist(id) }),
   audit: () => queryOptions({ queryKey: ['audit'], queryFn: () => api.audit() }),
   chatThreads: (scope?: ChatScope, refId?: string) =>

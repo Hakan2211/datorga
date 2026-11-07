@@ -1,0 +1,28 @@
+# Behandlungsbestätigung (slice 45): a short letter, e.g. for the employer, school or Krankenkasse.
+# Our own wording; no diagnoses unless the therapist adds them (the patient decides what is passed on).
+key: bescheinigung
+version: "2026.1"
+title: Behandlungsbestätigung
+description: Kurze Bestätigung, dass und wie oft die Behandlung stattfindet
+category: brief
+layout: letter
+recipients: [sonstige, krankenkasse]
+subject: "Behandlungsbestätigung für {Frau/Herrn} {Name}, geb. {Geburtsdatum}"
+closing: Bei Fragen stehe ich Ihnen gerne zur Verfügung.
+rules:
+  signature_required: true
+intro: >-
+  Bestätigt die laufende Behandlung. Diagnosen nur auf ausdrücklichen Wunsch der Patientin bzw.
+  des Patienten aufnehmen.
+sections:
+  - key: bestaetigung
+    heading: ""
+    field: prose
+    starter: |-
+      hiermit bestätige ich, dass sich {Frau/Herr} {Name}, geb. {Geburtsdatum}, seit dem {Behandlung seit} bei mir in ambulanter psychotherapeutischer Behandlung befindet.
+
+      Die Termine finden in der Regel einmal wöchentlich statt.
+    hints:
+      - text: Beginn und Frequenz der Behandlung
+      - text: Voraussichtliche Dauer, falls erbeten
+      - text: Diagnosen nur, wenn die Patientin bzw. der Patient es ausdrücklich wünscht

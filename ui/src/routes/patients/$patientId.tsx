@@ -3,7 +3,7 @@ import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { FilePlus2, Gauge, History, LayoutGrid, Pencil, Plus, Stethoscope } from 'lucide-react'
+import { FilePlus2, Gauge, History, LayoutGrid, MailPlus, Pencil, Plus, Stethoscope } from 'lucide-react'
 import type { Diagnosis } from '@/bindings/Diagnosis'
 import type { AgeGroup } from '@/bindings/AgeGroup'
 import type { Episode } from '@/bindings/Episode'
@@ -13,6 +13,7 @@ import type { Stage } from '@/bindings/Stage'
 import { Page, PageHeader } from '@/components/app-shell'
 import { ExportOutdatedBadge, StatusBadge, formatDate } from '@/components/bits'
 import { ConsentCard } from '@/components/consent-card'
+import { NewLetterDialog } from '@/components/briefe/new-letter-dialog'
 import { DeletePatient } from '@/components/delete-button'
 import { DiagnosisRows } from '@/components/diagnoses'
 import { PatientAvatar } from '@/components/patient-avatar'
@@ -61,6 +62,14 @@ function PatientDetail() {
         }
         actions={
           <>
+            <NewLetterDialog
+              patientId={patientId}
+              trigger={
+                <Button variant="outline" data-testid="patient-write-letter">
+                  <MailPlus /> {t('patients.writeLetter')}
+                </Button>
+              }
+            />
             <PatientFormDialog
               patient={p}
               hasPhoto={!!photo.data}

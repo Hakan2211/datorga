@@ -3,9 +3,10 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
-import { ImagePlus, X } from 'lucide-react'
+import { ChevronRight, ImagePlus, X } from 'lucide-react'
 import type { Gender } from '@/bindings/Gender'
 import type { Patient } from '@/bindings/Patient'
+import type { PatientContact } from '@/bindings/PatientContact'
 import type { PatientInput } from '@/bindings/PatientInput'
 import { api, errorMessage } from '@/lib/api'
 import { PatientAvatar } from '@/components/patient-avatar'
@@ -29,6 +30,7 @@ const empty: PatientInput = {
   chiffre: null,
   pronouns: null,
   gender: null,
+  contact: { street: null, postal_code: null, city: null, insurer: null, insurance_no: null, pension_no: null },
 }
 
 /** Suggests a Chiffre: first letter of the surname + birth date as DDMMYY. Verify the convention with the practice. */
@@ -97,7 +99,13 @@ export function PatientFormDialog({
   }
   const showsPhoto = photo.kind === 'set' || (photo.kind === 'keep' && hasPhoto)
 
-  const field = (key: keyof PatientInput) => ({
+  const contactField = (key: keyof PatientContact) => ({
+    value: form.contact[key] ?? '',
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, contact: { ...form.contact, [key]: e.target.value || null } }),
+  })
+  const hasContact = Object.values(form.contact).some(Boolean)
+
+  const field = (key: Exclude<keyof PatientInput, 'contact'>) => ({
     value: form[key] ?? '',
     onChange: (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [key]: e.target.value || null }),
   })
@@ -105,7 +113,7 @@ export function PatientFormDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{trigger}</DialogTrigger>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{patient ? t('common.edit') : t('patients.new')}</DialogTitle>
         </DialogHeader>
@@ -181,6 +189,40 @@ export function PatientFormDialog({
               )}
             </div>
           </div>
+          <details className="group col-span-2 rounded-md border px-3 py-2" open={hasContact || undefined} data-testid="patient-for-letters">
+            <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm font-medium">
+              <ChevronRight className="size-4 transition-transform group-open:rotate-90" /> {t('patients.forLetters')}
+            </summary>
+            <p className="mt-1 mb-3 text-xs text-muted-foreground">{t('patients.forLettersHint')}</p>
+            <div className="grid grid-cols-[1fr_6rem_1fr] gap-3">
+              <div className="col-span-3">
+                <Field label={t('patients.street')}>
+                  <Input {...contactField('street')} />
+                </Field>
+              </div>
+              <Field label={t('patients.postalCode')}>
+                <Input {...contactField('postal_code')} />
+              </Field>
+              <div className="col-span-2">
+                <Field label={t('patients.city')}>
+                  <Input {...contactField('city')} />
+                </Field>
+              </div>
+              <div className="col-span-3">
+                <Field label={t('patients.insurer')}>
+                  <Input {...contactField('insurer')} />
+                </Field>
+              </div>
+              <div className="col-span-3 grid grid-cols-2 gap-3">
+                <Field label={t('patients.insuranceNo')}>
+                  <Input {...contactField('insurance_no')} />
+                </Field>
+                <Field label={t('patients.pensionNo')}>
+                  <Input {...contactField('pension_no')} />
+                </Field>
+              </div>
+            </div>
+          </details>
           <DialogFooter className="col-span-2">
             <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
               {t('common.cancel')}

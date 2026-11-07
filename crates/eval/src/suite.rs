@@ -277,6 +277,7 @@ fn case(f: CaseFile, all: &[Template]) -> Res<Case> {
         status: "active".into(),
         created_at: String::new(),
         archived_at: None,
+        contact: Default::default(),
     };
     Ok(Case {
         id: f.id,

@@ -17,6 +17,7 @@ function card(last: string, patch: Partial<PatientCard> = {}, birth: string | nu
       status: 'active',
       created_at: '2026-01-01T00:00:00Z',
       archived_at: null,
+      contact: { street: null, postal_code: null, city: null, insurer: null, insurance_no: null, pension_no: null },
     },
     has_photo: false,
     method: null,

@@ -14,6 +14,9 @@ import { Route as AssistantRouteImport } from './routes/assistant'
 import { Route as AuditRouteImport } from './routes/audit'
 import { Route as CalendarRouteImport } from './routes/calendar'
 import { Route as SettingsRouteRouteImport } from './routes/settings/route'
+import { Route as BriefeIndexRouteImport } from './routes/briefe/index'
+import { Route as BriefeBriefIdRouteImport } from './routes/briefe/$briefId'
+import { Route as BriefeEmpfaengerRouteImport } from './routes/briefe/empfaenger'
 import { Route as HilfeIndexRouteImport } from './routes/hilfe/index'
 import { Route as HilfeSlugRouteImport } from './routes/hilfe/$slug'
 import { Route as PatientsIndexRouteImport } from './routes/patients/index'
@@ -57,6 +60,21 @@ const CalendarRoute = CalendarRouteImport.update({
 const SettingsRouteRoute = SettingsRouteRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BriefeIndexRoute = BriefeIndexRouteImport.update({
+  id: '/briefe/',
+  path: '/briefe/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BriefeBriefIdRoute = BriefeBriefIdRouteImport.update({
+  id: '/briefe/$briefId',
+  path: '/briefe/$briefId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BriefeEmpfaengerRoute = BriefeEmpfaengerRouteImport.update({
+  id: '/briefe/empfaenger',
+  path: '/briefe/empfaenger',
   getParentRoute: () => rootRouteImport,
 } as any)
 const HilfeIndexRoute = HilfeIndexRouteImport.update({
@@ -163,6 +181,8 @@ export interface FileRoutesByFullPath {
   '/assistant': typeof AssistantRoute
   '/audit': typeof AuditRoute
   '/calendar': typeof CalendarRoute
+  '/briefe/$briefId': typeof BriefeBriefIdRoute
+  '/briefe/empfaenger': typeof BriefeEmpfaengerRoute
   '/hilfe/$slug': typeof HilfeSlugRoute
   '/patients/$patientId': typeof PatientsPatientIdRoute
   '/reports/$reportId': typeof ReportsReportIdRoute
@@ -174,6 +194,7 @@ export interface FileRoutesByFullPath {
   '/settings/sicherheit': typeof SettingsSicherheitRoute
   '/settings/sicherung': typeof SettingsSicherungRoute
   '/settings/sprache': typeof SettingsSpracheRoute
+  '/briefe/': typeof BriefeIndexRoute
   '/hilfe/': typeof HilfeIndexRoute
   '/patients/': typeof PatientsIndexRoute
   '/reports/': typeof ReportsIndexRoute
@@ -188,6 +209,8 @@ export interface FileRoutesByTo {
   '/assistant': typeof AssistantRoute
   '/audit': typeof AuditRoute
   '/calendar': typeof CalendarRoute
+  '/briefe/$briefId': typeof BriefeBriefIdRoute
+  '/briefe/empfaenger': typeof BriefeEmpfaengerRoute
   '/hilfe/$slug': typeof HilfeSlugRoute
   '/patients/$patientId': typeof PatientsPatientIdRoute
   '/reports/$reportId': typeof ReportsReportIdRoute
@@ -199,6 +222,7 @@ export interface FileRoutesByTo {
   '/settings/sicherheit': typeof SettingsSicherheitRoute
   '/settings/sicherung': typeof SettingsSicherungRoute
   '/settings/sprache': typeof SettingsSpracheRoute
+  '/briefe': typeof BriefeIndexRoute
   '/hilfe': typeof HilfeIndexRoute
   '/patients': typeof PatientsIndexRoute
   '/reports': typeof ReportsIndexRoute
@@ -215,6 +239,8 @@ export interface FileRoutesById {
   '/assistant': typeof AssistantRoute
   '/audit': typeof AuditRoute
   '/calendar': typeof CalendarRoute
+  '/briefe/$briefId': typeof BriefeBriefIdRoute
+  '/briefe/empfaenger': typeof BriefeEmpfaengerRoute
   '/hilfe/$slug': typeof HilfeSlugRoute
   '/patients/$patientId': typeof PatientsPatientIdRoute
   '/reports/$reportId': typeof ReportsReportIdRoute
@@ -226,6 +252,7 @@ export interface FileRoutesById {
   '/settings/sicherheit': typeof SettingsSicherheitRoute
   '/settings/sicherung': typeof SettingsSicherungRoute
   '/settings/sprache': typeof SettingsSpracheRoute
+  '/briefe/': typeof BriefeIndexRoute
   '/hilfe/': typeof HilfeIndexRoute
   '/patients/': typeof PatientsIndexRoute
   '/reports/': typeof ReportsIndexRoute
@@ -243,6 +270,8 @@ export interface FileRouteTypes {
     | '/assistant'
     | '/audit'
     | '/calendar'
+    | '/briefe/$briefId'
+    | '/briefe/empfaenger'
     | '/hilfe/$slug'
     | '/patients/$patientId'
     | '/reports/$reportId'
@@ -254,6 +283,7 @@ export interface FileRouteTypes {
     | '/settings/sicherheit'
     | '/settings/sicherung'
     | '/settings/sprache'
+    | '/briefe/'
     | '/hilfe/'
     | '/patients/'
     | '/reports/'
@@ -268,6 +298,8 @@ export interface FileRouteTypes {
     | '/assistant'
     | '/audit'
     | '/calendar'
+    | '/briefe/$briefId'
+    | '/briefe/empfaenger'
     | '/hilfe/$slug'
     | '/patients/$patientId'
     | '/reports/$reportId'
@@ -279,6 +311,7 @@ export interface FileRouteTypes {
     | '/settings/sicherheit'
     | '/settings/sicherung'
     | '/settings/sprache'
+    | '/briefe'
     | '/hilfe'
     | '/patients'
     | '/reports'
@@ -294,6 +327,8 @@ export interface FileRouteTypes {
     | '/assistant'
     | '/audit'
     | '/calendar'
+    | '/briefe/$briefId'
+    | '/briefe/empfaenger'
     | '/hilfe/$slug'
     | '/patients/$patientId'
     | '/reports/$reportId'
@@ -305,6 +340,7 @@ export interface FileRouteTypes {
     | '/settings/sicherheit'
     | '/settings/sicherung'
     | '/settings/sprache'
+    | '/briefe/'
     | '/hilfe/'
     | '/patients/'
     | '/reports/'
@@ -321,10 +357,13 @@ export interface RootRouteChildren {
   AssistantRoute: typeof AssistantRoute
   AuditRoute: typeof AuditRoute
   CalendarRoute: typeof CalendarRoute
+  BriefeBriefIdRoute: typeof BriefeBriefIdRoute
+  BriefeEmpfaengerRoute: typeof BriefeEmpfaengerRoute
   HilfeSlugRoute: typeof HilfeSlugRoute
   PatientsPatientIdRoute: typeof PatientsPatientIdRoute
   ReportsReportIdRoute: typeof ReportsReportIdRoute
   SessionsSessionIdRoute: typeof SessionsSessionIdRoute
+  BriefeIndexRoute: typeof BriefeIndexRoute
   HilfeIndexRoute: typeof HilfeIndexRoute
   PatientsIndexRoute: typeof PatientsIndexRoute
   ReportsIndexRoute: typeof ReportsIndexRoute
@@ -369,6 +408,27 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/briefe/': {
+      id: '/briefe/'
+      path: '/briefe'
+      fullPath: '/briefe/'
+      preLoaderRoute: typeof BriefeIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/briefe/$briefId': {
+      id: '/briefe/$briefId'
+      path: '/briefe/$briefId'
+      fullPath: '/briefe/$briefId'
+      preLoaderRoute: typeof BriefeBriefIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/briefe/empfaenger': {
+      id: '/briefe/empfaenger'
+      path: '/briefe/empfaenger'
+      fullPath: '/briefe/empfaenger'
+      preLoaderRoute: typeof BriefeEmpfaengerRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/hilfe/': {
@@ -539,10 +599,13 @@ const rootRouteChildren: RootRouteChildren = {
   AssistantRoute: AssistantRoute,
   AuditRoute: AuditRoute,
   CalendarRoute: CalendarRoute,
+  BriefeBriefIdRoute: BriefeBriefIdRoute,
+  BriefeEmpfaengerRoute: BriefeEmpfaengerRoute,
   HilfeSlugRoute: HilfeSlugRoute,
   PatientsPatientIdRoute: PatientsPatientIdRoute,
   ReportsReportIdRoute: ReportsReportIdRoute,
   SessionsSessionIdRoute: SessionsSessionIdRoute,
+  BriefeIndexRoute: BriefeIndexRoute,
   HilfeIndexRoute: HilfeIndexRoute,
   PatientsIndexRoute: PatientsIndexRoute,
   ReportsIndexRoute: ReportsIndexRoute,

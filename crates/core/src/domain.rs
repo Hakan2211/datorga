@@ -55,6 +55,21 @@ str_enum!(
     ConsentKind { Recording => "recording", CloudTranscription => "cloud_transcription" }
 );
 str_enum!(
+    /// Who a letter goes to; picks the recommended document types and the address book filter.
+    RecipientKind {
+        Rentenversicherung => "rentenversicherung",
+        Pflegekasse => "pflegekasse",
+        Versorgungsamt => "versorgungsamt",
+        Arzt => "arzt",
+        Krankenkasse => "krankenkasse",
+        Sonstige => "sonstige"
+    }
+);
+str_enum!(
+    /// How a signed letter left the practice.
+    SentVia { Post => "post", Fax => "fax", Email => "email", Kim => "kim", Personal => "personal" }
+);
+str_enum!(
     /// `session_audio` records the patient and needs consent; `dictation` is the therapist alone.
     SourceKind { SessionAudio => "session_audio", Dictation => "dictation" }
 );
@@ -114,6 +129,39 @@ pub struct Patient {
     pub status: String,
     pub created_at: String,
     pub archived_at: Option<String>,
+    /// Address and insurance numbers for the Betreff of a letter (slice 45). Never sent to an AI.
+    #[serde(default)]
+    pub contact: PatientContact,
+}
+
+/// What letters need about the patient: the address and the numbers a Betreff quotes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PatientContact {
+    pub street: Option<String>,
+    pub postal_code: Option<String>,
+    pub city: Option<String>,
+    /// Krankenkasse.
+    pub insurer: Option<String>,
+    /// Versichertennummer (KV).
+    pub insurance_no: Option<String>,
+    /// Rentenversicherungsnummer.
+    pub pension_no: Option<String>,
+}
+
+impl PatientContact {
+    /// Trimmed, empty strings as `None`.
+    pub fn cleaned(self) -> Self {
+        let c = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        Self {
+            street: c(self.street),
+            postal_code: c(self.postal_code),
+            city: c(self.city),
+            insurer: c(self.insurer),
+            insurance_no: c(self.insurance_no),
+            pension_no: c(self.pension_no),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
@@ -127,6 +175,8 @@ pub struct PatientInput {
     pub pronouns: Option<String>,
     #[serde(default)]
     pub gender: Option<Gender>,
+    #[serde(default)]
+    pub contact: PatientContact,
 }
 
 /// One tile of the patient overview: the patient plus what the card shows at a glance.

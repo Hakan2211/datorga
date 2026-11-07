@@ -82,7 +82,13 @@ function Row({ item }: { item: TrashItem }) {
   })
   const session = item.kind === 'session'
   const Icon = session ? CalendarDays : FileText
-  const what = session ? t('trash.session') : item.detail ? t(`enums.kind.${item.detail}`) : t('trash.bericht')
+  const what = session
+    ? t('trash.session')
+    : item.kind === 'brief'
+      ? `${t('trash.brief')}${item.detail ? `: ${item.detail}` : ''}`
+      : item.detail
+        ? t(`enums.kind.${item.detail}`)
+        : t('trash.bericht')
   return (
     <div className="flex items-center gap-3 py-3" data-testid="trash-item">
       <Icon className="size-4 shrink-0 text-muted-foreground" />

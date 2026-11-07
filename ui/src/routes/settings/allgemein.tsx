@@ -1,18 +1,16 @@
-import { useState } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Building2, CircleHelp, Compass, Monitor, Moon, Palette, Sun, Workflow } from 'lucide-react'
+import { CircleHelp, Compass, Monitor, Moon, Palette, Sun, Workflow } from 'lucide-react'
+import { PracticeCard } from '@/components/briefe/practice-card'
 import { DemoEnterButton } from '@/components/demo'
 import { UpdateCard } from '@/components/update'
 import { useTour } from '@/components/tour'
 import { SectionCard } from '@/components/bits'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { setTheme, THEMES, useTheme, type Theme } from '@/lib/theme'
 import { api, errorMessage, q } from '@/lib/api'
@@ -21,13 +19,9 @@ import { HELP } from '@/lib/help'
 export const Route = createFileRoute('/settings/allgemein')({ component: General })
 
 function General() {
-  const { t } = useTranslation()
   return (
     <>
-      <SectionCard icon={Building2} title={t('settings.practiceTitle')} className="max-w-2xl" contentClassName="space-y-5">
-        <SettingField settingKey="therapist_name" label={t('settings.therapist')} />
-        <SettingField settingKey="practice_header" label={t('settings.practice')} multiline />
-      </SectionCard>
+      <PracticeCard />
       <AppearanceCard />
       <AutopilotCard />
       <UpdateCard />
@@ -115,37 +109,5 @@ function AppearanceCard() {
       </ToggleGroup>
       <p className="text-xs text-muted-foreground">{t('settings.appearance.hint')}</p>
     </SectionCard>
-  )
-}
-
-function SettingField({ settingKey, label, multiline }: { settingKey: string; label: string; multiline?: boolean }) {
-  const { t } = useTranslation()
-  const qc = useQueryClient()
-  const current = useQuery(q.setting<string>(settingKey))
-  const [value, setValue] = useState<string | null>(null)
-  const shown = value ?? current.data ?? ''
-  const saveSetting = useMutation({
-    mutationFn: () => api.setSetting(settingKey, shown),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['setting', settingKey] })
-      toast.success(t('common.saved'))
-    },
-    onError: (e) => toast.error(errorMessage(e)),
-  })
-
-  return (
-    <div className="space-y-1.5">
-      <Label htmlFor={settingKey}>{label}</Label>
-      <div className="flex items-start gap-2">
-        {multiline ? (
-          <Textarea id={settingKey} rows={2} value={shown} onChange={(e) => setValue(e.target.value)} />
-        ) : (
-          <Input id={settingKey} value={shown} onChange={(e) => setValue(e.target.value)} />
-        )}
-        <Button variant="outline" onClick={() => saveSetting.mutate()} disabled={saveSetting.isPending}>
-          {t('common.save')}
-        </Button>
-      </div>
-    </div>
   )
 }

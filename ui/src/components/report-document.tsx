@@ -9,6 +9,7 @@ import { EditorToolbar } from '@/components/editor-toolbar'
 import { Button } from '@/components/ui/button'
 import { ReportLocked, documentExtensions, documentHtml, sectionBodies, sectionPos } from '@/lib/editor'
 import { isBlank, parseDiagnoses, plainText } from '@/lib/report'
+import { cn } from '@/lib/utils'
 
 /** What the page shows around the sections, as on the exported first page. */
 export interface DocumentFrame {
@@ -43,6 +44,8 @@ export function ReportDocument({
   bodies,
   readOnly,
   frame,
+  head,
+  foot,
   onChange,
   onActive,
   onEditLocked,
@@ -51,7 +54,12 @@ export function ReportDocument({
   sections: SectionDef[]
   bodies: Record<string, string>
   readOnly: boolean
-  frame: DocumentFrame
+  /** Bericht/Sitzungsnotiz page frame; a letter passes `head` and `foot` instead. */
+  frame?: DocumentFrame
+  /** Replaces the frame above the sections (a letter's letterhead, address and Betreff). */
+  head?: ReactNode
+  /** Replaces the date and signature lines (a letter's closing). */
+  foot?: ReactNode
   onChange: (key: string, body: string) => void
   onActive: (key: string) => void
   onEditLocked: (key: string) => void
@@ -135,18 +143,26 @@ export function ReportDocument({
         />
       )}
       <Locked.Provider value={{ defs, bodies, onEditLocked }}>
-        <div className="doc-page mx-auto" style={{ zoom }} data-testid="doc-page">
-          <div className="doc-header">
-            <span>{frame.header}</span>
-          </div>
-          {frame.practice && <p className="doc-practice">{frame.practice}</p>}
-          <h1 className="doc-title">{frame.title}</h1>
-          <p className="doc-subtitle">{frame.subtitle}</p>
+        <div className={cn('doc-page mx-auto', head && 'doc-letter')} style={{ zoom }} data-testid="doc-page">
+          {head ??
+            (frame && (
+              <>
+                <div className="doc-header">
+                  <span>{frame.header}</span>
+                </div>
+                {frame.practice && <p className="doc-practice">{frame.practice}</p>}
+                <h1 className="doc-title">{frame.title}</h1>
+                <p className="doc-subtitle">{frame.subtitle}</p>
+              </>
+            ))}
           <EditorContent editor={editor} />
-          <div className="doc-signature">
-            <Line label={`${t('report.date')}: ${frame.date}`} />
-            <Line label={`${t('report.signature')}${frame.signedBy ? `: ${frame.signedBy}` : ''}`} />
-          </div>
+          {foot ??
+            (frame && (
+              <div className="doc-signature">
+                <Line label={`${t('report.date')}: ${frame.date}`} />
+                <Line label={`${t('report.signature')}${frame.signedBy ? `: ${frame.signedBy}` : ''}`} />
+              </div>
+            ))}
         </div>
       </Locked.Provider>
     </div>

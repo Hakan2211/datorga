@@ -16,7 +16,12 @@ optional: boolean,
 /**
  * Receives the therapist's confirmed dictation when the document is created.
  */
-dictation: boolean, when: When, hints: Array<Hint>, 
+dictation: boolean, 
+/**
+ * Letters: text the section starts with, placeholders filled from the patient record
+ * (paragraphs separated by a blank line).
+ */
+starter?: string | null, when: When, hints: Array<Hint>, 
 /**
  * Questions the Bericht-Lotse asks when the sessions don't answer them (slice 38).
  */

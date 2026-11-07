@@ -11,6 +11,8 @@ const BUILTIN: &[&str] = &[
     include_str!("../../../templates/ptv3/erst-umwandlung.yaml"),
     include_str!("../../../templates/ptv3/fortfuehrung.yaml"),
     include_str!("../../../templates/notes/sitzungsnotiz.yaml"),
+    include_str!("../../../templates/briefe/bescheinigung.yaml"),
+    include_str!("../../../templates/briefe/freier-brief.yaml"),
 ];
 
 /// Template of the per-session note (Verlaufsdokumentation).
@@ -26,10 +28,77 @@ pub struct Template {
     /// Application kinds a Bericht template serves; empty for the Sitzungsnotiz.
     #[serde(default)]
     pub report_kinds: Vec<ApplicationKind>,
+    /// Which list offers it: the Berichte board (`ptv3`, `bericht`) or Briefe (`bericht`, `brief`).
+    #[serde(default)]
+    pub category: Category,
+    /// `letter`: printed as a DIN 5008 letter with letterhead, address window and Betreff.
+    #[serde(default)]
+    pub layout: Layout,
+    /// One line under the title in the type picker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Letters: Betreff with placeholders (see [`crate::letter::fill`]), filled in locally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    /// Letters: reference lines under the Betreff (Versicherungsnummer, Aktenzeichen, ...).
+    #[serde(default)]
+    pub refs: Vec<RefDef>,
+    /// Letters: the sentence before "Mit freundlichen Grüßen".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closing: Option<String>,
+    /// Recipient kinds this type is recommended for in the "Neuer Brief" dialog.
+    #[serde(default)]
+    pub recipients: Vec<crate::domain::RecipientKind>,
     pub rules: Rules,
     #[serde(default)]
     pub intro: String,
     pub sections: Vec<SectionDef>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum Category {
+    /// Bericht an den Gutachter (PTV 3).
+    #[default]
+    Ptv3,
+    /// Other Berichte (Rentenversicherung, Pflegekasse, Versorgungsamt, Ärzt:in), slice 46.
+    Bericht,
+    /// Short letters: Bescheinigung, freier Brief.
+    Brief,
+    /// The Sitzungsnotiz.
+    Note,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum Layout {
+    #[default]
+    Bericht,
+    Letter,
+}
+
+/// A reference line under a letter's Betreff.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RefDef {
+    pub label: String,
+    /// Prefilled from the patient record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<PatientRef>,
+    /// Missing value → warning before signing.
+    #[serde(default)]
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum PatientRef {
+    InsuranceNo,
+    PensionNo,
+    Insurer,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
@@ -76,6 +145,10 @@ pub struct SectionDef {
     /// Receives the therapist's confirmed dictation when the document is created.
     #[serde(default)]
     pub dictation: bool,
+    /// Letters: text the section starts with, placeholders filled from the patient record
+    /// (paragraphs separated by a blank line).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starter: Option<String>,
     #[serde(default)]
     pub when: When,
     #[serde(default)]
@@ -166,8 +239,22 @@ impl Template {
         if self.key.trim().is_empty() || self.sections.is_empty() {
             return Err(Error::Template("template needs a key and at least one section".into()));
         }
+        let letter = self.layout == Layout::Letter;
+        if letter != matches!(self.category, Category::Bericht | Category::Brief) {
+            return Err(Error::Template("letter layout goes with the categories bericht and brief".into()));
+        }
+        if !letter && (self.subject.is_some() || !self.refs.is_empty() || self.closing.is_some()) {
+            return Err(Error::Template("subject, refs and closing are for letters".into()));
+        }
         let mut seen = std::collections::HashSet::new();
         for s in &self.sections {
+            // A letter section may go without a heading (a freier Brief is just text).
+            if s.heading.trim().is_empty() && !letter {
+                return Err(Error::Template(format!("section {} needs a heading", s.key)));
+            }
+            if s.starter.is_some() && (!letter || s.field != FieldKind::Prose) {
+                return Err(Error::Template(format!("section {}: starter text only in letter prose sections", s.key)));
+            }
             if !seen.insert(s.key.as_str()) {
                 return Err(Error::Template(format!("duplicate section key {}", s.key)));
             }

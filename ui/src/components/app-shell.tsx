@@ -9,6 +9,7 @@ import {
   FileText,
   Lock,
   LockOpen,
+  Mail,
   Mic,
   PanelLeftClose,
   PanelLeftOpen,
@@ -44,6 +45,7 @@ const modules: { to?: string; label: string; icon: Icon; exact?: boolean }[] = [
   { to: '/patients', label: 'nav.patients', icon: Users },
   { to: '/sessions', label: 'nav.sessions', icon: Mic },
   { to: '/reports', label: 'nav.reports', icon: FileText },
+  { to: '/briefe', label: 'nav.briefe', icon: Mail },
   { to: '/assistant', label: 'nav.assistant', icon: Sparkles },
 ]
 

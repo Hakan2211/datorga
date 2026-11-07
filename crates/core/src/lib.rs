@@ -18,6 +18,7 @@ pub mod domain;
 pub mod draft;
 pub mod extract;
 pub mod gaps;
+pub mod letter;
 pub mod llm;
 pub mod live;
 pub mod local;

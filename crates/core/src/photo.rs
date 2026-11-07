@@ -43,6 +43,41 @@ pub fn normalize(bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Longest edge of a stored letterhead logo or signature image: ~300 dpi at 10 cm.
+pub const LOGO_MAX: u32 = 1200;
+
+/// Letterhead logo or signature: decoded, oriented, scaled down to fit [`LOGO_MAX`] (never up),
+/// re-encoded as PNG with its transparency. Metadata is dropped.
+pub fn normalize_logo(bytes: &[u8]) -> Result<Vec<u8>> {
+    if bytes.len() > MAX_UPLOAD {
+        return Err(Error::Invalid("Das Bild ist zu groß (höchstens 25 MB).".into()));
+    }
+    let unreadable = || Error::Invalid("Bild konnte nicht gelesen werden (JPEG, PNG oder WebP).".into());
+    let mut reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format().map_err(|_| unreadable())?;
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(12_000);
+    limits.max_image_height = Some(12_000);
+    limits.max_alloc = Some(512 * 1024 * 1024);
+    reader.limits(limits);
+    let mut decoder = reader.into_decoder().map_err(|_| unreadable())?;
+    let orientation = decoder.orientation().ok();
+    let mut img = DynamicImage::from_decoder(decoder).map_err(|_| unreadable())?;
+    if let Some(o) = orientation {
+        img.apply_orientation(o);
+    }
+    if img.width() == 0 || img.height() == 0 {
+        return Err(unreadable());
+    }
+    if img.width().max(img.height()) > LOGO_MAX {
+        img = img.resize(LOGO_MAX, LOGO_MAX, FilterType::Lanczos3);
+    }
+    let mut out = Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(img.to_rgba8())
+        .write_to(&mut out, image::ImageFormat::Png)
+        .map_err(|e| Error::Invalid(format!("Bild konnte nicht gespeichert werden: {e}")))?;
+    Ok(out.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,6 +98,16 @@ mod tests {
             let back = image::load_from_memory(&jpeg).unwrap();
             assert_eq!((back.width(), back.height()), (SIZE, SIZE));
         }
+    }
+
+    #[test]
+    fn logo_keeps_aspect_and_becomes_png() {
+        let png = normalize_logo(&encoded(2400, 600, ImageFormat::Jpeg)).unwrap();
+        assert_eq!(&png[..4], &[0x89, b'P', b'N', b'G']);
+        let back = image::load_from_memory(&png).unwrap();
+        assert_eq!((back.width(), back.height()), (LOGO_MAX, 300));
+        let small = image::load_from_memory(&normalize_logo(&encoded(300, 100, ImageFormat::Png)).unwrap()).unwrap();
+        assert_eq!((small.width(), small.height()), (300, 100), "never scaled up");
     }
 
     #[test]

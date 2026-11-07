@@ -224,7 +224,17 @@ const LENA_REPORT: &[(&str, &str)] = &[
 pub fn seed(store: &Store, audio_root: &Path, today: Date) -> Result<()> {
     let day = |offset: i64| today + Duration::days(offset);
     store.set_setting("therapist_name", &json!("Dr. Paula Beispiel"))?;
-    store.set_setting("practice_header", &json!("Praxis für Psychotherapie (Demo)\nBeispielstraße 1\n12345 Musterstadt"))?;
+    store.set_practice(&crate::letter::Practice {
+        name: "Praxis für Psychotherapie (Demo)".into(),
+        subtitle: "Verhaltenstherapie für Erwachsene".into(),
+        street: "Beispielstraße 1".into(),
+        postal_code: "12345".into(),
+        city: "Musterstadt".into(),
+        phone: "01234 567890".into(),
+        email: "praxis@example.org".into(),
+        title_lines: "Psychologische Psychotherapeutin (VT)".into(),
+        ..Default::default()
+    })?;
     // The demo has no backup folder; don't nag about it.
     store.set_setting("backup_reminder_days", &json!(0))?;
 
@@ -237,6 +247,14 @@ pub fn seed(store: &Store, audio_root: &Path, today: Date) -> Result<()> {
         chiffre: Some(format!("S1403{:02}", (today.year() - 35) % 100)),
         pronouns: None,
         gender: Some(Gender::W),
+        contact: PatientContact {
+            street: Some("Lindenallee 12".into()),
+            postal_code: Some("79098".into()),
+            city: Some("Freiburg".into()),
+            insurer: Some("Musterkasse".into()),
+            insurance_no: Some("X123456789".into()),
+            pension_no: None,
+        },
     })?;
     let consent = store.grant_consent(&lena.id, ConsentKind::Recording, Some("Formular unterschrieben, in Akte"))?;
     backdate_consent(store, &consent.id, &at(day(-80), 9, 0))?;
@@ -273,6 +291,7 @@ pub fn seed(store: &Store, audio_root: &Path, today: Date) -> Result<()> {
         chiffre: Some(format!("A0206{:02}", (today.year() - 16) % 100)),
         pronouns: None,
         gender: Some(Gender::M),
+        contact: Default::default(),
     })?;
     let consent = store.grant_consent(&jonas.id, ConsentKind::Recording, Some("Pat. und Sorgeberechtigte haben unterschrieben"))?;
     backdate_consent(store, &consent.id, &at(day(-8), 16, 0))?;
@@ -302,6 +321,7 @@ pub fn seed(store: &Store, audio_root: &Path, today: Date) -> Result<()> {
         chiffre: Some(format!("K2311{:02}", (today.year() - 48) % 100)),
         pronouns: None,
         gender: Some(Gender::W),
+        contact: Default::default(),
     })?;
     let miriam_case = store.create_episode(EpisodeInput { patient_id: miriam.id.clone(), method: Method::Vt, age_group: AgeGroup::Adult, setting: Setting::Einzel })?;
     backdate_episode(store, &miriam_case.id, &at(day(-90), 14, 0))?;

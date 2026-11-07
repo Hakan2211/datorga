@@ -22,6 +22,7 @@ use thera_core::catalog::{self, CloudModel, Tier};
 use thera_core::draft;
 use thera_core::extract;
 use thera_core::gaps;
+use thera_core::letter::{self, Letter, LetterInput, LetterMeta, LetterSummary, Practice, PracticeAsset, Recipient, RecipientInput};
 use thera_core::llm::{self, Credits, Endpoint, KeyInfo, LlmConfig, ProviderId, ProviderInfo, RemoteModel};
 use thera_core::local::{self, Fit, Gpu, Hardware, LlamaServer, Recommendation};
 use thera_core::models::ModelInfo;
@@ -784,7 +785,7 @@ fn consent_form_export(state: State<'_, AppState>, patient_id: String, kind: Con
             &text,
             &patient,
             text_of("therapist_name")?,
-            text_of("practice_header")?,
+            s.practice()?.header_line(),
             guardians,
             &thera_core::domain::now(),
         );
@@ -1704,7 +1705,7 @@ fn report_view(s: &Store, id: &str) -> thera_core::Result<ReportView> {
     if let Some(ep) = &episode {
         // A Bericht resolves for its application kind; a Sitzungsnotiz has none.
         let kind = application.as_ref().map(|a| a.kind);
-        if kind.is_some() || session.is_some() {
+        if kind.is_some() || session.is_some() || report.kind == letter::KIND {
             template = template.resolve(&Context { method: ep.method, age_group: ep.age_group, kind });
         }
     }
@@ -1740,10 +1741,16 @@ fn report_section_not_relevant(state: State<'_, AppState>, id: String, key: Stri
 
 #[tauri::command]
 fn report_checklist(state: State<'_, AppState>, id: String) -> CmdResult<Vec<CheckItem>> {
-    state.with(|s| {
-        let v = report_view(s, &id)?;
-        Ok(pii::checklist(&v.report, &v.template, &v.patient))
-    })
+    state.with(|s| checklist(s, &report_view(s, &id)?))
+}
+
+/// The pre-sign checklist; a letter adds its own (recipient, Betreff, placeholders).
+fn checklist(s: &Store, v: &ReportView) -> thera_core::Result<Vec<CheckItem>> {
+    let mut items = pii::checklist(&v.report, &v.template, &v.patient);
+    if v.report.kind == letter::KIND {
+        items.extend(letter::checklist(&s.letter(&v.report.id)?, &v.report, &v.template));
+    }
+    Ok(items)
 }
 
 #[tauri::command]
@@ -1775,15 +1782,7 @@ fn report_sign(state: State<'_, AppState>, id: String, signed_by: String) -> Cmd
         return Err(CmdError::Other("Name für die Unterschrift fehlt".into()));
     }
     state.with(|s| {
-        let v = report_view(s, &id)?;
-        let blocking: Vec<_> = pii::checklist(&v.report, &v.template, &v.patient)
-            .into_iter()
-            .filter(|c| !c.ok && c.severity == "block")
-            .map(|c| c.message)
-            .collect();
-        if !blocking.is_empty() {
-            return Err(thera_core::Error::Invalid(format!("Checkliste nicht erfüllt: {}", blocking.join("; "))));
-        }
+        check_signable(s, &id)?;
         let signed = s.sign_report(&id, signed_by.trim())?;
         // Autopilot: a note that changed a lot since its summary gets a fresh one.
         if let Some(session_id) = &signed.session_id {
@@ -1795,29 +1794,197 @@ fn report_sign(state: State<'_, AppState>, id: String, signed_by: String) -> Cmd
     })
 }
 
-/// Writes PDF or DOCX to `path` (chosen by the user in a save dialog).
+fn check_signable(s: &Store, id: &str) -> thera_core::Result<()> {
+    let v = report_view(s, id)?;
+    let blocking: Vec<_> = checklist(s, &v)?.into_iter().filter(|c| !c.ok && c.severity == "block").map(|c| c.message).collect();
+    if !blocking.is_empty() {
+        return Err(thera_core::Error::Invalid(format!("Checkliste nicht erfüllt: {}", blocking.join("; "))));
+    }
+    Ok(())
+}
+
+// ---------- Briefe ----------
+
+#[tauri::command]
+fn letter_create(state: State<'_, AppState>, input: LetterInput) -> CmdResult<Letter> {
+    state.with(|s| s.create_letter(input))
+}
+
+#[tauri::command]
+fn letter_get(state: State<'_, AppState>, id: String) -> CmdResult<Letter> {
+    state.with(|s| s.letter(&id))
+}
+
+#[tauri::command]
+fn letters_list(state: State<'_, AppState>, patient_id: Option<String>) -> CmdResult<Vec<LetterSummary>> {
+    state.with(|s| s.list_letters(patient_id.as_deref()))
+}
+
+#[tauri::command]
+fn letter_meta_save(state: State<'_, AppState>, id: String, meta: LetterMeta) -> CmdResult<Letter> {
+    state.with(|s| s.save_letter_meta(&id, meta))
+}
+
+/// Signs after the checklist; a typed-in recipient is saved to the address book unless she
+/// unticked it.
+#[tauri::command]
+fn letter_sign(state: State<'_, AppState>, id: String, signed_by: String, save_recipient: bool) -> CmdResult<Letter> {
+    if signed_by.trim().is_empty() {
+        return Err(CmdError::Other("Name für die Unterschrift fehlt".into()));
+    }
+    state.with(|s| {
+        check_signable(s, &id)?;
+        s.sign_report(&id, signed_by.trim())?;
+        s.letter_signed(&id, save_recipient)
+    })
+}
+
+#[tauri::command]
+fn letter_mark_sent(state: State<'_, AppState>, id: String, sent_at: Option<String>, via: Option<SentVia>) -> CmdResult<Letter> {
+    state.with(|s| s.mark_letter_sent(&id, sent_at.as_deref(), via))
+}
+
+#[tauri::command]
+fn recipients_list(state: State<'_, AppState>, query: Option<String>) -> CmdResult<Vec<Recipient>> {
+    state.with(|s| s.list_recipients(query.as_deref()))
+}
+
+#[tauri::command]
+fn recipient_create(state: State<'_, AppState>, input: RecipientInput) -> CmdResult<Recipient> {
+    state.with(|s| s.create_recipient(input))
+}
+
+#[tauri::command]
+fn recipient_update(state: State<'_, AppState>, id: String, input: RecipientInput) -> CmdResult<Recipient> {
+    state.with(|s| s.update_recipient(&id, input))
+}
+
+#[tauri::command]
+fn recipient_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.with(|s| s.delete_recipient(&id))
+}
+
+#[tauri::command]
+fn patient_recipients(state: State<'_, AppState>, patient_id: String) -> CmdResult<Vec<Recipient>> {
+    state.with(|s| s.patient_recipients(&patient_id))
+}
+
+#[tauri::command]
+fn recipient_link(state: State<'_, AppState>, patient_id: String, recipient_id: String, role: Option<String>) -> CmdResult<()> {
+    state.with(|s| s.link_recipient(&patient_id, &recipient_id, role.as_deref()))
+}
+
+#[tauri::command]
+fn recipient_unlink(state: State<'_, AppState>, patient_id: String, recipient_id: String) -> CmdResult<()> {
+    state.with(|s| s.unlink_recipient(&patient_id, &recipient_id))
+}
+
+#[tauri::command]
+fn practice_get(state: State<'_, AppState>) -> CmdResult<Practice> {
+    state.with(|s| s.practice())
+}
+
+#[tauri::command]
+fn practice_set(state: State<'_, AppState>, practice: Practice) -> CmdResult<Practice> {
+    state.with(|s| s.set_practice(&practice))
+}
+
+/// The logo or signature image as a `data:` URL, or `None`.
+#[tauri::command]
+fn practice_asset_get(state: State<'_, AppState>, kind: PracticeAsset) -> CmdResult<Option<String>> {
+    use base64::Engine as _;
+    let png = state.with(|s| s.practice_asset(kind))?;
+    Ok(png.map(|p| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(p))))
+}
+
+/// Reads the picked file and stores a normalized PNG copy.
+#[tauri::command]
+fn practice_asset_set(state: State<'_, AppState>, kind: PracticeAsset, path: String) -> CmdResult<()> {
+    let bytes = read_photo_file(&path)?;
+    state.with(|s| s.set_practice_asset(kind, &bytes))
+}
+
+#[tauri::command]
+fn practice_asset_remove(state: State<'_, AppState>, kind: PracticeAsset) -> CmdResult<()> {
+    state.with(|s| s.remove_practice_asset(kind))
+}
+
+/// Page one of a sample letter with the current letterhead, for the settings preview.
+#[tauri::command]
+async fn practice_preview(app: AppHandle, scale: f32) -> CmdResult<Vec<String>> {
+    blocking(app, move |state| {
+        let head = state.with(letterhead)?;
+        let doc = render::letter::sample(head, &thera_core::domain::now());
+        Ok(png_urls(render::letter_preview_pngs(&doc, scale.clamp(0.5, 4.0))?))
+    })
+    .await
+}
+
 /// Nachtrag to a signed Sitzungsnotiz, signed on submit. Returns the updated note.
 #[tauri::command]
 fn report_add_addendum(state: State<'_, AppState>, id: String, body: String, signed_by: String) -> CmdResult<Report> {
     state.with(|s| s.add_addendum(&id, &body, &signed_by))
 }
 
-fn render_doc(s: &Store, id: &str) -> thera_core::Result<(ReportView, render::RenderDoc)> {
+/// A Bericht or Sitzungsnotiz, or a letter with the practice letterhead.
+enum Rendered {
+    Report(render::RenderDoc),
+    Letter(render::LetterDoc),
+}
+
+impl Rendered {
+    fn pdf(&self) -> thera_core::Result<Vec<u8>> {
+        match self {
+            Self::Report(d) => render::pdf(d),
+            Self::Letter(d) => render::letter_pdf(d),
+        }
+    }
+    fn docx(&self) -> thera_core::Result<Vec<u8>> {
+        match self {
+            Self::Report(d) => render::docx(d),
+            Self::Letter(d) => render::letter_docx(d),
+        }
+    }
+    fn pngs(&self, scale: f32) -> thera_core::Result<Vec<Vec<u8>>> {
+        match self {
+            Self::Report(d) => render::preview_pngs(d, scale),
+            Self::Letter(d) => render::letter_preview_pngs(d, scale),
+        }
+    }
+}
+
+fn letterhead(s: &Store) -> thera_core::Result<render::Letterhead> {
+    Ok(render::Letterhead {
+        practice: s.practice()?,
+        logo: s.practice_asset(PracticeAsset::Logo)?,
+        signature: s.practice_asset(PracticeAsset::Signature)?,
+        therapist: s.setting("therapist_name")?.and_then(|v| v.as_str().map(str::to_string)),
+    })
+}
+
+fn render_doc(s: &Store, id: &str) -> thera_core::Result<(ReportView, Rendered)> {
     let v = report_view(s, id)?;
-    let practice = s.setting("practice_header")?.and_then(|v| v.as_str().map(str::to_string));
+    if v.report.kind == letter::KIND {
+        let doc = render::build_letter(&v.report, &v.template, &s.letter(id)?, letterhead(s)?, &thera_core::domain::now());
+        return Ok((v, Rendered::Letter(doc)));
+    }
+    let practice = s.practice()?.header_line();
     let doc = render::build_doc(&v.report, &v.template, &v.patient, v.episode.as_ref(), v.application.as_ref(), v.session.as_ref(), practice);
-    Ok((v, doc))
+    Ok((v, Rendered::Report(doc)))
+}
+
+fn png_urls(pages: Vec<Vec<u8>>) -> Vec<String> {
+    use base64::Engine as _;
+    pages.iter().map(|png| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png))).collect()
 }
 
 /// The pages an export would write right now, as PNG data URLs for the editor's preview.
 /// Nothing is written to disk or marked as exported.
 #[tauri::command]
 async fn report_preview(app: AppHandle, id: String, scale: f32) -> CmdResult<Vec<String>> {
-    use base64::Engine as _;
     blocking(app, move |state| {
         let (_, doc) = state.with(|s| render_doc(s, &id))?;
-        let pages = render::preview_pngs(&doc, scale.clamp(0.5, 4.0))?;
-        Ok(pages.iter().map(|png| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png))).collect())
+        Ok(png_urls(doc.pngs(scale.clamp(0.5, 4.0))?))
     })
     .await
 }
@@ -1827,8 +1994,8 @@ fn report_export(state: State<'_, AppState>, id: String, format: String, path: S
     state.with(|s| {
         let (v, doc) = render_doc(s, &id)?;
         let bytes = match format.as_str() {
-            "pdf" => render::pdf(&doc)?,
-            "docx" => render::docx(&doc)?,
+            "pdf" => doc.pdf()?,
+            "docx" => doc.docx()?,
             other => return Err(thera_core::Error::Invalid(format!("unknown format {other}"))),
         };
         std::fs::write(&path, &bytes)?;
@@ -4399,6 +4566,25 @@ pub fn run() {
             report_checklist,
             report_sign,
             report_delete,
+            letter_create,
+            letter_get,
+            letters_list,
+            letter_meta_save,
+            letter_sign,
+            letter_mark_sent,
+            recipients_list,
+            recipient_create,
+            recipient_update,
+            recipient_delete,
+            patient_recipients,
+            recipient_link,
+            recipient_unlink,
+            practice_get,
+            practice_set,
+            practice_asset_get,
+            practice_asset_set,
+            practice_asset_remove,
+            practice_preview,
             trash_list,
             trash_restore,
             trash_purge,

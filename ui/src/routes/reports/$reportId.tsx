@@ -51,6 +51,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { api, errorMessage, q, type ReportView } from '@/lib/api'
 import { allSectionsDone, nextOpenSection, sectionState, type SectionState } from '@/lib/lotse'
 import { appendParagraph, estimatePages, isBlank, sectionText } from '@/lib/report'
+import { practiceLine } from '@/lib/letters'
 import { cn } from '@/lib/utils'
 
 type ReportSearch = { autodraft?: boolean; step?: LotseStep; section?: string; doc?: boolean }
@@ -106,7 +107,7 @@ function ReportEditor({ view }: { view: ReportView }) {
     localStorage.setItem(PREVIEW_KEY, on ? '1' : '0')
     setPreviewState(on)
   }
-  const practice = useQuery(q.setting<string>('practice_header'))
+  const practice = useQuery(q.practice())
 
   const [bodies, setBodies] = useState<Record<string, string>>(() =>
     Object.fromEntries(report.sections.map((s) => [s.key, s.body])),
@@ -364,7 +365,7 @@ function ReportEditor({ view }: { view: ReportView }) {
     ]
       .filter(Boolean)
       .join('\u2003'),
-    practice: practice.data?.trim() || null,
+    practice: practiceLine(practice.data),
     title: isNote ? template.title : 'Bericht an die Gutachterin / den Gutachter',
     subtitle: docSubtitle,
     date: formatDate(report.signed_at ?? report.updated_at),

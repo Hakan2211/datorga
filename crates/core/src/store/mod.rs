@@ -22,6 +22,7 @@ mod autopilot;
 mod calendar;
 mod contingent;
 mod focus;
+mod letters;
 mod review;
 mod speakers;
 mod spend;
@@ -72,6 +73,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V22__focus.sql"),
     include_str!("migrations/V23__review.sql"),
     include_str!("migrations/V24__trash.sql"),
+    include_str!("migrations/V25__letters.sql"),
 ];
 
 /// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).
@@ -110,6 +112,7 @@ impl Store {
         let store = Self { conn };
         store.migrate()?;
         store.seed_builtin_templates()?;
+        store.migrate_practice_header()?;
         store.sync_review_statuses()?;
         store.purge_expired_trash()?;
         Ok(store)
@@ -391,12 +394,15 @@ impl Store {
         validate_patient(&input)?;
         let tx = self.conn.unchecked_transaction()?;
         let id = new_id();
+        let c = input.contact.clone().cleaned();
         tx.execute(
-            "INSERT INTO patient (id, external_ref, first_name, last_name, birth_date, chiffre, pronouns, gender, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO patient (id, external_ref, first_name, last_name, birth_date, chiffre, pronouns, gender, created_at,
+                 street, postal_code, city, insurer, insurance_no, pension_no)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 id, input.external_ref, input.first_name.trim(), input.last_name.trim(),
-                input.birth_date, input.chiffre, input.pronouns, input.gender.map(Gender::as_str), now()
+                input.birth_date, input.chiffre, input.pronouns, input.gender.map(Gender::as_str), now(),
+                c.street, c.postal_code, c.city, c.insurer, c.insurance_no, c.pension_no
             ],
         )?;
         audit::append(&tx, Entry { actor: ACTOR, action: "patient.create", entity_type: "patient", entity_id: Some(&id), meta: json!({}) })?;
@@ -407,13 +413,15 @@ impl Store {
     pub fn update_patient(&self, id: &str, input: PatientInput) -> Result<Patient> {
         validate_patient(&input)?;
         let tx = self.conn.unchecked_transaction()?;
+        let c = input.contact.clone().cleaned();
         let n = tx.execute(
             "UPDATE patient SET external_ref=?2, first_name=?3, last_name=?4, birth_date=?5, chiffre=?6, pronouns=?7,
-                 gender=?8
+                 gender=?8, street=?9, postal_code=?10, city=?11, insurer=?12, insurance_no=?13, pension_no=?14
              WHERE id=?1",
             params![
                 id, input.external_ref, input.first_name.trim(), input.last_name.trim(),
-                input.birth_date, input.chiffre, input.pronouns, input.gender.map(Gender::as_str)
+                input.birth_date, input.chiffre, input.pronouns, input.gender.map(Gender::as_str),
+                c.street, c.postal_code, c.city, c.insurer, c.insurance_no, c.pension_no
             ],
         )?;
         if n == 0 {
@@ -467,7 +475,7 @@ impl Store {
                    (SELECT COUNT(*) FROM session s LEFT JOIN report n ON n.session_id = s.id AND n.kind = 'sitzungsnotiz'
                      WHERE s.patient_id = ?1 AND s.status != 'cancelled' AND COALESCE(s.scheduled_at, s.started_at) < ?2
                        AND (n.id IS NULL OR n.status NOT IN ('signed', 'exported')))
-                   + (SELECT COUNT(*) FROM report WHERE patient_id = ?1 AND kind = 'bericht' AND status IN ('draft', 'in_review'))",
+                   + (SELECT COUNT(*) FROM report WHERE patient_id = ?1 AND kind IN ('bericht', 'brief') AND status IN ('draft', 'in_review'))",
                 params![patient.id, now],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )?;
@@ -2206,9 +2214,13 @@ impl Store {
     /// Papierkorb. A Sitzungsnotiz goes only with its session.
     pub fn delete_report(&self, report_id: &str) -> Result<DeleteOutcome> {
         let report = self.report(report_id)?;
-        if report.kind != "bericht" {
+        let letter = report.kind == crate::letter::KIND;
+        if report.kind != "bericht" && !letter {
             return Err(Error::Invalid("Sitzungsnotizen werden mit ihrer Sitzung gelöscht".into()));
         }
+        // A letter's Papierkorb entry names its type.
+        let letter_title =
+            if letter { Some(self.template(&report.template_key).map(|t| t.title).unwrap_or(report.template_key.clone())) } else { None };
         let signed = matches!(report.status, ReportStatus::Signed | ReportStatus::Exported);
         let tx = self.conn.unchecked_transaction()?;
         if signed {
@@ -2220,8 +2232,11 @@ impl Store {
                 roots.push(("application", app_id.as_str()));
             }
             let item = trash::TrashEntry {
-                patient_id: &report.patient_id, kind: "bericht", entity_id: report_id,
-                detail: app.as_ref().map(|(_, kind)| kind.as_str()), occurred_at: report.signed_at.as_deref(),
+                patient_id: &report.patient_id,
+                kind: if letter { crate::letter::KIND } else { "bericht" },
+                entity_id: report_id,
+                detail: letter_title.as_deref().or(app.as_ref().map(|(_, kind)| kind.as_str())),
+                occurred_at: report.signed_at.as_deref(),
             };
             Store::move_to_trash(&tx, item, &roots)?;
         }
@@ -2378,7 +2393,8 @@ fn validate_patient(p: &PatientInput) -> Result<()> {
 }
 
 const PATIENT_SELECT: &str = "SELECT id, external_ref, first_name, last_name, birth_date, chiffre, pronouns,
-    consent_recording, status, created_at, archived_at, gender FROM patient";
+    consent_recording, status, created_at, archived_at, gender, street, postal_code, city, insurer, insurance_no,
+    pension_no FROM patient";
 const CONSENT_SELECT: &str = "SELECT id, patient_id, kind, scope, text_version, text_hash, granted_at, revoked_at,
     note FROM consent";
 const EPISODE_SELECT: &str =
@@ -2443,6 +2459,14 @@ fn row_to_patient(r: &rusqlite::Row<'_>) -> rusqlite::Result<Patient> {
         gender: r.get::<_, Option<String>>(11)?.map(|g| g.parse()).transpose().map_err(|e: Error| {
             rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(e))
         })?,
+        contact: PatientContact {
+            street: r.get(12)?,
+            postal_code: r.get(13)?,
+            city: r.get(14)?,
+            insurer: r.get(15)?,
+            insurance_no: r.get(16)?,
+            pension_no: r.get(17)?,
+        },
     })
 }
 

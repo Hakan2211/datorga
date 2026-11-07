@@ -196,3 +196,21 @@
 .doc-table th,
 .doc-table td { border: 0.4pt solid #aaa; padding: 3pt 5pt; text-align: left; }
 .doc-signature { display: grid; grid-template-columns: 1fr 1fr; gap: 2em; margin-top: 2.2em; }
+/* A letter section without a heading (freier Brief, Bestätigung). */
+.doc-section-heading:empty { display: none; }
+/* Letter frame (render/brief.typ, DIN 5008 Form B): the page has the letter's 2.5 / 2 cm margins. */
+.doc-page.doc-letter { padding: 2cm 2cm 2.5cm 2.5cm; }
+.doc-letterhead { position: relative; min-height: 2.5cm; text-align: center; }
+.doc-letterhead-name { font-size: 15pt; font-weight: 700; line-height: 1.2; }
+.doc-letterhead-sub { font-size: 9.5pt; color: #3c3c3c; }
+.doc-letterhead img { position: absolute; top: -0.8cm; right: 0; max-width: 3.6cm; max-height: 2.2cm; object-fit: contain; }
+.doc-window { width: 8.5cm; min-height: 4.5cm; margin-top: 0; padding-top: 1cm; line-height: 1.25; }
+.doc-sender { font-size: 7pt; text-decoration: underline; margin-bottom: 0.25cm; }
+.doc-placedate { margin-top: 0.8cm; text-align: right; }
+.doc-subject { margin-top: 0.8em; font-weight: 700; }
+.doc-refs { line-height: 1.25; }
+.doc-inline { width: 100%; border: 0; border-bottom: 1px dashed transparent; background: transparent; font: inherit; color: inherit; padding: 0; outline: none; }
+.doc-inline:hover, .doc-inline:focus { border-bottom-color: #b9b9b9; }
+.doc-salutation { margin: 0.8em 0 0.2em; }
+.doc-closing { margin-top: 1.2em; }
+.doc-closing-titles { font-size: 9.5pt; }
