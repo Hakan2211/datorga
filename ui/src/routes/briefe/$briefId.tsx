@@ -15,6 +15,7 @@ import { LetterStatePill } from '@/components/briefe/letter-state'
 import { RecipientPicker } from '@/components/briefe/recipient-picker'
 import { ReleaseDialog } from '@/components/briefe/release'
 import { SendDialog } from '@/components/briefe/send-dialog'
+import { TextBlockTools } from '@/components/briefe/textblock-menu'
 import { DeleteReport } from '@/components/delete-button'
 import { ReportDocument } from '@/components/report-document'
 import { ReportPreview } from '@/components/report-preview'
@@ -27,8 +28,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { Toggle } from '@/components/ui/toggle'
 import { api, errorMessage, q, type ReportView } from '@/lib/api'
+import { SlashKeys } from '@/lib/editor'
 import { DEFAULT_SALUTATION, RECIPIENT_KINDS, metaOf, germanDay, isoDay, linesFromText, placeDate, practiceLine } from '@/lib/letters'
 import { cn } from '@/lib/utils'
+
+/** The letter editor's extra: "/" opens the Textbausteine at the cursor. */
+const LETTER_EXTENSIONS = [SlashKeys]
 
 export const Route = createFileRoute('/briefe/$briefId')({ component: LetterPage })
 
@@ -341,6 +346,8 @@ function LetterEditor({ view, letter }: { view: ReportView; letter: Letter }) {
               onActive={setActive}
               onEditLocked={() => {}}
               dictateFor={reportId}
+              extensions={LETTER_EXTENSIONS}
+              toolbarExtra={(editor) => <TextBlockTools editor={editor} reportId={reportId} templateKey={template.key} patient={patient} />}
             />
           </div>
           {preview ? (

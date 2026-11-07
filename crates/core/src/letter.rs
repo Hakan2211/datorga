@@ -177,6 +177,9 @@ pub struct Material {
     /// The last signed Bericht or letter of the Behandlungsfall.
     #[serde(default = "on")]
     pub prior: bool,
+    /// Her Textbausteine for the letter type, as preferred wording (slice 48).
+    #[serde(default = "on")]
+    pub textblocks: bool,
 }
 
 fn on() -> bool {
@@ -185,7 +188,7 @@ fn on() -> bool {
 
 impl Default for Material {
     fn default() -> Self {
-        Self { facts: true, answers: true, prior: true }
+        Self { facts: true, answers: true, prior: true, textblocks: true }
     }
 }
 
@@ -485,6 +488,10 @@ pub const PLACEHOLDERS: &[&str] = &[
     "{Versichertennummer}",
     "{Rentenversicherungsnummer}",
     "{Frau/Herr}",
+    "{sie/er}",
+    "{ihre/seine}",
+    "{Patientin/Patient}",
+    "{die Patientin/den Patienten}",
 ];
 
 /// Fills `{Name}`, `{Geburtsdatum}`, … from the patient record, and `{weiblich/männlich}` pairs
@@ -492,6 +499,11 @@ pub const PLACEHOLDERS: &[&str] = &[
 /// form for weiblich, second for männlich. Unknown placeholders, values the record doesn't have,
 /// and pairs for divers / keine Angabe stay as written, so the therapist sees what to fill in.
 pub fn fill(text: &str, ctx: &FillContext<'_>) -> String {
+    fill_with(text, ctx, |v| v.to_string())
+}
+
+/// [`fill`] with each filled value passed through `escape` (HTML text).
+pub fn fill_with(text: &str, ctx: &FillContext<'_>, escape: impl Fn(&str) -> String) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(start) = rest.find('{') {
@@ -501,7 +513,7 @@ pub fn fill(text: &str, ctx: &FillContext<'_>) -> String {
             Some(end) if after.as_bytes()[end] == b'}' => {
                 let token = &after[..end];
                 match value(token.trim(), ctx) {
-                    Some(v) => out.push_str(&v),
+                    Some(v) => out.push_str(&escape(&v)),
                     None => {
                         out.push('{');
                         out.push_str(token);

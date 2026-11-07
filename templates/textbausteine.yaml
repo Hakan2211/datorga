@@ -1,0 +1,74 @@
+# Built-in Textbausteine (slice 48). Our own generic wording, not taken from real letters.
+# `id` is stable: an edited block becomes her own (origin user) and is never overwritten; a
+# deleted one stays hidden. `templates`: the letter types it fits (empty = all). `section`: the
+# section it is meant for (offered first there). Placeholders are filled from the patient
+# record when inserted (see `letter::PLACEHOLDERS`); pairs are {weiblich/männlich}.
+- id: builtin-teufelskreis-schmerz
+  title: Teufelskreis Schmerz und Stimmung
+  templates: [drv-befund, versorgungsamt-befund, pflege-stellungnahme, arztbrief]
+  section: befund
+  body: >-
+    <p>Anhaltende Schmerzen und die depressive Symptomatik verstärken sich gegenseitig: Die Schmerzen
+    binden Aufmerksamkeit und Kraft, schränken Aktivität und Schlaf ein und fördern Rückzug und
+    Grübeln; die gedrückte Stimmung senkt wiederum die Schmerzschwelle und die Bereitschaft, sich zu
+    bewegen. Mit der Zeit bildet sich ein Schmerzgedächtnis, sodass die Beschwerden auch ohne neuen
+    körperlichen Anlass fortbestehen.</p>
+- id: builtin-funktionsebenen
+  title: Funktionsebenen (Liste)
+  templates: [drv-befund, versorgungsamt-befund, pflege-stellungnahme]
+  body: >-
+    <ul><li><p><strong>Kognitiv:</strong> </p></li><li><p><strong>Emotional:</strong> </p></li><li><p><strong>Motivational:</strong> </p></li><li><p><strong>Vegetativ:</strong> </p></li><li><p><strong>Verhaltensebene:</strong> </p></li><li><p><strong>Sozialebene:</strong> </p></li></ul>
+- id: builtin-ziel-stabilisierung
+  title: Behandlungsziel Stabilisierung
+  templates: []
+  body: >-
+    <p>Ziel der psychotherapeutischen Behandlung ist es, {die Patientin/den Patienten} psychisch zu
+    stabilisieren, die Bewältigung des Alltags zu verbessern und einer weiteren Chronifizierung der
+    Beschwerden entgegenzuwirken.</p>
+- id: builtin-behandlung-seit
+  title: In Behandlung seit
+  templates: []
+  body: >-
+    <p>{Frau/Herr} {Nachname} befindet sich seit dem {Behandlung seit} in meiner ambulanten
+    psychotherapeutischen Behandlung.</p>
+- id: builtin-muttersprache
+  title: Behandlung in der Muttersprache
+  templates: [drv-befund, versorgungsamt-befund, pflege-stellungnahme, arztbrief, bescheinigung]
+  section: behandlung
+  body: >-
+    <p>Die Behandlung findet in der Muttersprache {der Patientin/des Patienten} statt; so können auch
+    belastende Inhalte differenziert besprochen werden.</p>
+- id: builtin-behandlungsbeduerftig
+  title: Weiter behandlungsbedürftig
+  templates: [drv-befund, versorgungsamt-befund, pflege-stellungnahme, arztbrief]
+  body: >-
+    <p>Aus psychotherapeutischer Sicht besteht weiterhin Behandlungsbedürftigkeit. Eine Fortführung
+    der Behandlung wird empfohlen.</p>
+- id: builtin-belastbarkeit
+  title: Eingeschränkte Belastbarkeit
+  templates: [drv-befund, versorgungsamt-befund]
+  body: >-
+    <p>Die psychische Belastbarkeit ist deutlich eingeschränkt. Schon alltägliche Anforderungen führen
+    zu Erschöpfung, Konzentrationsstörungen und einer Zunahme der Beschwerden.</p>
+- id: builtin-teilhabe
+  title: Auswirkungen auf die Teilhabe
+  templates: [versorgungsamt-befund, pflege-stellungnahme]
+  body: >-
+    <p>Die Erkrankung wirkt sich auf mehrere Lebensbereiche aus: auf die Gestaltung des Alltags, auf
+    soziale Kontakte und auf die Fähigkeit, Termine und Verpflichtungen verlässlich wahrzunehmen.</p>
+- id: builtin-unterstuetzung-alltag
+  title: Unterstützung im Alltag
+  templates: [pflege-stellungnahme]
+  body: >-
+    <p>{Die Patientin/Der Patient} ist im Alltag auf Unterstützung angewiesen, insbesondere bei der
+    Strukturierung des Tages, beim Erinnern an Termine und bei der Bewältigung von Behördengängen.</p>
+- id: builtin-schluss
+  title: Schlussformel
+  templates: []
+  body: >-
+    <p>Für Rückfragen stehe ich Ihnen gerne zur Verfügung.</p>
+- id: builtin-bescheinigung-frequenz
+  title: Termine wöchentlich
+  templates: [bescheinigung]
+  body: >-
+    <p>Die Termine finden in der Regel einmal wöchentlich statt und dauern jeweils 50 Minuten.</p>

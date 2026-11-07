@@ -17,6 +17,7 @@ import { Route as SettingsRouteRouteImport } from './routes/settings/route'
 import { Route as BriefeIndexRouteImport } from './routes/briefe/index'
 import { Route as BriefeBriefIdRouteImport } from './routes/briefe/$briefId'
 import { Route as BriefeEmpfaengerRouteImport } from './routes/briefe/empfaenger'
+import { Route as BriefeTextbausteineRouteImport } from './routes/briefe/textbausteine'
 import { Route as HilfeIndexRouteImport } from './routes/hilfe/index'
 import { Route as HilfeSlugRouteImport } from './routes/hilfe/$slug'
 import { Route as PatientsIndexRouteImport } from './routes/patients/index'
@@ -75,6 +76,11 @@ const BriefeBriefIdRoute = BriefeBriefIdRouteImport.update({
 const BriefeEmpfaengerRoute = BriefeEmpfaengerRouteImport.update({
   id: '/briefe/empfaenger',
   path: '/briefe/empfaenger',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BriefeTextbausteineRoute = BriefeTextbausteineRouteImport.update({
+  id: '/briefe/textbausteine',
+  path: '/briefe/textbausteine',
   getParentRoute: () => rootRouteImport,
 } as any)
 const HilfeIndexRoute = HilfeIndexRouteImport.update({
@@ -183,6 +189,7 @@ export interface FileRoutesByFullPath {
   '/calendar': typeof CalendarRoute
   '/briefe/$briefId': typeof BriefeBriefIdRoute
   '/briefe/empfaenger': typeof BriefeEmpfaengerRoute
+  '/briefe/textbausteine': typeof BriefeTextbausteineRoute
   '/hilfe/$slug': typeof HilfeSlugRoute
   '/patients/$patientId': typeof PatientsPatientIdRoute
   '/reports/$reportId': typeof ReportsReportIdRoute
@@ -211,6 +218,7 @@ export interface FileRoutesByTo {
   '/calendar': typeof CalendarRoute
   '/briefe/$briefId': typeof BriefeBriefIdRoute
   '/briefe/empfaenger': typeof BriefeEmpfaengerRoute
+  '/briefe/textbausteine': typeof BriefeTextbausteineRoute
   '/hilfe/$slug': typeof HilfeSlugRoute
   '/patients/$patientId': typeof PatientsPatientIdRoute
   '/reports/$reportId': typeof ReportsReportIdRoute
@@ -241,6 +249,7 @@ export interface FileRoutesById {
   '/calendar': typeof CalendarRoute
   '/briefe/$briefId': typeof BriefeBriefIdRoute
   '/briefe/empfaenger': typeof BriefeEmpfaengerRoute
+  '/briefe/textbausteine': typeof BriefeTextbausteineRoute
   '/hilfe/$slug': typeof HilfeSlugRoute
   '/patients/$patientId': typeof PatientsPatientIdRoute
   '/reports/$reportId': typeof ReportsReportIdRoute
@@ -272,6 +281,7 @@ export interface FileRouteTypes {
     | '/calendar'
     | '/briefe/$briefId'
     | '/briefe/empfaenger'
+    | '/briefe/textbausteine'
     | '/hilfe/$slug'
     | '/patients/$patientId'
     | '/reports/$reportId'
@@ -300,6 +310,7 @@ export interface FileRouteTypes {
     | '/calendar'
     | '/briefe/$briefId'
     | '/briefe/empfaenger'
+    | '/briefe/textbausteine'
     | '/hilfe/$slug'
     | '/patients/$patientId'
     | '/reports/$reportId'
@@ -329,6 +340,7 @@ export interface FileRouteTypes {
     | '/calendar'
     | '/briefe/$briefId'
     | '/briefe/empfaenger'
+    | '/briefe/textbausteine'
     | '/hilfe/$slug'
     | '/patients/$patientId'
     | '/reports/$reportId'
@@ -359,6 +371,7 @@ export interface RootRouteChildren {
   CalendarRoute: typeof CalendarRoute
   BriefeBriefIdRoute: typeof BriefeBriefIdRoute
   BriefeEmpfaengerRoute: typeof BriefeEmpfaengerRoute
+  BriefeTextbausteineRoute: typeof BriefeTextbausteineRoute
   HilfeSlugRoute: typeof HilfeSlugRoute
   PatientsPatientIdRoute: typeof PatientsPatientIdRoute
   ReportsReportIdRoute: typeof ReportsReportIdRoute
@@ -429,6 +442,13 @@ declare module '@tanstack/react-router' {
       path: '/briefe/empfaenger'
       fullPath: '/briefe/empfaenger'
       preLoaderRoute: typeof BriefeEmpfaengerRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/briefe/textbausteine': {
+      id: '/briefe/textbausteine'
+      path: '/briefe/textbausteine'
+      fullPath: '/briefe/textbausteine'
+      preLoaderRoute: typeof BriefeTextbausteineRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/hilfe/': {
@@ -601,6 +621,7 @@ const rootRouteChildren: RootRouteChildren = {
   CalendarRoute: CalendarRoute,
   BriefeBriefIdRoute: BriefeBriefIdRoute,
   BriefeEmpfaengerRoute: BriefeEmpfaengerRoute,
+  BriefeTextbausteineRoute: BriefeTextbausteineRoute,
   HilfeSlugRoute: HilfeSlugRoute,
   PatientsPatientIdRoute: PatientsPatientIdRoute,
   ReportsReportIdRoute: ReportsReportIdRoute,

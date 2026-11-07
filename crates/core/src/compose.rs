@@ -30,7 +30,7 @@ use crate::templates::{Audience, SectionDef, Template};
 use crate::{Error, Result};
 
 /// Bump on any change to the prompt or the answer format.
-pub const PROMPT_VERSION: &str = "letter-2026.1";
+pub const PROMPT_VERSION: &str = "letter-2026.2";
 pub const QUESTIONS_PROMPT_VERSION: &str = "letter-questions-2026.1";
 
 /// Longest pasted request sent to find its questions.
@@ -60,6 +60,9 @@ pub struct Request<'a> {
     /// A re-write of one section: its current plain text.
     pub rewrite: Option<&'a str>,
     pub instruction: Option<&'a str>,
+    /// Her Textbausteine for this letter type as (title, plain text for the model, see
+    /// [`crate::textblock::for_ai`]): preferred wording `[T n]`, not material.
+    pub blocks: &'a [(String, String)],
 }
 
 pub struct Prepared {
@@ -116,7 +119,8 @@ pub fn system_prompt(template: &Template, frame: &Frame, rewrite: bool) -> Strin
          Abschnitt beantwortet, und nummerierte Quellen: [F1] … Fakten aus den Sitzungsnotizen, die die Therapeutin \
          geprüft hat (Sitzung 1 ist die erste dokumentierte); [A1] … ihre eigenen Angaben zu einem Abschnitt, die \
          Frage in Klammern; [V1] … Abschnitte ihres letzten unterschriebenen Berichts oder Briefs (Vorbericht; bei \
-         Widerspruch gilt der neuere Fakt); [I] ihre Anweisung, soweit sie Inhalt nennt.\n\n\
+         Widerspruch gilt der neuere Fakt); [I] ihre Anweisung, soweit sie Inhalt nennt. Unter [T1] … stehen ihre \
+         Textbausteine: bevorzugte Formulierungen, keine Fakten.\n\n\
          {task}\n\
          Regeln:\n\
          - Nur was die Quellen hergeben. Nichts erfinden, keine Vermutungen als Tatsachen.\n\
@@ -126,6 +130,10 @@ pub fn system_prompt(template: &Template, frame: &Frame, rewrite: bool) -> Strin
          - Prognose, Motivation, Therapieziele, Setting und Sitzungszahl nur, wenn eine zitierte Quelle sie \
          ausdrücklich nennt.\n\
          - Beantworte die Fragen der Empfängerin in ihrer Reihenfolge, jeweils im zugehörigen Abschnitt.\n\
+         - Textbausteine [T…]: Passt einer zu einem Abschnitt und belegen die Quellen seinen Inhalt für diese Person, \
+         übernimm seine Formulierung möglichst wörtlich und nenne zusätzlich \"T…\" in \"sources\". Einen Baustein \
+         nie nur deshalb verwenden, weil es ihn gibt; er allein belegt keinen Satz. \"…\" in einem Baustein ist eine \
+         Lücke: nur füllen, wenn eine Quelle den Inhalt nennt, sonst den Teil weglassen.\n\
          - Sachlich, in ganzen Sätzen, Fachsprache, auf Deutsch. Ein Eintrag pro Satz.\n\
          - Die Person heißt durchgehend {person}. Keine Namen, keine Anrede, keine Grußformel; Anschrift, Betreff und \
          Gruß setzt die Therapeutin selbst.\n\
@@ -208,7 +216,14 @@ fn source_list(facts: &[InputFact], defs: &[&SectionDef], patient: &Patient) -> 
     (out, labels)
 }
 
-fn user_message(defs: &[&SectionDef], questions: &[(String, String)], sources: &str, rewrite: Option<&str>, instruction: Option<&str>) -> String {
+fn user_message(
+    defs: &[&SectionDef],
+    questions: &[(String, String)],
+    sources: &str,
+    rewrite: Option<&str>,
+    instruction: Option<&str>,
+    blocks: &[(String, String)],
+) -> String {
     let mut m = String::from("Abschnitte (Schlüssel: Überschrift):\n");
     for d in defs {
         let heading = d.heading.trim();
@@ -231,6 +246,12 @@ fn user_message(defs: &[&SectionDef], questions: &[(String, String)], sources: &
         m.push_str("Keine weiteren Quellen.\n");
     } else {
         m.push_str(sources);
+    }
+    if !blocks.is_empty() {
+        m.push_str("\nTextbausteine der Therapeutin (bevorzugte Formulierungen, keine Fakten):\n");
+        for (i, (title, text)) in blocks.iter().enumerate() {
+            m.push_str(&format!("[T{}] ({}) {}\n", i + 1, title.trim(), text.trim()));
+        }
     }
     m
 }
@@ -266,12 +287,18 @@ pub fn prepare(template: &Template, frame: &Frame, req: &Request, patient: &Pati
     }
     let questions: Vec<(String, String)> = req.questions.iter().map(|(k, q)| (k.clone(), draft::patient_as_pat(q, patient))).collect();
     let rewrite_text = rewrite.map(|t| draft::patient_as_pat(t, patient));
+    let blocks: Vec<(String, String)> = req
+        .blocks
+        .iter()
+        .filter(|(_, t)| !t.trim().is_empty())
+        .map(|(title, t)| (draft::patient_as_pat(title, patient), draft::patient_as_pat(t, patient)))
+        .collect();
 
     let mut p = Pseudonymizer::new(dict);
     let system_raw = system_prompt(template, frame, rewrite.is_some());
     let prompt_hash = sha256(&format!("{PROMPT_VERSION}\n{system_raw}"));
     let system = p.pseudonymize(&system_raw)?;
-    let user = p.pseudonymize(&user_message(&defs, &questions, &sources, rewrite_text.as_deref(), instruction.as_deref()))?;
+    let user = p.pseudonymize(&user_message(&defs, &questions, &sources, rewrite_text.as_deref(), instruction.as_deref(), &blocks))?;
     let mut h = Sha256::new();
     h.update(system.get());
     h.update([0]);
@@ -291,7 +318,7 @@ pub fn prepare(template: &Template, frame: &Frame, req: &Request, patient: &Pati
 
 // Source markers some models write into the text anyway ("… Arbeit [F1].", "(A2, F3)").
 static MARKER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s*[\[(](?:[FAVIB]\s?\d*)(?:\s*[,;]\s*[FAVIB]\s?\d*)*[\])]").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"\s*[\[(](?:[FAVIBT]\s?\d*)(?:\s*[,;]\s*[FAVIBT]\s?\d*)*[\])]").expect("valid regex"));
 static DANGLING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s*[,;]+(\s*[.!?]|\s*$)").expect("valid regex"));
 
 /// Checks the answer: one result per section that got sentences, in template order. Fails only
@@ -350,6 +377,7 @@ pub fn parse(answer: &str, prepared: &Prepared, facts: &[InputFact]) -> Result<V
 }
 
 /// The valid fact indices a sentence cites, and whether it cites her own statement ([I], [B]).
+/// A Textbaustein ([T n]) is wording only: citing it neither backs a sentence nor is stored.
 fn citations(sources: &[Value], prepared: &Prepared) -> (Vec<usize>, bool) {
     let (mut cited, mut own) = (Vec::new(), false);
     for v in sources {
@@ -588,7 +616,7 @@ mod tests {
         let k = keys(&t);
         let f = facts(&k);
         let q = vec![(k[1].clone(), "Depressionen (Art, Häufigkeit und Dauer) bei Frau Beispiel".to_string())];
-        let req = Request { keys: &k, facts: &f, questions: &q, rewrite: None, instruction: Some("knapp, Frau Beispiel siezen") };
+        let req = Request { keys: &k, facts: &f, questions: &q, rewrite: None, instruction: Some("knapp, Frau Beispiel siezen"), blocks: &[] };
         let p = prepare(&t, &frame(), &req, &patient(), dict()).unwrap();
         let msg = p.user.get();
         for secret in ["Anna", "Beispiel", "Jonas", "12.03.2026", "1985"] {
@@ -607,7 +635,7 @@ mod tests {
     fn prepare_needs_material_or_an_instruction() {
         let t = template();
         let k = keys(&t);
-        let none = Request { keys: &k, facts: &[], questions: &[], rewrite: None, instruction: None };
+        let none = Request { keys: &k, facts: &[], questions: &[], rewrite: None, instruction: None, blocks: &[] };
         assert!(prepare(&t, &frame(), &none, &patient(), dict()).is_err());
         let told = Request { instruction: Some("Bitte um Verlängerung der Frist um vier Wochen"), ..none };
         assert!(prepare(&t, &frame(), &told, &patient(), dict()).is_ok());
@@ -615,7 +643,7 @@ mod tests {
         let no_keys = Request { keys: &nothing, ..told };
         assert!(prepare(&t, &frame(), &no_keys, &patient(), dict()).is_err());
         let one = vec![k[0].clone()];
-        let rewrite = Request { keys: &one, facts: &[], questions: &[], rewrite: Some("Alter Text."), instruction: None };
+        let rewrite = Request { keys: &one, facts: &[], questions: &[], rewrite: Some("Alter Text."), instruction: None, blocks: &[] };
         assert!(prepare(&t, &frame(), &rewrite, &patient(), dict()).is_err(), "a re-write needs an instruction");
         let rewrite = Request { instruction: Some("kürzer"), ..rewrite };
         let p = prepare(&t, &frame(), &rewrite, &patient(), dict()).unwrap();
@@ -629,7 +657,7 @@ mod tests {
         let t = template();
         let k = keys(&t);
         let f = facts(&k);
-        let req = Request { keys: &k, facts: &f, questions: &[], rewrite: None, instruction: Some("Behandlung wöchentlich erwähnen") };
+        let req = Request { keys: &k, facts: &f, questions: &[], rewrite: None, instruction: Some("Behandlung wöchentlich erwähnen"), blocks: &[] };
         let p = prepare(&t, &frame(), &req, &patient(), dict()).unwrap();
         let date = p.map.entries().iter().find(|e| e.token.starts_with("[DATUM")).unwrap().token.clone();
         let person = p.map.entries().iter().find(|e| e.token.starts_with("[PERSON")).unwrap().token.clone();
@@ -663,6 +691,34 @@ mod tests {
         assert_eq!(r[0].parsed.unsupported, vec![2, 3, 5], "prognosis not in F1, nothing cited, unknown source");
         assert_eq!(r[0].parsed.dropped, 3, "named person, ICD code, stray section");
         assert!(parse("kein json", &p, &f).is_err());
+    }
+
+    #[test]
+    fn textblocks_are_wording_not_evidence() {
+        let t = template();
+        let k = keys(&t);
+        let f = facts(&k);
+        let blocks = vec![(
+            "Teufelskreis".to_string(),
+            crate::textblock::for_ai("<p>{Frau/Herr} {Nachname}: Schmerzen und Stimmung verstärken sich gegenseitig.</p>", Some(Gender::W)),
+        )];
+        let req = Request { keys: &k, facts: &f, questions: &[], rewrite: None, instruction: None, blocks: &blocks };
+        let p = prepare(&t, &frame(), &req, &patient(), dict()).unwrap();
+        let msg = p.user.get();
+        assert!(msg.contains("[T1] (Teufelskreis) Pat.: Schmerzen und Stimmung"), "{msg}");
+        assert!(!msg.contains("Beispiel"));
+        assert!(p.system.get().contains("er allein belegt keinen Satz"));
+        let a = k[0].clone();
+        let answer = format!(
+            r#"{{"sections": [{{"key": "{a}", "sentences": [
+                {{"text": "Schmerzen und Stimmung verstärken sich gegenseitig [T1].", "sources": ["T1"]}},
+                {{"text": "Die Patientin schläft kaum, Schmerzen und Stimmung verstärken sich.", "sources": ["F1", "T1"]}}
+            ]}}]}}"#
+        );
+        let r = parse(&answer, &p, &f).unwrap();
+        assert_eq!(r[0].parsed.sentences[0].text, "Schmerzen und Stimmung verstärken sich gegenseitig.");
+        assert_eq!(r[0].parsed.unsupported, vec![0], "a block alone backs nothing");
+        assert_eq!(r[0].parsed.sentences[1].facts, vec![0], "T is not stored as a source");
     }
 
     #[test]

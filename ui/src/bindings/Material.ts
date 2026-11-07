@@ -15,4 +15,8 @@ answers: boolean,
 /**
  * The last signed Bericht or letter of the Behandlungsfall.
  */
-prior: boolean, };
+prior: boolean, 
+/**
+ * Her Textbausteine for the letter type, as preferred wording (slice 48).
+ */
+textblocks: boolean, };

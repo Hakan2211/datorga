@@ -23,6 +23,7 @@ mod calendar;
 mod contingent;
 mod focus;
 mod letters;
+mod textblocks;
 mod review;
 mod speakers;
 mod spend;
@@ -113,6 +114,7 @@ impl Store {
         let store = Self { conn };
         store.migrate()?;
         store.seed_builtin_templates()?;
+        store.seed_builtin_textblocks()?;
         store.migrate_practice_header()?;
         store.sync_review_statuses()?;
         store.purge_expired_trash()?;

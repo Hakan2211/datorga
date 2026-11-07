@@ -100,6 +100,8 @@ import type { Practice } from '@/bindings/Practice'
 import type { PracticeAsset } from '@/bindings/PracticeAsset'
 import type { Recipient } from '@/bindings/Recipient'
 import type { RecipientInput } from '@/bindings/RecipientInput'
+import type { TextBlock } from '@/bindings/TextBlock'
+import type { TextBlockInput } from '@/bindings/TextBlockInput'
 import type { SentVia } from '@/bindings/SentVia'
 
 export type InitResult = {
@@ -249,7 +251,7 @@ export type PriorInfo = { report_id: string; kind: ApplicationKind | null; seq: 
 /** `since`: when the previous application was created (sessions after it are the default choice). */
 export type DraftSources = { facts: EpisodeFact[]; since: string | null; answers: number; prior: PriorInfo | null }
 /** The material rail of a letter: what is ticked, and how much there is. */
-export type LetterSources = { material: Material; facts: number; answers: number; prior: PriorInfo | null; deadline: string | null }
+export type LetterSources = { material: Material; facts: number; answers: number; prior: PriorInfo | null; deadline: string | null; textblocks: number }
 /** The Gutachter-Check of step 4 (`stale`: the text changed since; `sections`: what a check would read now). */
 export type ReviewView = { review: ReportReview | null; stale: boolean; sections: number }
 /** One question of the Lotse "Fragen" step (slice 38). */
@@ -616,6 +618,13 @@ export const api = {
   linkRecipient: (patientId: string, recipientId: string, role: string | null) =>
     invoke<void>('recipient_link', { patientId, recipientId, role }),
   unlinkRecipient: (patientId: string, recipientId: string) => invoke<void>('recipient_unlink', { patientId, recipientId }),
+  textblocks: (templateKey: string | null = null, query = '') => invoke<TextBlock[]>('textblocks_list', { templateKey, query }),
+  createTextblock: (input: TextBlockInput) => invoke<TextBlock>('textblock_create', { input }),
+  updateTextblock: (id: string, input: TextBlockInput) => invoke<TextBlock>('textblock_update', { id, input }),
+  deleteTextblock: (id: string) => invoke<void>('textblock_delete', { id }),
+  restoreTextblocks: () => invoke<number>('textblocks_restore'),
+  /** The block's HTML for this letter, placeholders filled from the patient (counts the use). */
+  insertTextblock: (id: string, reportId: string) => invoke<string>('textblock_insert', { id, reportId }),
   practice: () => invoke<Practice>('practice_get'),
   setPractice: (practice: Practice) => invoke<Practice>('practice_set', { practice }),
   practiceAsset: (kind: PracticeAsset) => invoke<string | null>('practice_asset_get', { kind }),
@@ -756,6 +765,8 @@ export const q = {
   letters: (patientId?: string) =>
     queryOptions({ queryKey: ['letters', patientId ?? 'all'], queryFn: () => api.letters(patientId) }),
   recipients: (query = '') => queryOptions({ queryKey: ['recipients', query], queryFn: () => api.recipients(query) }),
+  textblocks: (templateKey: string | null = null) =>
+    queryOptions({ queryKey: ['textblocks', templateKey ?? 'all'], queryFn: () => api.textblocks(templateKey) }),
   patientRecipients: (patientId: string) =>
     queryOptions({ queryKey: ['recipients', 'patient', patientId], queryFn: () => api.patientRecipients(patientId) }),
   practice: () => queryOptions({ queryKey: ['practice'], queryFn: api.practice }),

@@ -1,6 +1,6 @@
 import { Extension, Mark, Node, getHTMLFromFragment, mergeAttributes, type Editor, type Extensions } from '@tiptap/core'
 import type { Node as PMNode, ResolvedPos, Schema } from '@tiptap/pm/model'
-import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state'
+import { Plugin, PluginKey, TextSelection, type EditorState } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import StarterKit from '@tiptap/starter-kit'
 import { Placeholder } from '@tiptap/extension-placeholder'
@@ -259,4 +259,59 @@ export function sectionPos(doc: PMNode, key: string): { from: number; to: number
     if (node.type.name === 'reportSection' && node.attrs.key === key) found = { from: offset + 1, to: offset + node.nodeSize - 1 }
   })
   return found
+}
+
+// ---------- letters: Textbausteine via "/" (slice 48) ----------
+
+/** What follows a "/" typed at a word start, up to the cursor: the Textbaustein search. */
+export interface SlashQuery {
+  /** Position of the "/". */
+  from: number
+  /** The cursor. */
+  to: number
+  query: string
+}
+
+const SLASH = /(?:^|\s)\/([^/\n]{0,40})$/u
+
+/** The open "/" search at the cursor, if any ("/" after a space or at a paragraph start). */
+export function slashQuery(state: EditorState): SlashQuery | null {
+  const { selection } = state
+  if (!selection.empty) return null
+  const $pos = selection.$from
+  if (!$pos.parent.isTextblock) return null
+  const before = $pos.parent.textBetween(0, $pos.parentOffset, '\n', '￼')
+  const m = SLASH.exec(before)
+  if (!m || m[1].startsWith(' ')) return null
+  return { from: $pos.pos - m[1].length - 1, to: $pos.pos, query: m[1] }
+}
+
+/**
+ * Lets a menu outside the editor take arrow keys, Enter and Escape while it is open: set
+ * `editor.storage.slashKeys.onKey` to a handler that returns true when it used the key.
+ */
+export const SlashKeys = Extension.create<object, { onKey: ((e: KeyboardEvent) => boolean) | null }>({
+  name: 'slashKeys',
+  addStorage: () => ({ onKey: null }),
+  addProseMirrorPlugins() {
+    const storage = this.storage
+    return [new Plugin({ props: { handleKeyDown: (_view, event) => storage.onKey?.(event) ?? false } })]
+  },
+})
+
+/** The selection as HTML (for "Als Textbaustein speichern"); '' when nothing is selected. */
+export function selectionHtml(editor: Editor): string {
+  const { selection, schema } = editor.state
+  if (selection.empty) return ''
+  let content = selection.content().content
+  // Inside the document editor the slice starts at the section node: take what is inside it.
+  while (content.childCount === 1 && content.firstChild!.type.name === 'reportSection') content = content.firstChild!.content
+  return getHTMLFromFragment(content, schema)
+}
+
+/** Puts a Textbaustein's HTML at the cursor, replacing the "/" search when there is one. */
+export function insertBlock(editor: Editor, html: string, slash: SlashQuery | null) {
+  if (editor.isDestroyed || !editor.isEditable) return
+  const chain = editor.chain().focus()
+  ;(slash ? chain.insertContentAt({ from: slash.from, to: slash.to }, html) : chain.insertContent(html)).run()
 }

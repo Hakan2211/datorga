@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { EditorContent, NodeViewWrapper, ReactNodeViewRenderer, useEditor, type NodeViewProps } from '@tiptap/react'
-import { createNodeFromContent } from '@tiptap/core'
+import { EditorContent, NodeViewWrapper, ReactNodeViewRenderer, useEditor, type Editor, type NodeViewProps } from '@tiptap/react'
+import { createNodeFromContent, type Extensions } from '@tiptap/core'
 import type { Fragment } from '@tiptap/pm/model'
 import { useTranslation } from 'react-i18next'
 import { Pencil } from 'lucide-react'
@@ -50,6 +50,8 @@ export function ReportDocument({
   onActive,
   onEditLocked,
   dictateFor,
+  extensions,
+  toolbarExtra,
 }: {
   sections: SectionDef[]
   bodies: Record<string, string>
@@ -65,6 +67,10 @@ export function ReportDocument({
   onEditLocked: (key: string) => void
   /** Report id: offers voice mode (dictation at the cursor). */
   dictateFor?: string
+  /** More editor extensions (fixed when the editor is made). */
+  extensions?: Extensions
+  /** More toolbar tools for this editor (a letter's Textbausteine). */
+  toolbarExtra?: (editor: Editor) => ReactNode
 }) {
   const { t } = useTranslation()
   const callbacks = useRef({ onChange, onActive })
@@ -78,6 +84,7 @@ export function ReportDocument({
       ReportLocked.extend({
         addNodeView: () => ReactNodeViewRenderer(LockedSection),
       }),
+      ...(extensions ?? []),
     ],
     content: documentHtml(sections, bodies),
     editable: !readOnly,
@@ -140,7 +147,9 @@ export function ReportDocument({
           editor={editor}
           dictateFor={dictateFor}
           className="sticky top-0 z-10 mb-4 justify-center rounded-md border bg-card shadow-xs"
-        />
+        >
+          {toolbarExtra?.(editor)}
+        </EditorToolbar>
       )}
       <Locked.Provider value={{ defs, bodies, onEditLocked }}>
         <div className={cn('doc-page mx-auto', head && 'doc-letter')} style={{ zoom }} data-testid="doc-page">

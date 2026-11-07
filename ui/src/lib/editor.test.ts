@@ -2,7 +2,18 @@ import { describe, expect, it } from 'vitest'
 import { Editor, createNodeFromContent } from '@tiptap/core'
 import type { Fragment } from '@tiptap/pm/model'
 import type { SectionDef } from '@/bindings/SectionDef'
-import { ReportLocked, decideUnbacked, documentExtensions, documentHtml, sectionBodies, sectionPos, unbackedSentences } from './editor'
+import {
+  ReportLocked,
+  decideUnbacked,
+  documentExtensions,
+  documentHtml,
+  insertBlock,
+  sectionBodies,
+  sectionPos,
+  selectionHtml,
+  slashQuery,
+  unbackedSentences,
+} from './editor'
 
 const def = (key: string, field: SectionDef['field'] = 'prose') =>
   ({ key, heading: key, number: null, field, hints: [], required: true, ai_allowed: true }) as unknown as SectionDef
@@ -72,5 +83,46 @@ describe('sentences "ohne Beleg" (slice 47)', () => {
     const body = sectionBodies(editor.state.doc, editor.schema).anamnese
     expect(unbackedSentences(body)).toEqual(['Ohne Beleg.', 'Allein.'])
     editor.destroy()
+  })
+})
+
+describe('Textbausteine via "/" (slice 48)', () => {
+  const at = (ed: Editor, key: string, text: string) => {
+    const pos = sectionPos(ed.state.doc, key)!
+    ed.view.dispatch(ed.state.tr.replaceWith(pos.from, pos.to, createNodeFromContent(`<p>${text}</p>`, ed.schema) as Fragment))
+    // Cursor at the end of the paragraph.
+    ed.commands.setTextSelection(sectionPos(ed.state.doc, key)!.to - 1)
+  }
+
+  it('finds the search after a slash at a word start only', () => {
+    const ed = editorFor({ anamnese: '', plan: '' })
+    at(ed, 'plan', 'Seit /teufel')
+    expect(slashQuery(ed.state)).toMatchObject({ query: 'teufel' })
+    at(ed, 'plan', '/')
+    expect(slashQuery(ed.state)).toMatchObject({ query: '' })
+    at(ed, 'plan', 'und/oder')
+    expect(slashQuery(ed.state)).toBeNull()
+    at(ed, 'plan', 'a / b')
+    expect(slashQuery(ed.state)).toBeNull()
+  })
+
+  it('replaces the search with the block and keeps the sections', () => {
+    const ed = editorFor({ anamnese: '<p>a</p>', plan: '' })
+    at(ed, 'plan', 'Vorher /teu')
+    insertBlock(ed, '<p>Der <strong>Baustein</strong>.</p>', slashQuery(ed.state))
+    const plan = sectionBodies(ed.state.doc, ed.schema).plan
+    expect(plan).toContain('<strong>Baustein</strong>')
+    expect(plan).toContain('Vorher')
+    expect(plan).not.toContain('/teu')
+    expect(sectionBodies(ed.state.doc, ed.schema).anamnese).toBe('<p>a</p>')
+  })
+
+  it('gives the selection as HTML', () => {
+    const ed = editorFor({ anamnese: '<p>eins <em>zwei</em></p>', plan: '' })
+    const pos = sectionPos(ed.state.doc, 'anamnese')!
+    ed.commands.setTextSelection({ from: pos.from + 1, to: pos.to - 1 })
+    expect(selectionHtml(ed)).toBe('<p>eins <em>zwei</em></p>')
+    ed.commands.setTextSelection(pos.from + 1)
+    expect(selectionHtml(ed)).toBe('')
   })
 })

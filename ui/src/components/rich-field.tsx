@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { EditorContent, useEditor } from '@tiptap/react'
+import { EditorContent, useEditor, type Editor } from '@tiptap/react'
 import { EditorToolbar } from '@/components/editor-toolbar'
 import { richExtensions } from '@/lib/editor'
 import { cn } from '@/lib/utils'
@@ -11,6 +11,7 @@ export function RichField({
   placeholder,
   readOnly,
   dictateFor,
+  onEditor,
 }: {
   value: string
   onChange: (html: string) => void
@@ -18,6 +19,8 @@ export function RichField({
   readOnly?: boolean
   /** Report id: offers voice mode (dictation into this field). */
   dictateFor?: string
+  /** The editor once made (to insert from outside, e.g. placeholder chips). */
+  onEditor?: (editor: Editor) => void
 }) {
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
@@ -30,6 +33,11 @@ export function RichField({
     editorProps: { attributes: { spellcheck: 'true', lang: 'de' } },
     onUpdate: ({ editor }) => onChangeRef.current(editor.isEmpty ? '' : editor.getHTML()),
   })
+
+  useEffect(() => {
+    if (editor) onEditor?.(editor)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor])
 
   // No update event: it would save the (unchanged) text into a report that was just signed.
   useEffect(() => {

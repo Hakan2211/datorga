@@ -82,7 +82,9 @@ export function LetterAiCard({
       hint: s?.prior ? t('letterAi.priorFrom', { date: formatDate(s.prior.signed_at) }) : undefined,
     },
   ]
+  // Textbausteine are wording, not material: alone they don't make a letter.
   const nothing = rows.every((r) => !material[r.key] || r.count === 0) && !instruction.trim()
+  rows.push({ key: 'textblocks', label: t('letterAi.textblocks'), count: s?.textblocks ?? 0, hint: t('letterAi.textblocksHint') })
 
   return (
     <SectionCard

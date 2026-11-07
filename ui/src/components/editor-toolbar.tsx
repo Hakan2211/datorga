@@ -29,7 +29,18 @@ const ALIGNMENTS = [
  * Formatting for both editors; offers only what the PDF/DOCX export can show. With `dictateFor`
  * (the report id) it also offers voice mode.
  */
-export function EditorToolbar({ editor, className, dictateFor }: { editor: Editor; className?: string; dictateFor?: string }) {
+export function EditorToolbar({
+  editor,
+  className,
+  dictateFor,
+  children,
+}: {
+  editor: Editor
+  className?: string
+  dictateFor?: string
+  /** More tools at the end (a letter's Textbausteine). */
+  children?: React.ReactNode
+}) {
   const { t } = useTranslation()
   const s = useEditorState({
     editor,
@@ -94,6 +105,12 @@ export function EditorToolbar({ editor, className, dictateFor }: { editor: Edito
         </ToolButton>
       ))}
       {dictateFor && <DictationButton editor={editor} reportId={dictateFor} />}
+      {children && (
+        <>
+          <Divider />
+          {children}
+        </>
+      )}
     </div>
   )
 }

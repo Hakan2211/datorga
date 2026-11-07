@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import type { LetterSummary } from '@/bindings/LetterSummary'
 import type { Template } from '@/bindings/Template'
-import { EMPTY_PRACTICE, germanDay, letterTemplates, linesFromText, matchesLetter, placeDate, practiceLine } from './letters'
+import {
+  EMPTY_PRACTICE,
+  blockSnippet,
+  germanDay,
+  letterTemplates,
+  linesFromText,
+  matchesLetter,
+  orderBlocks,
+  placeDate,
+  practiceLine,
+  toPlaceholders,
+} from './letters'
 
 const tpl = (key: string, title: string, layout: 'letter' | 'bericht', recipients: Template['recipients'] = []): Template => ({
   key,
@@ -75,5 +86,30 @@ describe('letters', () => {
     expect(germanDay('2026-11-07')).toBe('07.11.2026')
     expect(placeDate('Freiburg', '2026-11-07T08:00:00Z')).toBe('Freiburg, den 07.11.2026')
     expect(placeDate(' ', '2026-11-07')).toBe('07.11.2026')
+  })
+})
+
+describe('Textbausteine (slice 48)', () => {
+  const b = (id: string, keys: string[], section: string | null, uses: number) => ({ id, template_keys: keys, section_key: section, use_count: uses })
+  it('orders blocks for the section first, most used first, and keeps other types out', () => {
+    const all = [b('all', [], null, 3), b('drv', ['drv-befund'], null, 9), b('sec', ['drv-befund'], 'befund', 1), b('pflege', ['pflege-stellungnahme'], null, 99)]
+    const o = orderBlocks(all, 'drv-befund', 'befund')
+    expect(o.section.map((x) => x.id)).toEqual(['sec'])
+    expect(o.rest.map((x) => x.id)).toEqual(['drv', 'all'])
+    expect(orderBlocks(all, 'drv-befund', null).rest.map((x) => x.id)).toEqual(['drv', 'all', 'sec'])
+  })
+  it('shortens the text of a block', () => {
+    expect(blockSnippet('<p>Eins</p><ul><li><p>zwei &amp; drei</p></li></ul>')).toBe('Eins zwei & drei')
+    expect(blockSnippet(`<p>${'a'.repeat(200)}</p>`, 10)).toBe('aaaaaaaaa…')
+  })
+})
+
+describe('saving letter text as a Textbaustein', () => {
+  const lena = { first_name: 'Lena', last_name: 'Sommer', birth_date: '1996-03-14' }
+  it('turns the name and birth date back into placeholders', () => {
+    const r = toPlaceholders('<p>Frau Lena Sommer, geb. 14.03.1996, schläft schlecht. Lena Sommer kommt. Frau Sommer auch, Sommerzeit nicht.</p>', lena)
+    expect(r.html).toBe('<p>{Frau/Herr} {Nachname}, geb. {Geburtsdatum}, schläft schlecht. {Name} kommt. {Frau/Herr} {Nachname} auch, Sommerzeit nicht.</p>')
+    expect(r.replaced).toBe(true)
+    expect(toPlaceholders('<p>Ohne Namen.</p>', lena)).toEqual({ html: '<p>Ohne Namen.</p>', replaced: false })
   })
 })

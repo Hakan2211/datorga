@@ -37,6 +37,7 @@ use thera_core::store::{
 };
 use thera_core::summary;
 use thera_core::stt::{self, CloudStt, CloudSttModel, SttConfig, SttEngine, WhisperCli};
+use thera_core::textblock;
 use thera_core::templates::{Context, Template};
 use thera_core::tts::{self, TtsConfig};
 use thera_core::context;
@@ -1885,6 +1886,39 @@ fn patient_recipients(state: State<'_, AppState>, patient_id: String) -> CmdResu
 #[tauri::command]
 fn recipient_link(state: State<'_, AppState>, patient_id: String, recipient_id: String, role: Option<String>) -> CmdResult<()> {
     state.with(|s| s.link_recipient(&patient_id, &recipient_id, role.as_deref()))
+}
+
+// ---------- Textbausteine (slice 48) ----------
+
+#[tauri::command]
+fn textblocks_list(state: State<'_, AppState>, template_key: Option<String>, query: Option<String>) -> CmdResult<Vec<textblock::TextBlock>> {
+    state.with(|s| s.list_textblocks(template_key.as_deref(), query.as_deref()))
+}
+
+#[tauri::command]
+fn textblock_create(state: State<'_, AppState>, input: textblock::TextBlockInput) -> CmdResult<textblock::TextBlock> {
+    state.with(|s| s.create_textblock(input))
+}
+
+#[tauri::command]
+fn textblock_update(state: State<'_, AppState>, id: String, input: textblock::TextBlockInput) -> CmdResult<textblock::TextBlock> {
+    state.with(|s| s.update_textblock(&id, input))
+}
+
+#[tauri::command]
+fn textblock_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.with(|s| s.delete_textblock(&id))
+}
+
+#[tauri::command]
+fn textblocks_restore(state: State<'_, AppState>) -> CmdResult<usize> {
+    state.with(|s| s.restore_builtin_textblocks())
+}
+
+/// The block's HTML for this letter with the placeholders filled (counts the use).
+#[tauri::command]
+fn textblock_insert(state: State<'_, AppState>, id: String, report_id: String) -> CmdResult<String> {
+    state.with(|s| s.insert_textblock(&id, &report_id))
 }
 
 #[tauri::command]
@@ -3936,7 +3970,23 @@ fn prepare_letter(
     };
     let questions: Vec<(String, String)> = l.questions.iter().filter_map(|q| q.section_key.clone().map(|k| (k, q.text.clone()))).collect();
     let dict = s.pseudo_dictionary(&view.patient.id)?;
-    let req = compose::Request { keys: &keys, facts: &input, questions: &questions, rewrite: rewrite.as_deref(), instruction: choice.instruction.as_deref() };
+    let blocks: Vec<(String, String)> = if l.material.textblocks {
+        let all = s.textblocks_for(&view.template.key)?;
+        textblock::for_request(&all, &view.template.key, &keys)
+            .into_iter()
+            .map(|b| (b.title.clone(), textblock::for_ai(&b.body, view.patient.gender)))
+            .collect()
+    } else {
+        vec![]
+    };
+    let req = compose::Request {
+        keys: &keys,
+        facts: &input,
+        questions: &questions,
+        rewrite: rewrite.as_deref(),
+        instruction: choice.instruction.as_deref(),
+        blocks: &blocks,
+    };
     let prepared = compose::prepare(&view.template, &frame, &req, &view.patient, dict)?;
     Ok((prepared, facts, answers, priors, input))
 }
@@ -3961,6 +4011,8 @@ struct LetterSources {
     prior: Option<PriorInfo>,
     /// The deadline the request names ("bis zum …"), read locally.
     deadline: Option<String>,
+    /// Textbausteine that fit the letter type.
+    textblocks: usize,
 }
 
 #[tauri::command]
@@ -3968,13 +4020,14 @@ fn letter_sources(state: State<'_, AppState>, id: String) -> CmdResult<LetterSou
     state.with(|s| {
         let view = report_view(s, &id)?;
         let l = s.letter(&id)?;
-        let all = letter::Material { facts: true, answers: true, prior: true };
+        let all = letter::Material { facts: true, answers: true, prior: true, textblocks: true };
         let (facts, answers, priors, _) = letter_material(s, &view, all)?;
         let prior = match s.letter_prior(&id)? {
             Some(p) => Some(PriorInfo { report_id: p.id, kind: None, seq: None, signed_at: p.signed_at, sections: priors.len() }),
             None => None,
         };
-        Ok(LetterSources { material: l.material, facts: facts.len(), answers: answers.len(), prior, deadline: compose::deadline(&l.request_text) })
+        let textblocks = s.textblocks_for(&view.template.key)?.len();
+        Ok(LetterSources { material: l.material, facts: facts.len(), answers: answers.len(), prior, deadline: compose::deadline(&l.request_text), textblocks })
     })
 }
 
@@ -4889,6 +4942,12 @@ pub fn run() {
             letter_sign,
             letter_mark_sent,
             recipients_list,
+            textblocks_list,
+            textblock_create,
+            textblock_update,
+            textblock_delete,
+            textblocks_restore,
+            textblock_insert,
             recipient_create,
             recipient_update,
             recipient_delete,

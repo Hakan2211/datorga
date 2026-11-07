@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { BookUser, Mail, Plus, Search } from 'lucide-react'
+import { BookUser, Mail, Plus, Search, TextQuote } from 'lucide-react'
 import { Page, PageHeader } from '@/components/app-shell'
 import { EmptyState, FilterChip, formatDate } from '@/components/bits'
 import { LetterStatePill } from '@/components/briefe/letter-state'
@@ -48,6 +48,11 @@ function Briefe() {
             <Button asChild variant="outline">
               <Link to="/briefe/empfaenger">
                 <BookUser /> {t('briefe.addressBook')}
+              </Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link to="/briefe/textbausteine" data-testid="textblocks-link">
+                <TextQuote /> {t('briefe.textblocks')}
               </Link>
             </Button>
             <NewLetterDialog
