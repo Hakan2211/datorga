@@ -88,7 +88,8 @@ export function LetterAiCard({
   const nothing = rows.every((r) => !material[r.key] || r.count === 0) && !instruction.trim()
   rows.push({ key: 'textblocks', label: t('letterAi.textblocks'), count: s?.textblocks ?? 0, hint: t('letterAi.textblocksHint') })
   // Style exemplars too; offered once she has one for this type (Vorlagen → Ihr Schreibstil).
-  if (s?.style) rows.push({ key: 'style', label: t('letterAi.style'), count: s.style, hint: t('letterAi.styleHint') })
+  if (s?.style || s?.profile)
+    rows.push({ key: 'style', label: s.style ? t('letterAi.style') : t('letterAi.styleProfile'), count: s.style || 1, hint: t('letterAi.styleHint') })
 
   return (
     <SectionCard

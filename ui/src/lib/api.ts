@@ -104,6 +104,7 @@ import type { TextBlock } from '@/bindings/TextBlock'
 import type { TextBlockInput } from '@/bindings/TextBlockInput'
 import type { Imported } from '@/bindings/Imported'
 import type { StyleExemplar } from '@/bindings/StyleExemplar'
+import type { ProfileView } from '@/bindings/ProfileView'
 import type { StyleExemplarInput } from '@/bindings/StyleExemplarInput'
 import type { StyleReview } from '@/bindings/StyleReview'
 import type { SentVia } from '@/bindings/SentVia'
@@ -255,9 +256,9 @@ export type DraftPreview = ExtractPreview & { skipped: string[]; untagged: numbe
 /** The last signed Bericht of the case, which drafts see too (`sections`: those with text they draw on). */
 export type PriorInfo = { report_id: string; kind: ApplicationKind | null; seq: number | null; signed_at: string | null; sections: number }
 /** `since`: when the previous application was created (sessions after it are the default choice). */
-export type DraftSources = { facts: EpisodeFact[]; since: string | null; answers: number; prior: PriorInfo | null; style: number }
+export type DraftSources = { facts: EpisodeFact[]; since: string | null; answers: number; prior: PriorInfo | null; style: number; profile: boolean }
 /** The material rail of a letter: what is ticked, and how much there is. */
-export type LetterSources = { material: Material; facts: number; answers: number; prior: PriorInfo | null; deadline: string | null; textblocks: number; style: number }
+export type LetterSources = { material: Material; facts: number; answers: number; prior: PriorInfo | null; deadline: string | null; textblocks: number; style: number; profile: boolean }
 /** A signed Bericht or letter offered as a style exemplar. */
 export type StyleSource = { template_key: string; title: string; text: string }
 /** The Gutachter-Check of step 4 (`stale`: the text changed since; `sections`: what a check would read now). */
@@ -641,6 +642,9 @@ export const api = {
   createStyleExemplar: (input: StyleExemplarInput) => invoke<StyleExemplar>('style_create', { input }),
   updateStyleExemplar: (id: string, input: StyleExemplarInput, active: boolean) => invoke<StyleExemplar>('style_update', { id, input, active }),
   deleteStyleExemplar: (id: string) => invoke<void>('style_delete', { id }),
+  /** Stilprofil per type (computed + her notes), and her notes for all types (`*`). */
+  styleProfiles: () => invoke<ProfileView[]>('style_profiles'),
+  setStyleNotes: (templateKey: string, notes: string) => invoke<void>('style_notes_set', { templateKey, notes }),
   /** Her own templates (slice 51): outline from her redacted form, copy of a built-in letter. */
   templateOutline: (text: string, title: string) => invoke<Template>('template_outline', { text, title }),
   templateCopy: (key: string) => invoke<Template>('template_copy', { key }),
@@ -795,6 +799,7 @@ export const q = {
     queryOptions({ queryKey: ['letters', patientId ?? 'all'], queryFn: () => api.letters(patientId) }),
   recipients: (query = '') => queryOptions({ queryKey: ['recipients', query], queryFn: () => api.recipients(query) }),
   styleExemplars: () => queryOptions({ queryKey: ['style'], queryFn: api.styleExemplars }),
+  styleProfiles: () => queryOptions({ queryKey: ['style', 'profiles'], queryFn: api.styleProfiles }),
   textblocks: (templateKey: string | null = null) =>
     queryOptions({ queryKey: ['textblocks', templateKey ?? 'all'], queryFn: () => api.textblocks(templateKey) }),
   patientRecipients: (patientId: string) =>

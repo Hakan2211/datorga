@@ -1985,6 +1985,17 @@ fn style_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
     state.with(|s| s.delete_style_exemplar(&id))
 }
 
+/// Her Stilprofil per type (computed from the exemplars, her notes) and her notes for all.
+#[tauri::command]
+fn style_profiles(state: State<'_, AppState>) -> CmdResult<Vec<thera_core::style_profile::ProfileView>> {
+    state.with(|s| s.style_profiles())
+}
+
+#[tauri::command]
+fn style_notes_set(state: State<'_, AppState>, template_key: String, notes: String) -> CmdResult<()> {
+    state.with(|s| s.set_style_notes(&template_key, &notes))
+}
+
 // ---------- her own templates (slice 51) ----------
 
 /// The outline the app reads from her (redacted) form or letter: a draft for the editor.
@@ -3127,7 +3138,7 @@ fn prepare_draft(
     let dict = s.pseudo_dictionary(&view.patient.id)?;
     // Sections marked "nicht relevant" are not drafted.
     let keys: Vec<String> = choice.sections.iter().filter(|k| !not_relevant(&view, k)).cloned().collect();
-    let style = if choice.without_style { vec![] } else { s.style_for(&view.template.key)? };
+    let style = if choice.without_style { Default::default() } else { s.style_material(&view.template, true)? };
     let req = draft::Request {
         keys: &keys,
         facts: &input,
@@ -3173,8 +3184,10 @@ struct DraftSources {
     answers: usize,
     /// The Vorbericht drafts see, with the sections they draw on.
     prior: Option<PriorInfo>,
-    /// Her active style exemplars of the type that go along (at most two).
+    /// Her active style exemplars of the type.
     style: usize,
+    /// A Stilprofil goes along (computed from exemplars, or her notes).
+    profile: bool,
 }
 
 #[derive(Serialize)]
@@ -3192,7 +3205,7 @@ struct PriorInfo {
 fn draft_sources(state: State<'_, AppState>, report_id: String) -> CmdResult<DraftSources> {
     state.with(|s| {
         let view = report_view(s, &report_id)?;
-        let Some(ep) = &view.report.episode_id else { return Ok(DraftSources { facts: vec![], since: None, answers: 0, prior: None, style: 0 }) };
+        let Some(ep) = &view.report.episode_id else { return Ok(DraftSources { facts: vec![], since: None, answers: 0, prior: None, style: 0, profile: false }) };
         let since = previous_application_at(s, &view.report)?;
         let prior = match s.prior_report(&report_id)? {
             Some(p) => {
@@ -3207,7 +3220,15 @@ fn draft_sources(state: State<'_, AppState>, report_id: String) -> CmdResult<Dra
             }
             None => None,
         };
-        Ok(DraftSources { facts: s.episode_facts(ep)?, since, answers: current_answers(s, &view)?.len(), prior, style: s.style_for(&view.template.key)?.len() })
+        let style = s.style_material(&view.template, true)?;
+        Ok(DraftSources {
+            facts: s.episode_facts(ep)?,
+            since,
+            answers: current_answers(s, &view)?.len(),
+            prior,
+            style: style.exemplars,
+            profile: !style.profile.is_empty(),
+        })
     })
 }
 
@@ -4195,7 +4216,7 @@ fn prepare_letter(
     } else {
         vec![]
     };
-    let style = if l.material.style { s.style_for(&view.template.key)? } else { vec![] };
+    let style = if l.material.style { s.style_material(&view.template, false)? } else { Default::default() };
     let req = compose::Request {
         keys: &keys,
         facts: &input,
@@ -4231,8 +4252,10 @@ struct LetterSources {
     deadline: Option<String>,
     /// Textbausteine that fit the letter type.
     textblocks: usize,
-    /// Her active style exemplars of the letter type that go along (at most two).
+    /// Her active style exemplars of the letter type.
     style: usize,
+    /// A Stilprofil goes along (computed from exemplars, or her notes).
+    profile: bool,
 }
 
 #[tauri::command]
@@ -4247,8 +4270,17 @@ fn letter_sources(state: State<'_, AppState>, id: String) -> CmdResult<LetterSou
             None => None,
         };
         let textblocks = s.textblocks_for(&view.template.key)?.len();
-        let style = s.style_for(&view.template.key)?.len();
-        Ok(LetterSources { material: l.material, facts: facts.len(), answers: answers.len(), prior, deadline: compose::deadline(&l.request_text), textblocks, style })
+        let style = s.style_material(&view.template, false)?;
+        Ok(LetterSources {
+            material: l.material,
+            facts: facts.len(),
+            answers: answers.len(),
+            prior,
+            deadline: compose::deadline(&l.request_text),
+            textblocks,
+            style: style.exemplars,
+            profile: !style.profile.is_empty(),
+        })
     })
 }
 
@@ -5173,6 +5205,8 @@ pub fn run() {
             style_create,
             style_update,
             style_delete,
+            style_profiles,
+            style_notes_set,
             template_outline,
             template_copy,
             template_check,

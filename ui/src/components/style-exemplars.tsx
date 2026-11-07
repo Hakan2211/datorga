@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { ClipboardPaste, EyeOff, Feather, Pencil, Plus } from 'lucide-react'
+import { ClipboardPaste, EyeOff, Feather, NotebookPen, Pencil, Plus } from 'lucide-react'
 import type { EntityKind } from '@/bindings/EntityKind'
 import type { StyleExemplar } from '@/bindings/StyleExemplar'
 import type { StyleReview } from '@/bindings/StyleReview'
@@ -15,6 +15,7 @@ import type { Template } from '@/bindings/Template'
 import { SectionCard, formatDate } from '@/components/bits'
 import { DeleteButton } from '@/components/delete-button'
 import { DocumentButton } from '@/components/document-button'
+import { ProfileLine, StyleNotesDialog } from '@/components/style-profile'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
@@ -25,6 +26,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { api, errorMessage, q } from '@/lib/api'
 import { placeholderCount, reviewParts, styleTypes, toggleKeep } from '@/lib/documents'
+import { ALL_TYPES, mappedLabel } from '@/lib/style-profile'
 import { cn } from '@/lib/utils'
 
 type Step = 'text' | 'redact' | 'save'
@@ -361,8 +363,11 @@ export function StyleExemplarsCard() {
   const qc = useQueryClient()
   const list = useQuery(q.styleExemplars())
   const templates = useQuery(q.templates())
+  const profiles = useQuery(q.styleProfiles())
+  const profile = (key: string) => profiles.data?.find((p) => p.template_key === key)
   const title = (key: string) => templates.data?.find((x) => x.key === key)?.title ?? key
   const [adding, setAdding] = useState(false)
+  const [notesFor, setNotesFor] = useState<string | null>(null)
   const [editing, setEditing] = useState<StyleExemplar | null>(null)
   const toggle = useMutation({
     mutationFn: (e: StyleExemplar) =>
@@ -375,13 +380,15 @@ export function StyleExemplarsCard() {
     onError: (e) => toast.error(errorMessage(e)),
   })
 
-  // Grouped by type, in the order of the type list.
+  // Grouped by type, in the order of the type list; a type with only notes shows too.
   const groups = useMemo(() => {
     const by = new Map<string, StyleExemplar[]>()
     for (const e of list.data ?? []) by.set(e.template_key, [...(by.get(e.template_key) ?? []), e])
+    for (const p of profiles.data ?? []) if (p.template_key !== ALL_TYPES && p.notes && !by.has(p.template_key)) by.set(p.template_key, [])
     const order = styleTypes(templates.data ?? []).map((x) => x.key)
     return [...by.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]))
-  }, [list.data, templates.data])
+  }, [list.data, templates.data, profiles.data])
+  const allNotes = profile(ALL_TYPES)?.notes ?? ''
 
   return (
     <SectionCard
@@ -389,9 +396,14 @@ export function StyleExemplarsCard() {
       title={t('style.title')}
       description={t('style.intro')}
       actions={
-        <Button size="sm" onClick={() => setAdding(true)} data-testid="style-add">
-          <Plus /> {t('style.add')}
-        </Button>
+        <>
+          <Button size="sm" variant="outline" onClick={() => setNotesFor(ALL_TYPES)} data-testid="style-notes-open">
+            <NotebookPen /> {t('styleProfile.button')}
+          </Button>
+          <Button size="sm" onClick={() => setAdding(true)} data-testid="style-add">
+            <Plus /> {t('style.add')}
+          </Button>
+        </>
       }
       contentClassName="space-y-4 text-sm"
     >
@@ -405,18 +417,39 @@ export function StyleExemplarsCard() {
           </div>
         </div>
       )}
+      {allNotes && (
+        <p className="flex items-center gap-2 text-[13px]" data-testid="style-notes-all">
+          <span className="min-w-0 flex-1 truncate">
+            <span className="text-muted-foreground">{t('styleProfile.allTypes')}: </span>
+            {allNotes}
+          </span>
+          <Button variant="ghost" size="sm" onClick={() => setNotesFor(ALL_TYPES)}>
+            <Pencil /> {t('style.edit')}
+          </Button>
+        </p>
+      )}
       {groups.map(([key, items]) => (
         <div key={key} className="space-y-1.5" data-testid="style-group">
-          <p className="text-xs font-medium text-muted-foreground">
-            {title(key)} · {t('style.count', { count: items.length })}
-          </p>
-          <ul className="divide-y rounded-md border">
+          <div className="flex items-end justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-muted-foreground">
+                {title(key)} · {t('style.count', { count: items.length })}
+              </p>
+              <ProfileLine computed={profile(key)?.computed} notes={profile(key)?.notes ?? ''} />
+            </div>
+            <Button variant="ghost" size="sm" className="h-7 shrink-0 text-xs" onClick={() => setNotesFor(key)} data-testid="style-profile-open">
+              <NotebookPen className="size-3.5" /> {t('styleProfile.open')}
+            </Button>
+          </div>
+          {items.length > 0 && <ul className="divide-y rounded-md border">
             {items.map((e) => (
               <li key={e.id} className="flex items-center gap-3 px-3 py-2" data-testid="style-item">
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-medium">{e.title}</p>
                   <p className="text-xs text-muted-foreground">
-                    {formatDate(e.created_at)} · {t('style.chars', { count: e.text.length })} · {t('style.placeholders', { count: placeholderCount(e.text) })}
+                    {[formatDate(e.created_at), t('style.chars', { count: e.text.length }), t('style.placeholders', { count: placeholderCount(e.text) }), mappedLabel(profile(key)?.mapped, e.id, t)]
+                      .filter(Boolean)
+                      .join(' · ')}
                   </p>
                 </div>
                 <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -434,12 +467,13 @@ export function StyleExemplarsCard() {
                 />
               </li>
             ))}
-          </ul>
+          </ul>}
         </div>
       ))}
       {!!list.data?.length && <p className="text-[11px] text-muted-foreground">{t('style.used')}</p>}
       <StyleExemplarDialog open={adding} onOpenChange={setAdding} />
       {editing && <StyleExemplarDialog exemplar={editing} open onOpenChange={(o) => !o && setEditing(null)} />}
+      {notesFor && <StyleNotesDialog templateKey={notesFor} onClose={() => setNotesFor(null)} />}
     </SectionCard>
   )
 }

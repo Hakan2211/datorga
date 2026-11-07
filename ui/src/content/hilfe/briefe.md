@@ -2,7 +2,7 @@
 title: Briefe & weitere Berichte
 summary: Befundberichte an Rentenversicherung, Pflegekasse, Versorgungsamt und Ärzt:innen, Bescheinigungen und freie Briefe
 order: 6
-keywords: brief, briefe, befundbericht, rentenversicherung, drv, em-rente, pflegegrad, pflegekasse, md, versorgungsamt, landratsamt, gdb, schwerbehinderung, arztbrief, hausärztin, bescheinigung, behandlungsbestätigung, briefkopf, din 5008, empfänger, adressbuch, betreff, aktenzeichen, anschreiben, scan, ocr, textbaustein, schweigepflichtentbindung, wiedervorlage, frist, versendet, empfänger-check, stilbeispiel, eigene vorlage, formular, fragebogen, vorlage anpassen
+keywords: brief, briefe, befundbericht, rentenversicherung, drv, em-rente, pflegegrad, pflegekasse, md, versorgungsamt, landratsamt, gdb, schwerbehinderung, arztbrief, hausärztin, bescheinigung, behandlungsbestätigung, briefkopf, din 5008, empfänger, adressbuch, betreff, aktenzeichen, anschreiben, scan, ocr, textbaustein, schweigepflichtentbindung, wiedervorlage, frist, versendet, empfänger-check, stilbeispiel, eigene vorlage, formular, fragebogen, vorlage anpassen, stilprofil, stilhinweise, schreibstil
 ---
 Neben den PTV-3-Berichten schreiben Sie in Theralo alle anderen Schreiben einer Praxis: **Befundberichte** an Rentenversicherung, Pflegekasse, Versorgungsamt und Ärzt:innen, **Behandlungsbestätigungen** und **freie Briefe**. Alle erscheinen unter **Briefe** in der Seitenleiste und im Verlauf der Patientin. Die Befundberichte stehen zusätzlich auf dem Board unter **Berichte**.
 
@@ -26,7 +26,7 @@ Betreff, Anrede und der erste Satz sind mit Name, Geburtsdatum und Behandlungsbe
 - Sätze, die kein Material stützt, sind **gelb markiert („ohne Beleg“)**. Behalten oder löschen Sie jeden davon; vorher lässt sich der Brief nicht unterschreiben.
 - **Fragen erkennen** liest die nummerierten Fragen des Anschreibens. **Als Abschnitte übernehmen** macht daraus Abschnitte in der Reihenfolge und mit dem Wortlaut des Amtes. Ein Häkchen zeigt, welche Frage schon beantwortet ist.
 - **Textbausteine** fügen Sie über die Werkzeugleiste oder mit `/` im Text ein. Platzhalter wie `{Nachname}` oder `{sie/er}` füllt Theralo aus der Akte. Eigene Bausteine legen Sie unter **Briefe → Textbausteine** an, oder Sie markieren Text im Brief und wählen **Als Textbaustein speichern**.
-- Eigene alte Briefe können Sie unter **Vorlagen → Ihr Schreibstil** als Stilbeispiel hochladen. Namen werden vorher geschwärzt; die KI übernimmt daraus nur den Stil, nie Inhalte.
+- Eigene alte Briefe können Sie unter **Vorlagen → Ihr Schreibstil** als Stilbeispiel hochladen. Namen werden vorher geschwärzt; die KI übernimmt daraus nur den Stil, nie Inhalte. Theralo liest daraus Ihr **Stilprofil** (Satzlänge, Ich-Form, wie Sie die Person nennen, Fließtext oder Stichpunkte, übliche Länge je Abschnitt, wiederkehrende Wendungen); unter **Stilhinweise** ergänzen Sie eigene Hinweise, für eine Art oder für alle Schreiben. Bei Berichten bekommt jeder Abschnitt den passenden Teil Ihrer Beispiele.
 
 ## Eigene Vorlagen
 

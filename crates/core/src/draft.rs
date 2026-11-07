@@ -36,7 +36,7 @@ use crate::templates::{Audience, FieldKind, Layout, SectionDef, Template};
 use crate::{Error, Result};
 
 /// Bump on any change to the prompt or the answer format.
-pub const PROMPT_VERSION: &str = "draft-2026.7";
+pub const PROMPT_VERSION: &str = "draft-2026.8";
 
 /// Fact characters per request, like `extract::CHUNK_CHARS` (fits a 16k-context local model).
 pub const FACT_CHARS: usize = 24_000;
@@ -131,9 +131,10 @@ pub struct Request<'a> {
     /// Current plain text per section, sent along so the draft only adds to it ("ergänzen").
     pub existing: &'a [(String, String)],
     pub instruction: Option<&'a str>,
-    /// Her style exemplars for this document type as (title, excerpt, see [`crate::style`]):
-    /// sent once in the system prompt, wording only, never a source.
-    pub style: &'a [(String, String)],
+    /// Her style for this document type (see [`crate::style_profile`]): the Stilprofil and the
+    /// exemplars without matching headings once in the system prompt, the matching parts of the
+    /// others with each section's request; wording only, never a source.
+    pub style: &'a crate::style_profile::StyleMaterial,
 }
 
 /// One request: the draft for section `key`.
@@ -541,11 +542,13 @@ pub fn prepare(template: &Template, frame: &Frame, req: &Request, patient: &Pati
 
     let mut p = Pseudonymizer::new(dict);
     let mut system_raw = system_prompt(template, frame, facts.iter().any(|f| f.prior));
-    if !req.style.is_empty() {
+    if !req.style.whole.is_empty() {
         system_raw.push_str(&format!(
             "\n{} Die Beispiele sind ganze Schreiben: für diesen Abschnitt zählt, wie sie den entsprechenden Teil schreibt.\n",
             crate::style::PROMPT_RULES
         ));
+    } else if !req.style.sections.is_empty() {
+        system_raw.push_str(&format!("\n{}\n", crate::style::PROMPT_RULES));
     }
     let prompt_hash = sha256(&format!("{PROMPT_VERSION}\n{system_raw}"));
     let (system, shared) = crate::compose::with_style(&mut p, &system_raw, req.style, patient)?;
@@ -564,7 +567,13 @@ pub fn prepare(template: &Template, frame: &Frame, req: &Request, patient: &Pati
             )));
         }
         let existing = existing.map(|t| patient_as_pat(t, patient));
-        let message = section_message(def, instruction.as_deref(), existing.as_deref(), &fact_list(facts, &subset, patient));
+        let mut message = section_message(def, instruction.as_deref(), existing.as_deref(), &fact_list(facts, &subset, patient));
+        // Her parts of earlier letters for this section (slice 52), after the facts.
+        let style = req.style.section(&def.key);
+        if !style.is_empty() {
+            message.push('\n');
+            message.push_str(&patient_as_pat(&style, patient));
+        }
         let user = p.pseudonymize(&message)?;
         sections.push(PreparedSection { key: def.key.clone(), user, facts: subset, with_existing: existing.is_some() });
     }
@@ -778,7 +787,7 @@ mod tests {
     /// Prepares `k` over `facts` (tag filtering on, no existing text).
     fn prep(k: &[&str], facts: &[InputFact], dict: Dictionary, instruction: Option<&str>) -> Result<Prepared> {
         let (k, tags) = (keys(k), tag_keys());
-        prepare(&bericht(), &frame(), &Request { keys: &k, facts, tag_keys: &tags, existing: &[], instruction, style: &[] }, &patient(), dict)
+        prepare(&bericht(), &frame(), &Request { keys: &k, facts, tag_keys: &tags, existing: &[], instruction, style: &Default::default() }, &patient(), dict)
     }
 
     #[test]
@@ -855,7 +864,7 @@ mod tests {
         assert!(!m.contains("Erzieherin") && !m.contains("Urlaub"));
         // A section outside the tag vocabulary (Umwandlung, Fortführung) gets everything.
         let k = keys(&["symptomatik_befund"]);
-        let all = prepare(&bericht(), &frame(), &Request { keys: &k, facts: &facts, tag_keys: &[], existing: &[], instruction: None, style: &[] }, &patient(), Dictionary::new()).unwrap();
+        let all = prepare(&bericht(), &frame(), &Request { keys: &k, facts: &facts, tag_keys: &[], existing: &[], instruction: None, style: &Default::default() }, &patient(), Dictionary::new()).unwrap();
         assert_eq!(all.sections[0].facts, vec![0, 1, 2, 3, 4]);
         // Only facts shown in a request may be cited.
         let out = parse(r#"[{"text": "Panik im Bus.", "facts": [1]}, {"text": "Erzieherin.", "facts": [2]}]"#, &p.sections[0], &facts, &p.map).unwrap();
@@ -864,12 +873,35 @@ mod tests {
     }
 
     #[test]
+    fn her_exemplar_parts_go_to_their_section_only() {
+        let facts = vec![fact(1, "Befund", "Stimmung gedrückt"), fact(1, "Verlauf", "Arbeitet als Erzieherin")];
+        let mut style = crate::style_profile::StyleMaterial { profile: "Stilprofil der Therapeutin (aus 2 früheren Schreiben dieser Art; nur Stil, keine Inhalte):
+- Form: Fließtext.
+".into(), ..Default::default() };
+        style.sections.insert("symptomatik_befund".into(), vec![("Bericht 2023".into(), "Pat. wirkt erschöpft; Frau Beispiel ebenso.".into())]);
+        style.lengths.insert("symptomatik_befund".into(), 140);
+        let k = keys(&["symptomatik_befund", "soziodemographie"]);
+        let p = prepare(&bericht(), &frame(), &Request { keys: &k, facts: &facts, tag_keys: &[], existing: &[], instruction: None, style: &style }, &patient(), Dictionary::from_patient(&patient())).unwrap();
+        let befund = p.sections.iter().find(|s| s.key == "symptomatik_befund").unwrap().user.get();
+        assert!(befund.contains("Stilbeispiele für diesen Abschnitt") && befund.contains("[S1] Bericht 2023") && befund.contains("etwa 140 Wörter"), "{befund}");
+        assert!(!befund.contains("Beispiel ebenso"), "pseudonymized: {befund}");
+        assert!(!p.sections.iter().find(|s| s.key == "soziodemographie").unwrap().user.get().contains("Stilbeispiel"), "only its own section");
+        let system = p.system.get();
+        assert!(system.contains("Stilprofil der Therapeutin") && system.contains("Ein Stilbeispiel ist nie eine Quelle"));
+        assert!(!system.contains("Bericht 2023"), "parts are not in the system prompt");
+        assert_eq!(p.preview().shared.len(), 1, "the profile goes with every request");
+        // An exemplar is no source.
+        let out = parse(r#"[{"text": "Pat. wirkt erschöpft.", "facts": [], "sources": ["S1"]}]"#, &p.sections[0], &facts, &p.map).unwrap();
+        assert!(out.sentences.is_empty());
+    }
+
+    #[test]
     fn existing_text_goes_along_on_append() {
         let facts = vec![fact(1, "Verlauf", "Anna schläft schlecht"), fact(1, "Befund", "Stimmung gedrückt")];
         let (k, tags) = (keys(&["symptomatik_befund", "soziodemographie"]), tag_keys());
         let existing = vec![("symptomatik_befund".to_string(), plain_text("<p>Frau Beispiel berichtet <strong>Panik</strong> &amp; Unruhe.</p><ul><li><p>seit Mai</p></li></ul>"))];
         assert_eq!(existing[0].1, "Frau Beispiel berichtet Panik & Unruhe.\nseit Mai");
-        let req = Request { keys: &k, facts: &facts, tag_keys: &tags, existing: &existing, instruction: None, style: &[] };
+        let req = Request { keys: &k, facts: &facts, tag_keys: &tags, existing: &existing, instruction: None, style: &Default::default() };
         let p = prepare(&bericht(), &frame(), &req, &patient(), Dictionary::from_patient(&patient())).unwrap();
         let m = p.sections[0].user.get();
         assert!(p.sections[0].with_existing && !p.sections[1].with_existing);
@@ -987,7 +1019,7 @@ mod tests {
         assert!(facts[1].text.ends_with(" …") && facts[1].text.chars().count() <= MAX_PRIOR_CHARS + 2);
         let frame = Frame { method: Method::Vt, age_group: AgeGroup::Adult, target: Target::Ptv3(ApplicationKind::Fortfuehrung) };
         let k = keys(&["verlauf", "begruendung_planung"]);
-        let req = Request { keys: &k, facts: &facts, tag_keys: &[], existing: &[], instruction: None, style: &[] };
+        let req = Request { keys: &k, facts: &facts, tag_keys: &[], existing: &[], instruction: None, style: &Default::default() };
         let p = prepare(&t, &frame, &req, &patient(), Dictionary::from_patient(&patient())).unwrap();
         assert!(p.system.get().contains("Veränderung seit dem Vorbericht"));
         assert_eq!(p.untagged, 1, "the Vorbericht is no untagged fact");

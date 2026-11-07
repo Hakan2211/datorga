@@ -507,6 +507,7 @@ function OptionsButton({
   const draftSources = useQuery(q.draftSources(reportId)).data
   const prior = draftSources?.prior
   const style = draftSources?.style ?? 0
+  const profile = !!draftSources?.profile
   const chosen = options.sessionIds === undefined ? sessions.defaults : options.sessionIds === null ? sessions.rows.map((r) => r.id) : options.sessionIds
   const set = (ids: string[]) => onOptions({ ...options, sessionIds: ids.length === sessions.rows.length ? null : ids })
   return (
@@ -561,7 +562,7 @@ function OptionsButton({
             <p className="pl-6 text-muted-foreground">{t('draft.withPriorHint', { date: formatDate(prior.signed_at) })}</p>
           </div>
         )}
-        {style > 0 && (
+        {(style > 0 || profile) && (
           <div className="space-y-1">
             <label className="flex items-center gap-2">
               <Checkbox
@@ -569,7 +570,7 @@ function OptionsButton({
                 onCheckedChange={(v) => onOptions({ ...options, withoutStyle: v !== true })}
                 data-testid="focus-with-style"
               />
-              {t('style.withStyle', { count: style })}
+              {style > 0 ? t('style.withStyle', { count: style }) : t('style.withProfile')}
             </label>
             <p className="pl-6 text-muted-foreground">{t('style.withStyleHint')}</p>
           </div>

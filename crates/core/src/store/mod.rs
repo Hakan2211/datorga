@@ -79,6 +79,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V25__letters.sql"),
     include_str!("migrations/V26__letter_ai.sql"),
     include_str!("migrations/V27__style.sql"),
+    include_str!("migrations/V28__style_notes.sql"),
 ];
 
 /// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).

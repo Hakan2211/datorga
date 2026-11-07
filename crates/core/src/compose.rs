@@ -30,7 +30,7 @@ use crate::templates::{Audience, SectionDef, Template};
 use crate::{Error, Result};
 
 /// Bump on any change to the prompt or the answer format.
-pub const PROMPT_VERSION: &str = "letter-2026.3";
+pub const PROMPT_VERSION: &str = "letter-2026.4";
 pub const QUESTIONS_PROMPT_VERSION: &str = "letter-questions-2026.1";
 
 /// Longest pasted request sent to find its questions.
@@ -63,9 +63,10 @@ pub struct Request<'a> {
     /// Her Textbausteine for this letter type as (title, plain text for the model, see
     /// [`crate::textblock::for_ai`]): preferred wording `[T n]`, not material.
     pub blocks: &'a [(String, String)],
-    /// Her style exemplars for this letter type as (title, excerpt, see [`crate::style`]):
+    /// Her style for this letter type: exemplars (whole) and the Stilprofil (slice 52, see
+    /// [`crate::style_profile`]), in the system prompt; wording only, never a source.
     /// wording only, never a source.
-    pub style: &'a [(String, String)],
+    pub style: &'a crate::style_profile::StyleMaterial,
 }
 
 pub struct Prepared {
@@ -301,7 +302,7 @@ pub fn prepare(template: &Template, frame: &Frame, req: &Request, patient: &Pati
 
     let mut p = Pseudonymizer::new(dict);
     let mut system_raw = system_prompt(template, frame, rewrite.is_some());
-    if !req.style.is_empty() {
+    if !req.style.whole.is_empty() {
         system_raw.push_str(&format!("\n{}\n", crate::style::PROMPT_RULES));
     }
     let prompt_hash = sha256(&format!("{PROMPT_VERSION}\n{system_raw}"));
@@ -325,16 +326,28 @@ pub fn prepare(template: &Template, frame: &Frame, req: &Request, patient: &Pati
     })
 }
 
-/// The system prompt with her style exemplars appended, and the exemplars as sent (for the
-/// preview). One pseudonymizer: a date in an exemplar gets the same token everywhere.
-pub(crate) fn with_style(p: &mut Pseudonymizer, system: &str, style: &[(String, String)], patient: &Patient) -> Result<(Pseudonymized<String>, Vec<String>)> {
-    let block = crate::style::prompt_block(style);
-    if block.is_empty() {
+/// The system prompt with her Stilprofil and whole style exemplars appended, and both as sent
+/// (for the preview, "Geht mit jeder Anfrage mit"). One pseudonymizer: a date in an exemplar gets
+/// the same token everywhere.
+pub(crate) fn with_style(
+    p: &mut Pseudonymizer,
+    system: &str,
+    style: &crate::style_profile::StyleMaterial,
+    patient: &Patient,
+) -> Result<(Pseudonymized<String>, Vec<String>)> {
+    let blocks: Vec<String> = [style.profile.clone(), crate::style::prompt_block(&style.whole)]
+        .into_iter()
+        .filter(|b| !b.trim().is_empty())
+        .map(|b| draft::patient_as_pat(&b, patient))
+        .collect();
+    if blocks.is_empty() {
         return Ok((p.pseudonymize(system)?, Vec::new()));
     }
-    let block = draft::patient_as_pat(&block, patient);
-    let shared = p.pseudonymize(&block)?.into_inner();
-    Ok((p.pseudonymize(&format!("{system}\n{block}"))?, vec![shared]))
+    let mut shared = Vec::new();
+    for b in &blocks {
+        shared.push(p.pseudonymize(b)?.into_inner());
+    }
+    Ok((p.pseudonymize(&format!("{system}\n{}", blocks.join("\n")))?, shared))
 }
 
 // Source markers some models write into the text anyway ("… Arbeit [F1].", "(A2, F3)").
@@ -642,7 +655,7 @@ mod tests {
         let k = keys(&t);
         let f = facts(&k);
         let q = vec![(k[1].clone(), "Depressionen (Art, Häufigkeit und Dauer) bei Frau Beispiel".to_string())];
-        let req = Request { keys: &k, facts: &f, questions: &q, rewrite: None, instruction: Some("knapp, Frau Beispiel siezen"), blocks: &[], style: &[] };
+        let req = Request { keys: &k, facts: &f, questions: &q, rewrite: None, instruction: Some("knapp, Frau Beispiel siezen"), blocks: &[], style: &Default::default() };
         let p = prepare(&t, &frame(), &req, &patient(), dict()).unwrap();
         let msg = p.user.get();
         for secret in ["Anna", "Beispiel", "Jonas", "12.03.2026", "1985"] {
@@ -661,7 +674,7 @@ mod tests {
     fn prepare_needs_material_or_an_instruction() {
         let t = template();
         let k = keys(&t);
-        let none = Request { keys: &k, facts: &[], questions: &[], rewrite: None, instruction: None, blocks: &[], style: &[] };
+        let none = Request { keys: &k, facts: &[], questions: &[], rewrite: None, instruction: None, blocks: &[], style: &Default::default() };
         assert!(prepare(&t, &frame(), &none, &patient(), dict()).is_err());
         let told = Request { instruction: Some("Bitte um Verlängerung der Frist um vier Wochen"), ..none };
         assert!(prepare(&t, &frame(), &told, &patient(), dict()).is_ok());
@@ -669,7 +682,7 @@ mod tests {
         let no_keys = Request { keys: &nothing, ..told };
         assert!(prepare(&t, &frame(), &no_keys, &patient(), dict()).is_err());
         let one = vec![k[0].clone()];
-        let rewrite = Request { keys: &one, facts: &[], questions: &[], rewrite: Some("Alter Text."), instruction: None, blocks: &[], style: &[] };
+        let rewrite = Request { keys: &one, facts: &[], questions: &[], rewrite: Some("Alter Text."), instruction: None, blocks: &[], style: &Default::default() };
         assert!(prepare(&t, &frame(), &rewrite, &patient(), dict()).is_err(), "a re-write needs an instruction");
         let rewrite = Request { instruction: Some("kürzer"), ..rewrite };
         let p = prepare(&t, &frame(), &rewrite, &patient(), dict()).unwrap();
@@ -683,7 +696,7 @@ mod tests {
         let t = template();
         let k = keys(&t);
         let f = facts(&k);
-        let req = Request { keys: &k, facts: &f, questions: &[], rewrite: None, instruction: Some("Behandlung wöchentlich erwähnen"), blocks: &[], style: &[] };
+        let req = Request { keys: &k, facts: &f, questions: &[], rewrite: None, instruction: Some("Behandlung wöchentlich erwähnen"), blocks: &[], style: &Default::default() };
         let p = prepare(&t, &frame(), &req, &patient(), dict()).unwrap();
         let date = p.map.entries().iter().find(|e| e.token.starts_with("[DATUM")).unwrap().token.clone();
         let person = p.map.entries().iter().find(|e| e.token.starts_with("[PERSON")).unwrap().token.clone();
@@ -728,7 +741,7 @@ mod tests {
             "Teufelskreis".to_string(),
             crate::textblock::for_ai("<p>{Frau/Herr} {Nachname}: Schmerzen und Stimmung verstärken sich gegenseitig.</p>", Some(Gender::W)),
         )];
-        let req = Request { keys: &k, facts: &f, questions: &[], rewrite: None, instruction: None, blocks: &blocks, style: &[] };
+        let req = Request { keys: &k, facts: &f, questions: &[], rewrite: None, instruction: None, blocks: &blocks, style: &Default::default() };
         let p = prepare(&t, &frame(), &req, &patient(), dict()).unwrap();
         let msg = p.user.get();
         assert!(msg.contains("[T1] (Teufelskreis) Pat.: Schmerzen und Stimmung"), "{msg}");
@@ -754,7 +767,10 @@ mod tests {
         let f = facts(&k);
         // An exemplar is redacted when stored; a name of this patient or a date left in it is
         // still pseudonymized on the way out.
-        let style = vec![("DRV 2023".to_string(), "Frau [Name] befindet sich seit dem 02.05.2019 in Behandlung; Frau Beispiel auch.".to_string())];
+        let style = crate::style_profile::StyleMaterial {
+            whole: vec![("DRV 2023".to_string(), "Frau [Name] befindet sich seit dem 02.05.2019 in Behandlung; Frau Beispiel auch.".to_string())],
+            ..Default::default()
+        };
         let req = Request { keys: &k, facts: &f, questions: &[], rewrite: None, instruction: None, blocks: &[], style: &style };
         let p = prepare(&t, &frame(), &req, &patient(), dict()).unwrap();
         let system = p.system.get();
@@ -763,7 +779,7 @@ mod tests {
         assert!(!p.user.get().contains("Stilbeispiele"), "not repeated in the message");
         assert_eq!(p.preview().shared.len(), 1);
         assert!(p.preview().shared[0].starts_with("Stilbeispiele") && p.preview().shared[0].contains("[DATUM_"));
-        let without = prepare(&t, &frame(), &Request { style: &[], ..req }, &patient(), dict()).unwrap();
+        let without = prepare(&t, &frame(), &Request { style: &Default::default(), ..req }, &patient(), dict()).unwrap();
         assert_ne!(without.prompt_hash, p.prompt_hash, "the rules are part of the prompt");
         assert!(without.preview().shared.is_empty() && !without.system.get().contains("Stilbeispiel"));
         assert_ne!(without.digest, p.digest);
@@ -772,6 +788,25 @@ mod tests {
         let r = parse(&answer, &p, &f).unwrap();
         assert_eq!(r[0].parsed.sentences[0].text, "Sie befindet sich in Behandlung.");
         assert_eq!(r[0].parsed.unsupported, vec![0], "an exemplar is no source");
+    }
+
+    #[test]
+    fn the_style_profile_goes_in_the_system_prompt_and_the_preview() {
+        let t = template();
+        let k = keys(&t);
+        let f = facts(&k);
+        let style = crate::style_profile::StyleMaterial {
+            profile: crate::style_profile::prompt_block(None, Some("kurz, wie Frau Beispiel es mag"), None),
+            ..Default::default()
+        };
+        let req = Request { keys: &k, facts: &f, questions: &[], rewrite: None, instruction: None, blocks: &[], style: &style };
+        let p = prepare(&t, &frame(), &req, &patient(), dict()).unwrap();
+        let system = p.system.get();
+        assert!(system.contains("Stilprofil der Therapeutin") && system.contains("Hinweise der Therapeutin: kurz"), "{system}");
+        assert!(!system.contains("Beispiel es mag") && !system.contains("Ein Stilbeispiel ist nie"), "pseudonymized, no exemplar rules without exemplars");
+        let shared = p.preview().shared;
+        assert_eq!(shared.len(), 1);
+        assert!(shared[0].starts_with("Stilprofil"));
     }
 
     #[test]

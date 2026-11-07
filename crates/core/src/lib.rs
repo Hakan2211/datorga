@@ -35,6 +35,7 @@ pub mod render;
 pub mod review;
 pub mod store;
 pub mod style;
+pub mod style_profile;
 pub mod stt;
 pub mod summary;
 pub mod templates;

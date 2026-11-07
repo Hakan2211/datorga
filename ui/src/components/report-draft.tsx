@@ -161,11 +161,11 @@ export function DraftDialog({
             {t('draft.allFacts')}
           </label>
         )}
-        {!!sources.data?.style && (
+        {!!(sources.data?.style || sources.data?.profile) && (
           <label className="flex items-start gap-2 text-[13px]" data-testid="draft-style">
             <Checkbox className="mt-0.5" checked={withStyle} onCheckedChange={(v) => setWithStyle(v === true)} />
             <span>
-              {t('style.withStyle', { count: sources.data.style })}
+              {sources.data.style ? t('style.withStyle', { count: sources.data.style }) : t('style.withProfile')}
               <span className="block text-muted-foreground">{t('style.withStyleHint')}</span>
             </span>
           </label>
@@ -178,7 +178,7 @@ export function DraftDialog({
             {all ? t('draft.presetAll', { count: rows.length }) : t('draft.presetSome', { count: chosen.length, total: rows.length })}
             {withExisting && filled.length > 0 && ` · ${t('draft.presetExisting')}`}
             {sources.data?.prior && preset.withoutPrior && ` · ${t('draft.presetWithoutPrior')}`}
-            {!!sources.data?.style && preset.withoutStyle && ` · ${t('style.presetWithoutStyle')}`}
+            {!!(sources.data?.style || sources.data?.profile) && preset.withoutStyle && ` · ${t('style.presetWithoutStyle')}`}
             {sent && ` · ${t('draft.presetInstruction', { text: sent })}`}
           </p>
         )}
