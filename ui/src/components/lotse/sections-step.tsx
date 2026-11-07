@@ -504,7 +504,9 @@ function OptionsButton({
 }) {
   const { t } = useTranslation()
   const sessions = useDraftSessions(reportId)
-  const prior = useQuery(q.draftSources(reportId)).data?.prior
+  const draftSources = useQuery(q.draftSources(reportId)).data
+  const prior = draftSources?.prior
+  const style = draftSources?.style ?? 0
   const chosen = options.sessionIds === undefined ? sessions.defaults : options.sessionIds === null ? sessions.rows.map((r) => r.id) : options.sessionIds
   const set = (ids: string[]) => onOptions({ ...options, sessionIds: ids.length === sessions.rows.length ? null : ids })
   return (
@@ -557,6 +559,19 @@ function OptionsButton({
               {t('draft.withPrior')}
             </label>
             <p className="pl-6 text-muted-foreground">{t('draft.withPriorHint', { date: formatDate(prior.signed_at) })}</p>
+          </div>
+        )}
+        {style > 0 && (
+          <div className="space-y-1">
+            <label className="flex items-center gap-2">
+              <Checkbox
+                checked={!options.withoutStyle}
+                onCheckedChange={(v) => onOptions({ ...options, withoutStyle: v !== true })}
+                data-testid="focus-with-style"
+              />
+              {t('style.withStyle', { count: style })}
+            </label>
+            <p className="pl-6 text-muted-foreground">{t('style.withStyleHint')}</p>
           </div>
         )}
       </PopoverContent>

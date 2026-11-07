@@ -680,6 +680,22 @@ export function RedactionDialog({
                   }}
                   data-testid="outgoing"
                 >
+                  {(data.shared ?? []).map((m, i) => (
+                    <div key={`shared-${i}`} className="border-b border-dashed pb-3" data-testid="outgoing-shared">
+                      <div className="mb-1 font-sans text-[11px] font-medium text-muted-foreground uppercase">
+                        {t("style.shared")}
+                      </div>
+                      {m.split(TOKEN).map((part, j) =>
+                        j % 2 === 1 ? (
+                          <mark key={j} className="rounded bg-primary/15 px-0.5 text-primary">
+                            {part}
+                          </mark>
+                        ) : (
+                          part
+                        ),
+                      )}
+                    </div>
+                  ))}
                   {data.messages.map((m, i) => (
                     <div key={i}>
                       {m.split(TOKEN).map((part, j) =>

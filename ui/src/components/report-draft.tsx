@@ -50,7 +50,7 @@ export function useDraftSessions(reportId: string) {
  * What the focus mode's "Optionen" and "Neu entwerfen" chose; the dialog then only previews.
  * `sessionIds` undefined: the default sessions, `null`: all.
  */
-export type DraftPreset = { sessionIds?: string[] | null; withExisting?: boolean; instruction?: string; withoutPrior?: boolean }
+export type DraftPreset = { sessionIds?: string[] | null; withExisting?: boolean; instruction?: string; withoutPrior?: boolean; withoutStyle?: boolean }
 
 /**
  * Redaction preview + the choices for drafting `keys` (sessions, existing text, instruction),
@@ -88,6 +88,7 @@ export function DraftDialog({
   }, [chosen, rows, sessions, preset])
   const [withExisting, setWithExisting] = useState(preset?.withExisting ?? filled.length > 0)
   const [allFacts, setAllFacts] = useState(false)
+  const [withStyle, setWithStyle] = useState(!preset?.withoutStyle)
   const [instruction, setInstruction] = useState(preset?.instruction ?? '')
   // The preview follows the instruction once typing pauses.
   const [sent, setSent] = useState('')
@@ -104,6 +105,7 @@ export function DraftDialog({
     withExisting: withExisting && filled.length > 0,
     allFacts,
     withoutPrior: !!preset?.withoutPrior,
+    withoutStyle: !withStyle,
   }
   const previewKey = ['draftPreview', reportId, choice]
   // Shares the dialog's preview query (same key): sections skipped for lack of facts.
@@ -159,6 +161,15 @@ export function DraftDialog({
             {t('draft.allFacts')}
           </label>
         )}
+        {!!sources.data?.style && (
+          <label className="flex items-start gap-2 text-[13px]" data-testid="draft-style">
+            <Checkbox className="mt-0.5" checked={withStyle} onCheckedChange={(v) => setWithStyle(v === true)} />
+            <span>
+              {t('style.withStyle', { count: sources.data.style })}
+              <span className="block text-muted-foreground">{t('style.withStyleHint')}</span>
+            </span>
+          </label>
+        )}
         {preview.data && preview.data.untagged > 0 && (
           <p className="text-[13px] text-muted-foreground">{t('draft.untagged', { count: preview.data.untagged })}</p>
         )}
@@ -167,6 +178,7 @@ export function DraftDialog({
             {all ? t('draft.presetAll', { count: rows.length }) : t('draft.presetSome', { count: chosen.length, total: rows.length })}
             {withExisting && filled.length > 0 && ` · ${t('draft.presetExisting')}`}
             {sources.data?.prior && preset.withoutPrior && ` · ${t('draft.presetWithoutPrior')}`}
+            {!!sources.data?.style && preset.withoutStyle && ` · ${t('style.presetWithoutStyle')}`}
             {sent && ` · ${t('draft.presetInstruction', { text: sent })}`}
           </p>
         )}

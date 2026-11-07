@@ -1888,6 +1888,85 @@ fn recipient_link(state: State<'_, AppState>, patient_id: String, recipient_id: 
     state.with(|s| s.link_recipient(&patient_id, &recipient_id, role.as_deref()))
 }
 
+// ---------- Reading documents, style exemplars (slice 49) ----------
+
+/// Reads a PDF, Word file, text file, photo or scan locally (text layer, else Windows OCR).
+/// `purpose`: `request` (an Anschreiben) or `style` (an old letter); only for the audit.
+#[tauri::command]
+async fn document_read(app: AppHandle, path: String, purpose: String) -> CmdResult<thera_core::ingest::Imported> {
+    blocking(app, move |state| {
+        let imported = thera_core::ingest::read(std::path::Path::new(&path))?;
+        let purpose = if purpose == "style" { "style" } else { "request" };
+        state.with(|s| s.log_document_read(purpose, &imported))?;
+        Ok(imported)
+    })
+    .await
+}
+
+#[tauri::command]
+fn ocr_available() -> bool {
+    thera_core::ocr::available()
+}
+
+#[tauri::command]
+fn style_list(state: State<'_, AppState>) -> CmdResult<Vec<thera_core::style::StyleExemplar>> {
+    state.with(|s| s.list_style_exemplars(None))
+}
+
+/// The redaction review of an upload: what is marked (her patients and terms, the rules, what
+/// she marked by hand) and the text with the marks she didn't unmark replaced.
+#[tauri::command]
+fn style_review(
+    state: State<'_, AppState>,
+    text: String,
+    extra: Vec<(thera_core::pseudo::EntityKind, String)>,
+    keep: Vec<String>,
+) -> CmdResult<thera_core::style::StyleReview> {
+    let (mut dict, me) = state.with(|s| Ok((s.assistant_dictionary()?, s.setting("therapist_name")?)))?;
+    // Her own name (signature, letterhead) is no patient data, but no style either.
+    if let Some(name) = me.as_ref().and_then(|v| v.as_str()) {
+        // As one phrase ("Paula Beispiel"): a surname alone may be a common word.
+        let words: Vec<&str> = name.split_whitespace().filter(|w| !w.ends_with('.')).collect();
+        if words.len() >= 2 {
+            dict.add(thera_core::pseudo::EntityKind::Person, &words.join(" "));
+        }
+    }
+    Ok(thera_core::style::review(&text, &dict, &extra, &keep))
+}
+
+/// The text of a signed Bericht or letter, for "Als Stilbeispiel übernehmen".
+#[derive(Serialize)]
+struct StyleSource {
+    template_key: String,
+    title: String,
+    text: String,
+}
+
+#[tauri::command]
+fn style_source(state: State<'_, AppState>, report_id: String) -> CmdResult<StyleSource> {
+    state.with(|s| {
+        let (template_key, text) = s.report_style_text(&report_id)?;
+        let title = s.template(&template_key)?.title;
+        let date = s.report(&report_id)?.signed_at.map(|d| thera_core::render::german_date(&d)).unwrap_or_default();
+        Ok(StyleSource { template_key, title: format!("{title} vom {date}"), text })
+    })
+}
+
+#[tauri::command]
+fn style_create(state: State<'_, AppState>, input: thera_core::style::StyleExemplarInput) -> CmdResult<thera_core::style::StyleExemplar> {
+    state.with(|s| s.create_style_exemplar(input))
+}
+
+#[tauri::command]
+fn style_update(state: State<'_, AppState>, id: String, input: thera_core::style::StyleExemplarInput, active: bool) -> CmdResult<thera_core::style::StyleExemplar> {
+    state.with(|s| s.update_style_exemplar(&id, input, active))
+}
+
+#[tauri::command]
+fn style_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.with(|s| s.delete_style_exemplar(&id))
+}
+
 // ---------- Textbausteine (slice 48) ----------
 
 #[tauri::command]
@@ -2803,6 +2882,9 @@ struct DraftChoice {
     /// Leave the Vorbericht out.
     #[serde(default)]
     without_prior: bool,
+    /// Leave her style exemplars out (slice 49).
+    #[serde(default)]
+    without_style: bool,
 }
 
 /// Session facts as draft input, labelled with their Sitzungsnotiz section.
@@ -2923,12 +3005,14 @@ fn prepare_draft(
     let dict = s.pseudo_dictionary(&view.patient.id)?;
     // Sections marked "nicht relevant" are not drafted.
     let keys: Vec<String> = choice.sections.iter().filter(|k| !not_relevant(&view, k)).cloned().collect();
+    let style = if choice.without_style { vec![] } else { s.style_for(&view.template.key)? };
     let req = draft::Request {
         keys: &keys,
         facts: &input,
         tag_keys: &tag_keys,
         existing: &existing,
         instruction: choice.instruction.as_deref(),
+        style: &style,
     };
     let prepared = draft::prepare(&view.template, &frame, &req, &view.patient, dict)?;
     Ok((prepared, facts, answers, priors, input))
@@ -2967,6 +3051,8 @@ struct DraftSources {
     answers: usize,
     /// The Vorbericht drafts see, with the sections they draw on.
     prior: Option<PriorInfo>,
+    /// Her active style exemplars of the type that go along (at most two).
+    style: usize,
 }
 
 #[derive(Serialize)]
@@ -2984,7 +3070,7 @@ struct PriorInfo {
 fn draft_sources(state: State<'_, AppState>, report_id: String) -> CmdResult<DraftSources> {
     state.with(|s| {
         let view = report_view(s, &report_id)?;
-        let Some(ep) = &view.report.episode_id else { return Ok(DraftSources { facts: vec![], since: None, answers: 0, prior: None }) };
+        let Some(ep) = &view.report.episode_id else { return Ok(DraftSources { facts: vec![], since: None, answers: 0, prior: None, style: 0 }) };
         let since = previous_application_at(s, &view.report)?;
         let prior = match s.prior_report(&report_id)? {
             Some(p) => {
@@ -2999,7 +3085,7 @@ fn draft_sources(state: State<'_, AppState>, report_id: String) -> CmdResult<Dra
             }
             None => None,
         };
-        Ok(DraftSources { facts: s.episode_facts(ep)?, since, answers: current_answers(s, &view)?.len(), prior })
+        Ok(DraftSources { facts: s.episode_facts(ep)?, since, answers: current_answers(s, &view)?.len(), prior, style: s.style_for(&view.template.key)?.len() })
     })
 }
 
@@ -3979,6 +4065,7 @@ fn prepare_letter(
     } else {
         vec![]
     };
+    let style = if l.material.style { s.style_for(&view.template.key)? } else { vec![] };
     let req = compose::Request {
         keys: &keys,
         facts: &input,
@@ -3986,6 +4073,7 @@ fn prepare_letter(
         rewrite: rewrite.as_deref(),
         instruction: choice.instruction.as_deref(),
         blocks: &blocks,
+        style: &style,
     };
     let prepared = compose::prepare(&view.template, &frame, &req, &view.patient, dict)?;
     Ok((prepared, facts, answers, priors, input))
@@ -4013,6 +4101,8 @@ struct LetterSources {
     deadline: Option<String>,
     /// Textbausteine that fit the letter type.
     textblocks: usize,
+    /// Her active style exemplars of the letter type that go along (at most two).
+    style: usize,
 }
 
 #[tauri::command]
@@ -4020,14 +4110,15 @@ fn letter_sources(state: State<'_, AppState>, id: String) -> CmdResult<LetterSou
     state.with(|s| {
         let view = report_view(s, &id)?;
         let l = s.letter(&id)?;
-        let all = letter::Material { facts: true, answers: true, prior: true, textblocks: true };
+        let all = letter::Material::default();
         let (facts, answers, priors, _) = letter_material(s, &view, all)?;
         let prior = match s.letter_prior(&id)? {
             Some(p) => Some(PriorInfo { report_id: p.id, kind: None, seq: None, signed_at: p.signed_at, sections: priors.len() }),
             None => None,
         };
         let textblocks = s.textblocks_for(&view.template.key)?.len();
-        Ok(LetterSources { material: l.material, facts: facts.len(), answers: answers.len(), prior, deadline: compose::deadline(&l.request_text), textblocks })
+        let style = s.style_for(&view.template.key)?.len();
+        Ok(LetterSources { material: l.material, facts: facts.len(), answers: answers.len(), prior, deadline: compose::deadline(&l.request_text), textblocks, style })
     })
 }
 
@@ -4943,6 +5034,14 @@ pub fn run() {
             letter_mark_sent,
             recipients_list,
             textblocks_list,
+            document_read,
+            ocr_available,
+            style_list,
+            style_review,
+            style_source,
+            style_create,
+            style_update,
+            style_delete,
             textblock_create,
             textblock_update,
             textblock_delete,

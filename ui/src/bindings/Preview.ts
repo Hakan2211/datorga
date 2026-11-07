@@ -4,4 +4,8 @@ import type { TokenView } from "./TokenView";
 /**
  * The redaction preview: the outgoing text and which original each token stands for.
  */
-export type Preview = { messages: Array<string>, tokens: Array<TokenView>, digest: string, };
+export type Preview = { 
+/**
+ * Sent with every message (in the system prompt): her style exemplars (slice 49).
+ */
+shared: Array<string>, messages: Array<string>, tokens: Array<TokenView>, digest: string, };

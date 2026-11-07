@@ -117,6 +117,7 @@ pub struct Prepared {
 impl Prepared {
     pub fn preview(&self) -> Preview {
         Preview {
+            shared: Vec::new(),
             messages: vec![self.user.get().clone()],
             tokens: self.map.entries().iter().map(TokenView::from).collect(),
             digest: self.digest.clone(),

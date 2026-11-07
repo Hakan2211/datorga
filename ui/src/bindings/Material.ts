@@ -19,4 +19,8 @@ prior: boolean,
 /**
  * Her Textbausteine for the letter type, as preferred wording (slice 48).
  */
-textblocks: boolean, };
+textblocks: boolean, 
+/**
+ * Her style exemplars for the letter type (slice 49).
+ */
+style: boolean, };

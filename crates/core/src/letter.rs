@@ -180,6 +180,9 @@ pub struct Material {
     /// Her Textbausteine for the letter type, as preferred wording (slice 48).
     #[serde(default = "on")]
     pub textblocks: bool,
+    /// Her style exemplars for the letter type (slice 49).
+    #[serde(default = "on")]
+    pub style: bool,
 }
 
 fn on() -> bool {
@@ -188,7 +191,7 @@ fn on() -> bool {
 
 impl Default for Material {
     fn default() -> Self {
-        Self { facts: true, answers: true, prior: true, textblocks: true }
+        Self { facts: true, answers: true, prior: true, textblocks: true, style: true }
     }
 }
 

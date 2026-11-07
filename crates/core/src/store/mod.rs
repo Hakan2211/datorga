@@ -24,6 +24,7 @@ mod contingent;
 mod focus;
 mod letters;
 mod textblocks;
+mod style;
 mod review;
 mod speakers;
 mod spend;
@@ -76,6 +77,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V24__trash.sql"),
     include_str!("migrations/V25__letters.sql"),
     include_str!("migrations/V26__letter_ai.sql"),
+    include_str!("migrations/V27__style.sql"),
 ];
 
 /// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).

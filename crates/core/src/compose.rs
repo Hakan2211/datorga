@@ -30,7 +30,7 @@ use crate::templates::{Audience, SectionDef, Template};
 use crate::{Error, Result};
 
 /// Bump on any change to the prompt or the answer format.
-pub const PROMPT_VERSION: &str = "letter-2026.2";
+pub const PROMPT_VERSION: &str = "letter-2026.3";
 pub const QUESTIONS_PROMPT_VERSION: &str = "letter-questions-2026.1";
 
 /// Longest pasted request sent to find its questions.
@@ -63,6 +63,9 @@ pub struct Request<'a> {
     /// Her Textbausteine for this letter type as (title, plain text for the model, see
     /// [`crate::textblock::for_ai`]): preferred wording `[T n]`, not material.
     pub blocks: &'a [(String, String)],
+    /// Her style exemplars for this letter type as (title, excerpt, see [`crate::style`]):
+    /// wording only, never a source.
+    pub style: &'a [(String, String)],
 }
 
 pub struct Prepared {
@@ -81,11 +84,13 @@ pub struct Prepared {
     pub prompt_hash: String,
     /// SHA-256 over the outgoing messages: what the preview showed is what is sent.
     pub digest: String,
+    /// The style exemplars as sent (inside the system prompt), for the preview.
+    pub shared: Vec<String>,
 }
 
 impl Prepared {
     pub fn preview(&self) -> Preview {
-        Preview { messages: vec![self.user.get().clone()], tokens: self.map.entries().iter().map(TokenView::from).collect(), digest: self.digest.clone() }
+        Preview { shared: self.shared.clone(), messages: vec![self.user.get().clone()], tokens: self.map.entries().iter().map(TokenView::from).collect(), digest: self.digest.clone() }
     }
 }
 
@@ -295,9 +300,12 @@ pub fn prepare(template: &Template, frame: &Frame, req: &Request, patient: &Pati
         .collect();
 
     let mut p = Pseudonymizer::new(dict);
-    let system_raw = system_prompt(template, frame, rewrite.is_some());
+    let mut system_raw = system_prompt(template, frame, rewrite.is_some());
+    if !req.style.is_empty() {
+        system_raw.push_str(&format!("\n{}\n", crate::style::PROMPT_RULES));
+    }
     let prompt_hash = sha256(&format!("{PROMPT_VERSION}\n{system_raw}"));
-    let system = p.pseudonymize(&system_raw)?;
+    let (system, shared) = with_style(&mut p, &system_raw, req.style, patient)?;
     let user = p.pseudonymize(&user_message(&defs, &questions, &sources, rewrite_text.as_deref(), instruction.as_deref(), &blocks))?;
     let mut h = Sha256::new();
     h.update(system.get());
@@ -313,12 +321,25 @@ pub fn prepare(template: &Template, frame: &Frame, req: &Request, patient: &Pati
         map: p.into_map(),
         prompt_hash,
         digest: hex::encode(h.finalize()),
+        shared,
     })
+}
+
+/// The system prompt with her style exemplars appended, and the exemplars as sent (for the
+/// preview). One pseudonymizer: a date in an exemplar gets the same token everywhere.
+pub(crate) fn with_style(p: &mut Pseudonymizer, system: &str, style: &[(String, String)], patient: &Patient) -> Result<(Pseudonymized<String>, Vec<String>)> {
+    let block = crate::style::prompt_block(style);
+    if block.is_empty() {
+        return Ok((p.pseudonymize(system)?, Vec::new()));
+    }
+    let block = draft::patient_as_pat(&block, patient);
+    let shared = p.pseudonymize(&block)?.into_inner();
+    Ok((p.pseudonymize(&format!("{system}\n{block}"))?, vec![shared]))
 }
 
 // Source markers some models write into the text anyway ("… Arbeit [F1].", "(A2, F3)").
 static MARKER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s*[\[(](?:[FAVIBT]\s?\d*)(?:\s*[,;]\s*[FAVIBT]\s?\d*)*[\])]").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"\s*[\[(](?:[FAVIBTS]\s?\d*)(?:\s*[,;]\s*[FAVIBTS]\s?\d*)*[\])]").expect("valid regex"));
 static DANGLING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s*[,;]+(\s*[.!?]|\s*$)").expect("valid regex"));
 
 /// Checks the answer: one result per section that got sentences, in template order. Fails only
@@ -452,7 +473,7 @@ pub struct PreparedQuestions {
 
 impl PreparedQuestions {
     pub fn preview(&self) -> Preview {
-        Preview { messages: vec![self.user.get().clone()], tokens: self.map.entries().iter().map(TokenView::from).collect(), digest: self.digest.clone() }
+        Preview { shared: Vec::new(), messages: vec![self.user.get().clone()], tokens: self.map.entries().iter().map(TokenView::from).collect(), digest: self.digest.clone() }
     }
 }
 
@@ -484,6 +505,11 @@ static REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Placeholder sent instead of a reference number (not restored: the questions don't need it).
 pub const REFERENCE_PLACEHOLDER: &str = "[ZEICHEN]";
+
+/// Byte ranges of the values of labelled reference numbers in `text`.
+pub fn reference_spans(text: &str) -> Vec<(usize, usize)> {
+    REFERENCE.captures_iter(text).map(|c| (c.get(2).expect("group 2").end(), c.get(0).expect("match").end())).collect()
+}
 
 /// The request with labelled reference numbers replaced by [`REFERENCE_PLACEHOLDER`].
 pub fn redact_references(text: &str) -> String {
@@ -616,7 +642,7 @@ mod tests {
         let k = keys(&t);
         let f = facts(&k);
         let q = vec![(k[1].clone(), "Depressionen (Art, Häufigkeit und Dauer) bei Frau Beispiel".to_string())];
-        let req = Request { keys: &k, facts: &f, questions: &q, rewrite: None, instruction: Some("knapp, Frau Beispiel siezen"), blocks: &[] };
+        let req = Request { keys: &k, facts: &f, questions: &q, rewrite: None, instruction: Some("knapp, Frau Beispiel siezen"), blocks: &[], style: &[] };
         let p = prepare(&t, &frame(), &req, &patient(), dict()).unwrap();
         let msg = p.user.get();
         for secret in ["Anna", "Beispiel", "Jonas", "12.03.2026", "1985"] {
@@ -635,7 +661,7 @@ mod tests {
     fn prepare_needs_material_or_an_instruction() {
         let t = template();
         let k = keys(&t);
-        let none = Request { keys: &k, facts: &[], questions: &[], rewrite: None, instruction: None, blocks: &[] };
+        let none = Request { keys: &k, facts: &[], questions: &[], rewrite: None, instruction: None, blocks: &[], style: &[] };
         assert!(prepare(&t, &frame(), &none, &patient(), dict()).is_err());
         let told = Request { instruction: Some("Bitte um Verlängerung der Frist um vier Wochen"), ..none };
         assert!(prepare(&t, &frame(), &told, &patient(), dict()).is_ok());
@@ -643,7 +669,7 @@ mod tests {
         let no_keys = Request { keys: &nothing, ..told };
         assert!(prepare(&t, &frame(), &no_keys, &patient(), dict()).is_err());
         let one = vec![k[0].clone()];
-        let rewrite = Request { keys: &one, facts: &[], questions: &[], rewrite: Some("Alter Text."), instruction: None, blocks: &[] };
+        let rewrite = Request { keys: &one, facts: &[], questions: &[], rewrite: Some("Alter Text."), instruction: None, blocks: &[], style: &[] };
         assert!(prepare(&t, &frame(), &rewrite, &patient(), dict()).is_err(), "a re-write needs an instruction");
         let rewrite = Request { instruction: Some("kürzer"), ..rewrite };
         let p = prepare(&t, &frame(), &rewrite, &patient(), dict()).unwrap();
@@ -657,7 +683,7 @@ mod tests {
         let t = template();
         let k = keys(&t);
         let f = facts(&k);
-        let req = Request { keys: &k, facts: &f, questions: &[], rewrite: None, instruction: Some("Behandlung wöchentlich erwähnen"), blocks: &[] };
+        let req = Request { keys: &k, facts: &f, questions: &[], rewrite: None, instruction: Some("Behandlung wöchentlich erwähnen"), blocks: &[], style: &[] };
         let p = prepare(&t, &frame(), &req, &patient(), dict()).unwrap();
         let date = p.map.entries().iter().find(|e| e.token.starts_with("[DATUM")).unwrap().token.clone();
         let person = p.map.entries().iter().find(|e| e.token.starts_with("[PERSON")).unwrap().token.clone();
@@ -702,7 +728,7 @@ mod tests {
             "Teufelskreis".to_string(),
             crate::textblock::for_ai("<p>{Frau/Herr} {Nachname}: Schmerzen und Stimmung verstärken sich gegenseitig.</p>", Some(Gender::W)),
         )];
-        let req = Request { keys: &k, facts: &f, questions: &[], rewrite: None, instruction: None, blocks: &blocks };
+        let req = Request { keys: &k, facts: &f, questions: &[], rewrite: None, instruction: None, blocks: &blocks, style: &[] };
         let p = prepare(&t, &frame(), &req, &patient(), dict()).unwrap();
         let msg = p.user.get();
         assert!(msg.contains("[T1] (Teufelskreis) Pat.: Schmerzen und Stimmung"), "{msg}");
@@ -719,6 +745,33 @@ mod tests {
         assert_eq!(r[0].parsed.sentences[0].text, "Schmerzen und Stimmung verstärken sich gegenseitig.");
         assert_eq!(r[0].parsed.unsupported, vec![0], "a block alone backs nothing");
         assert_eq!(r[0].parsed.sentences[1].facts, vec![0], "T is not stored as a source");
+    }
+
+    #[test]
+    fn style_exemplars_go_once_in_the_system_prompt_and_back_nothing() {
+        let t = template();
+        let k = keys(&t);
+        let f = facts(&k);
+        // An exemplar is redacted when stored; a name of this patient or a date left in it is
+        // still pseudonymized on the way out.
+        let style = vec![("DRV 2023".to_string(), "Frau [Name] befindet sich seit dem 02.05.2019 in Behandlung; Frau Beispiel auch.".to_string())];
+        let req = Request { keys: &k, facts: &f, questions: &[], rewrite: None, instruction: None, blocks: &[], style: &style };
+        let p = prepare(&t, &frame(), &req, &patient(), dict()).unwrap();
+        let system = p.system.get();
+        assert!(system.contains("Stilbeispiele") && system.contains("[S1] DRV 2023") && system.contains("Ein Stilbeispiel ist nie eine Quelle"), "{system}");
+        assert!(!system.contains("02.05.2019") && !system.contains("Beispiel auch"), "{system}");
+        assert!(!p.user.get().contains("Stilbeispiele"), "not repeated in the message");
+        assert_eq!(p.preview().shared.len(), 1);
+        assert!(p.preview().shared[0].starts_with("Stilbeispiele") && p.preview().shared[0].contains("[DATUM_"));
+        let without = prepare(&t, &frame(), &Request { style: &[], ..req }, &patient(), dict()).unwrap();
+        assert_ne!(without.prompt_hash, p.prompt_hash, "the rules are part of the prompt");
+        assert!(without.preview().shared.is_empty() && !without.system.get().contains("Stilbeispiel"));
+        assert_ne!(without.digest, p.digest);
+        let a = k[0].clone();
+        let answer = format!(r#"{{"sections": [{{"key": "{a}", "sentences": [{{"text": "Sie befindet sich in Behandlung [S1].", "sources": ["S1"]}}]}}]}}"#);
+        let r = parse(&answer, &p, &f).unwrap();
+        assert_eq!(r[0].parsed.sentences[0].text, "Sie befindet sich in Behandlung.");
+        assert_eq!(r[0].parsed.unsupported, vec![0], "an exemplar is no source");
     }
 
     #[test]

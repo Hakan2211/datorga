@@ -17,6 +17,7 @@ import { ReleaseDialog } from '@/components/briefe/release'
 import { SendDialog } from '@/components/briefe/send-dialog'
 import { TextBlockTools } from '@/components/briefe/textblock-menu'
 import { DeleteReport } from '@/components/delete-button'
+import { StyleFromReportButton } from '@/components/style-exemplars'
 import { ReportDocument } from '@/components/report-document'
 import { ReportPreview } from '@/components/report-preview'
 import { Button } from '@/components/ui/button'
@@ -599,6 +600,7 @@ function LetterEditor({ view, letter }: { view: ReportView; letter: Letter }) {
                         <Send /> {t('briefe.markSent')}
                       </Button>
                     )}
+                    <StyleFromReportButton reportId={report.id} />
                   </>
                 )}
                 {!readOnly && pending === 0 && (

@@ -97,6 +97,9 @@ pub struct Parsed {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct Preview {
+    /// Sent with every message (in the system prompt): her style exemplars (slice 49).
+    #[serde(default)]
+    pub shared: Vec<String>,
     pub messages: Vec<String>,
     pub tokens: Vec<TokenView>,
     pub digest: String,
@@ -119,6 +122,7 @@ impl From<&TokenEntry> for TokenView {
 impl Prepared {
     pub fn preview(&self) -> Preview {
         Preview {
+            shared: Vec::new(),
             messages: self.chunks.iter().map(|c| c.user.get().clone()).collect(),
             tokens: self.map.entries().iter().map(TokenView::from).collect(),
             digest: self.digest.clone(),
@@ -278,7 +282,11 @@ pub fn prepare(
 }
 
 pub fn sha256(s: &str) -> String {
-    hex::encode(Sha256::digest(s.as_bytes()))
+    sha256_bytes(s.as_bytes())
+}
+
+pub fn sha256_bytes(b: &[u8]) -> String {
+    hex::encode(Sha256::digest(b))
 }
 
 static THINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<think>.*?</think>").expect("valid regex"));

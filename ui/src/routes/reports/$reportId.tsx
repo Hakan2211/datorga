@@ -36,6 +36,7 @@ import { CheckStep } from '@/components/lotse/check-step'
 import { FinishStep } from '@/components/lotse/finish-step'
 import { Page, PageHeader } from '@/components/app-shell'
 import { DeleteReport } from '@/components/delete-button'
+import { StyleFromReportButton } from '@/components/style-exemplars'
 import { StatusBadge, Stepper, StickyActionBar, formatDate, stepStates } from '@/components/bits'
 import { useReportExport, type ExportFormat } from '@/components/report-export'
 import { ReportDocument, type DocumentFrame } from '@/components/report-document'
@@ -938,6 +939,7 @@ function ExportCard({
         <Button variant="outline" onClick={() => exportAs.mutate('docx')} disabled={exportAs.isPending}>
           <Download /> {t('report.exportDocx')}
         </Button>
+        {view.report.kind !== 'sitzungsnotiz' && view.report.signed_at && <StyleFromReportButton reportId={view.report.id} />}
       </CardContent>
     </Card>
   )

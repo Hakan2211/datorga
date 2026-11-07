@@ -102,6 +102,10 @@ import type { Recipient } from '@/bindings/Recipient'
 import type { RecipientInput } from '@/bindings/RecipientInput'
 import type { TextBlock } from '@/bindings/TextBlock'
 import type { TextBlockInput } from '@/bindings/TextBlockInput'
+import type { Imported } from '@/bindings/Imported'
+import type { StyleExemplar } from '@/bindings/StyleExemplar'
+import type { StyleExemplarInput } from '@/bindings/StyleExemplarInput'
+import type { StyleReview } from '@/bindings/StyleReview'
 import type { SentVia } from '@/bindings/SentVia'
 
 export type InitResult = {
@@ -243,15 +247,19 @@ export type DraftChoice = {
   allFacts: boolean
   /** Leave the Vorbericht out. */
   withoutPrior?: boolean
+  /** Leave her style exemplars out. */
+  withoutStyle?: boolean
 }
 /** `skipped`: sections no fact is tagged for (nothing sent); `untagged`: facts from before tagging. */
 export type DraftPreview = ExtractPreview & { skipped: string[]; untagged: number }
 /** The last signed Bericht of the case, which drafts see too (`sections`: those with text they draw on). */
 export type PriorInfo = { report_id: string; kind: ApplicationKind | null; seq: number | null; signed_at: string | null; sections: number }
 /** `since`: when the previous application was created (sessions after it are the default choice). */
-export type DraftSources = { facts: EpisodeFact[]; since: string | null; answers: number; prior: PriorInfo | null }
+export type DraftSources = { facts: EpisodeFact[]; since: string | null; answers: number; prior: PriorInfo | null; style: number }
 /** The material rail of a letter: what is ticked, and how much there is. */
-export type LetterSources = { material: Material; facts: number; answers: number; prior: PriorInfo | null; deadline: string | null; textblocks: number }
+export type LetterSources = { material: Material; facts: number; answers: number; prior: PriorInfo | null; deadline: string | null; textblocks: number; style: number }
+/** A signed Bericht or letter offered as a style exemplar. */
+export type StyleSource = { template_key: string; title: string; text: string }
 /** The Gutachter-Check of step 4 (`stale`: the text changed since; `sections`: what a check would read now). */
 export type ReviewView = { review: ReportReview | null; stale: boolean; sections: number }
 /** One question of the Lotse "Fragen" step (slice 38). */
@@ -623,6 +631,15 @@ export const api = {
   updateTextblock: (id: string, input: TextBlockInput) => invoke<TextBlock>('textblock_update', { id, input }),
   deleteTextblock: (id: string) => invoke<void>('textblock_delete', { id }),
   restoreTextblocks: () => invoke<number>('textblocks_restore'),
+  /** Reads a PDF, DOCX, text file, photo or scan locally (text layer, else Windows OCR). */
+  readDocument: (path: string, purpose: 'request' | 'style') => invoke<Imported>('document_read', { path, purpose }),
+  ocrAvailable: () => invoke<boolean>('ocr_available'),
+  styleExemplars: () => invoke<StyleExemplar[]>('style_list'),
+  styleReview: (text: string, extra: [EntityKind, string][], keep: string[]) => invoke<StyleReview>('style_review', { text, extra, keep }),
+  styleSource: (reportId: string) => invoke<StyleSource>('style_source', { reportId }),
+  createStyleExemplar: (input: StyleExemplarInput) => invoke<StyleExemplar>('style_create', { input }),
+  updateStyleExemplar: (id: string, input: StyleExemplarInput, active: boolean) => invoke<StyleExemplar>('style_update', { id, input, active }),
+  deleteStyleExemplar: (id: string) => invoke<void>('style_delete', { id }),
   /** The block's HTML for this letter, placeholders filled from the patient (counts the use). */
   insertTextblock: (id: string, reportId: string) => invoke<string>('textblock_insert', { id, reportId }),
   practice: () => invoke<Practice>('practice_get'),
@@ -765,6 +782,7 @@ export const q = {
   letters: (patientId?: string) =>
     queryOptions({ queryKey: ['letters', patientId ?? 'all'], queryFn: () => api.letters(patientId) }),
   recipients: (query = '') => queryOptions({ queryKey: ['recipients', query], queryFn: () => api.recipients(query) }),
+  styleExemplars: () => queryOptions({ queryKey: ['style'], queryFn: api.styleExemplars }),
   textblocks: (templateKey: string | null = null) =>
     queryOptions({ queryKey: ['textblocks', templateKey ?? 'all'], queryFn: () => api.textblocks(templateKey) }),
   patientRecipients: (patientId: string) =>

@@ -14,6 +14,7 @@ import type { Material } from '@/bindings/Material'
 import type { RequestSection } from '@/bindings/RequestSection'
 import type { SectionDef } from '@/bindings/SectionDef'
 import { SectionCard, formatDate } from '@/components/bits'
+import { DocumentButton } from '@/components/document-button'
 import { RedactionDialog } from '@/components/fact-draft'
 import { Sentences } from '@/components/report-draft'
 import { Button } from '@/components/ui/button'
@@ -23,6 +24,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { api, errorMessage, q, type LetterChoice, type ReportView } from '@/lib/api'
+import { appendText } from '@/lib/documents'
 import { decideUnbacked, unbackedSentences } from '@/lib/editor'
 import { germanDay } from '@/lib/letters'
 import { isBlank } from '@/lib/report'
@@ -85,6 +87,8 @@ export function LetterAiCard({
   // Textbausteine are wording, not material: alone they don't make a letter.
   const nothing = rows.every((r) => !material[r.key] || r.count === 0) && !instruction.trim()
   rows.push({ key: 'textblocks', label: t('letterAi.textblocks'), count: s?.textblocks ?? 0, hint: t('letterAi.textblocksHint') })
+  // Style exemplars too; offered once she has one for this type (Vorlagen → Ihr Schreibstil).
+  if (s?.style) rows.push({ key: 'style', label: t('letterAi.style'), count: s.style, hint: t('letterAi.styleHint') })
 
   return (
     <SectionCard
@@ -248,6 +252,15 @@ export function RequestCard({
     onError: (e) => toast.error(errorMessage(e)),
   })
 
+  // A read document goes below what is there and is saved at once.
+  const imported = async (added: string) => {
+    clearTimeout(timer.current)
+    const v = appendText(pending.current ?? text, added)
+    setText(v)
+    setOpen(true)
+    await saveText(v)
+  }
+
   const answered = (key: string | null) => !!key && !isBlank(bodies[key] ?? '')
   const deadline = sources.data?.deadline
   const linked = letter.questions.some((x) => x.section_key)
@@ -255,9 +268,12 @@ export function RequestCard({
 
   if (!open) {
     return (
-      <Button variant="outline" size="sm" className="w-full" onClick={() => setOpen(true)} data-testid="letter-request-open">
-        <FileQuestion /> {t('letterAi.requestAdd')}
-      </Button>
+      <div className="flex gap-2">
+        <Button variant="outline" size="sm" className="flex-1" onClick={() => setOpen(true)} data-testid="letter-request-open">
+          <FileQuestion /> {t('letterAi.requestAdd')}
+        </Button>
+        <DocumentButton purpose="request" onRead={(i) => imported(i.text)} testId="letter-request-file" />
+      </div>
     )
   }
   return (
@@ -280,7 +296,10 @@ export function RequestCard({
         className="max-h-60 text-[13px]"
         data-testid="letter-request"
       />
-      <p className="text-[11px] text-muted-foreground">{t('letterAi.requestHint')}</p>
+      <div className="flex items-start gap-2">
+        <p className="flex-1 text-[11px] text-muted-foreground">{t('letterAi.requestHint')}</p>
+        <DocumentButton purpose="request" onRead={(i) => imported(i.text)} testId="letter-request-file" />
+      </div>
       {deadline && letter.follow_up_on !== deadline && (
         <Button variant="outline" size="sm" className="w-full" onClick={() => onDeadline(deadline)} data-testid="letter-deadline">
           <CalendarClock /> {t('letterAi.deadline', { date: germanDay(deadline) })}

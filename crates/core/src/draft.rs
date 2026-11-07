@@ -36,7 +36,7 @@ use crate::templates::{Audience, FieldKind, Layout, SectionDef, Template};
 use crate::{Error, Result};
 
 /// Bump on any change to the prompt or the answer format.
-pub const PROMPT_VERSION: &str = "draft-2026.5";
+pub const PROMPT_VERSION: &str = "draft-2026.7";
 
 /// Fact characters per request, like `extract::CHUNK_CHARS` (fits a 16k-context local model).
 pub const FACT_CHARS: usize = 24_000;
@@ -131,6 +131,9 @@ pub struct Request<'a> {
     /// Current plain text per section, sent along so the draft only adds to it ("ergänzen").
     pub existing: &'a [(String, String)],
     pub instruction: Option<&'a str>,
+    /// Her style exemplars for this document type as (title, excerpt, see [`crate::style`]):
+    /// sent once in the system prompt, wording only, never a source.
+    pub style: &'a [(String, String)],
 }
 
 /// One request: the draft for section `key`.
@@ -155,11 +158,14 @@ pub struct Prepared {
     pub prompt_hash: String,
     /// SHA-256 over all outgoing messages: what the preview showed is what is sent.
     pub digest: String,
+    /// The style exemplars as sent with every section (inside the system prompt).
+    pub shared: Vec<String>,
 }
 
 impl Prepared {
     pub fn preview(&self) -> Preview {
         Preview {
+            shared: self.shared.clone(),
             messages: self.sections.iter().map(|s| s.user.get().clone()).collect(),
             tokens: self.map.entries().iter().map(TokenView::from).collect(),
             digest: self.digest.clone(),
@@ -534,9 +540,15 @@ pub fn prepare(template: &Template, frame: &Frame, req: &Request, patient: &Pati
     }
 
     let mut p = Pseudonymizer::new(dict);
-    let system_raw = system_prompt(template, frame, facts.iter().any(|f| f.prior));
+    let mut system_raw = system_prompt(template, frame, facts.iter().any(|f| f.prior));
+    if !req.style.is_empty() {
+        system_raw.push_str(&format!(
+            "\n{} Die Beispiele sind ganze Schreiben: für diesen Abschnitt zählt, wie sie den entsprechenden Teil schreibt.\n",
+            crate::style::PROMPT_RULES
+        ));
+    }
     let prompt_hash = sha256(&format!("{PROMPT_VERSION}\n{system_raw}"));
-    let system = p.pseudonymize(&system_raw)?;
+    let (system, shared) = crate::compose::with_style(&mut p, &system_raw, req.style, patient)?;
     let (mut sections, mut skipped) = (Vec::new(), Vec::new());
     for def in defs {
         let subset = section_facts(facts, &def.key, req.tag_keys);
@@ -567,7 +579,7 @@ pub fn prepare(template: &Template, frame: &Frame, req: &Request, patient: &Pati
         h.update(k);
     }
     let untagged = facts.iter().filter(|f| !f.own && !f.prior && f.bericht.is_none()).count();
-    Ok(Prepared { system, sections, skipped, untagged, map: p.into_map(), prompt_hash, digest: hex::encode(h.finalize()) })
+    Ok(Prepared { system, sections, skipped, untagged, map: p.into_map(), prompt_hash, digest: hex::encode(h.finalize()), shared })
 }
 
 pub(crate) static TOKEN: LazyLock<Regex> =
@@ -766,7 +778,7 @@ mod tests {
     /// Prepares `k` over `facts` (tag filtering on, no existing text).
     fn prep(k: &[&str], facts: &[InputFact], dict: Dictionary, instruction: Option<&str>) -> Result<Prepared> {
         let (k, tags) = (keys(k), tag_keys());
-        prepare(&bericht(), &frame(), &Request { keys: &k, facts, tag_keys: &tags, existing: &[], instruction }, &patient(), dict)
+        prepare(&bericht(), &frame(), &Request { keys: &k, facts, tag_keys: &tags, existing: &[], instruction, style: &[] }, &patient(), dict)
     }
 
     #[test]
@@ -843,7 +855,7 @@ mod tests {
         assert!(!m.contains("Erzieherin") && !m.contains("Urlaub"));
         // A section outside the tag vocabulary (Umwandlung, Fortführung) gets everything.
         let k = keys(&["symptomatik_befund"]);
-        let all = prepare(&bericht(), &frame(), &Request { keys: &k, facts: &facts, tag_keys: &[], existing: &[], instruction: None }, &patient(), Dictionary::new()).unwrap();
+        let all = prepare(&bericht(), &frame(), &Request { keys: &k, facts: &facts, tag_keys: &[], existing: &[], instruction: None, style: &[] }, &patient(), Dictionary::new()).unwrap();
         assert_eq!(all.sections[0].facts, vec![0, 1, 2, 3, 4]);
         // Only facts shown in a request may be cited.
         let out = parse(r#"[{"text": "Panik im Bus.", "facts": [1]}, {"text": "Erzieherin.", "facts": [2]}]"#, &p.sections[0], &facts, &p.map).unwrap();
@@ -857,7 +869,7 @@ mod tests {
         let (k, tags) = (keys(&["symptomatik_befund", "soziodemographie"]), tag_keys());
         let existing = vec![("symptomatik_befund".to_string(), plain_text("<p>Frau Beispiel berichtet <strong>Panik</strong> &amp; Unruhe.</p><ul><li><p>seit Mai</p></li></ul>"))];
         assert_eq!(existing[0].1, "Frau Beispiel berichtet Panik & Unruhe.\nseit Mai");
-        let req = Request { keys: &k, facts: &facts, tag_keys: &tags, existing: &existing, instruction: None };
+        let req = Request { keys: &k, facts: &facts, tag_keys: &tags, existing: &existing, instruction: None, style: &[] };
         let p = prepare(&bericht(), &frame(), &req, &patient(), Dictionary::from_patient(&patient())).unwrap();
         let m = p.sections[0].user.get();
         assert!(p.sections[0].with_existing && !p.sections[1].with_existing);
@@ -975,7 +987,7 @@ mod tests {
         assert!(facts[1].text.ends_with(" …") && facts[1].text.chars().count() <= MAX_PRIOR_CHARS + 2);
         let frame = Frame { method: Method::Vt, age_group: AgeGroup::Adult, target: Target::Ptv3(ApplicationKind::Fortfuehrung) };
         let k = keys(&["verlauf", "begruendung_planung"]);
-        let req = Request { keys: &k, facts: &facts, tag_keys: &[], existing: &[], instruction: None };
+        let req = Request { keys: &k, facts: &facts, tag_keys: &[], existing: &[], instruction: None, style: &[] };
         let p = prepare(&t, &frame, &req, &patient(), Dictionary::from_patient(&patient())).unwrap();
         assert!(p.system.get().contains("Veränderung seit dem Vorbericht"));
         assert_eq!(p.untagged, 1, "the Vorbericht is no untagged fact");

@@ -9,12 +9,14 @@ import type { Letter } from '@/bindings/Letter'
 import type { Recipient } from '@/bindings/Recipient'
 import { RecipientCommand } from '@/components/briefe/recipient-picker'
 import { Badge } from '@/components/ui/badge'
+import { DocumentButton } from '@/components/document-button'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { api, errorMessage, q } from '@/lib/api'
+import { appendText } from '@/lib/documents'
 import { letterTemplates } from '@/lib/letters'
 import { cn } from '@/lib/utils'
 
@@ -216,7 +218,10 @@ export function NewLetterForm({
       <section className="space-y-2">
         {withRequest ? (
           <>
-            <Label htmlFor="new-letter-request">{t('letterAi.requestTitle')}</Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="new-letter-request">{t('letterAi.requestTitle')}</Label>
+              <DocumentButton purpose="request" variant="ghost" onRead={(i) => setRequest((r) => appendText(r, i.text))} testId="new-letter-request-file" />
+            </div>
             <Textarea
               id="new-letter-request"
               rows={4}
@@ -229,9 +234,22 @@ export function NewLetterForm({
             <p className="text-xs text-muted-foreground">{t('letterAi.requestHint')}</p>
           </>
         ) : (
-          <Button variant="ghost" size="sm" className="px-0" onClick={() => setWithRequest(true)} data-testid="new-letter-with-request">
-            <FileQuestion /> {t('letterAi.requestAdd')}
-          </Button>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button variant="ghost" size="sm" className="px-0" onClick={() => setWithRequest(true)} data-testid="new-letter-with-request">
+              <FileQuestion /> {t('letterAi.requestAdd')}
+            </Button>
+            <DocumentButton
+              purpose="request"
+              variant="ghost"
+              className="px-0"
+              label={t('documents.pick')}
+              onRead={(i) => {
+                setRequest((r) => appendText(r, i.text))
+                setWithRequest(true)
+              }}
+              testId="new-letter-request-file"
+            />
+          </div>
         )}
       </section>
 

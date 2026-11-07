@@ -55,6 +55,7 @@ impl Brief {
 
     pub fn preview(&self) -> Preview {
         Preview {
+            shared: Vec::new(),
             messages: vec![self.text.get().clone()],
             tokens: self.map.entries().iter().map(TokenView::from).collect(),
             digest: self.digest.clone(),

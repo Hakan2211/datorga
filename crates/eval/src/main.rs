@@ -420,7 +420,7 @@ fn draft_episode(
                 return Ok(score::section(suite, ep, key, &all, &subset, &[], 0));
             }
             let input = input_facts(suite, &all, &subset, tag_of);
-            let req = draft::Request { keys: std::slice::from_ref(key), facts: &input, tag_keys: &keys, existing: &[], instruction: None };
+            let req = draft::Request { keys: std::slice::from_ref(key), facts: &input, tag_keys: &keys, existing: &[], instruction: None, style: &[] };
             let prepared = draft::prepare(&ep.bericht, &frame, &req, &first.patient, dict.clone()).map_err(|e| e.to_string())?;
             let Some(section) = prepared.sections.first() else {
                 // No fact tagged for the section: nothing sent, an empty draft.
