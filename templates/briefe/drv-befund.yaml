@@ -1,0 +1,139 @@
+# Befundbericht an die Rentenversicherung (slice 46): EM-Rente (Erst- oder Weitergewährung), Reha.
+# Structure from the pilot therapist's letters; hints, questions and starter text are our own wording.
+# Draft catalogue, to be reviewed by the therapist.
+key: drv-befund
+version: "2026.1"
+title: Befundbericht Rentenversicherung
+description: Psychischer Befund und Leistungsvermögen, z. B. zur Erwerbsminderungsrente oder Reha
+category: bericht
+layout: letter
+audience: behoerde
+release: true
+recipients: [rentenversicherung]
+subject: "Befundbericht zur Beurteilung des psychischen Befundes von {Frau/Herrn} {Name}, geb. {Geburtsdatum}"
+refs:
+  - label: Versicherungsnummer
+    from: pension_no
+    required: true
+closing: Bei Fragen stehe ich Ihnen gerne zur Verfügung.
+rules:
+  target_pages: 2
+  signature_required: true
+intro: >-
+  Befundbericht an die Rentenversicherung. Beschreibt Befund und Symptomatik so konkret, dass die
+  Auswirkungen auf das Leistungsvermögen im Erwerbsleben nachvollziehbar werden. Die Einschätzung des
+  Leistungsvermögens stammt von der Therapeutin; die Entscheidung trifft die Rentenversicherung.
+sections:
+  - key: anlass
+    heading: ""
+    field: prose
+    starter: |-
+      {Frau/Herr} {Name}, geb. {Geburtsdatum}, befindet sich seit dem {Behandlung seit} in meiner ambulanten psychotherapeutischen Behandlung. Auf Ihre Anfrage hin berichte ich wie folgt.
+    hints:
+      - text: Seit wann in Behandlung, auf wessen Anfrage berichtet wird
+
+  - key: behandlung
+    heading: Behandlung und Setting
+    field: prose
+    hints:
+      - text: Beginn, Frequenz und Form der Behandlung (Einzel, Gruppe), Datum der letzten Behandlung
+      - text: Sprache der Behandlung (Deutsch, Muttersprache, mit Sprachmittlung)
+      - text: Vorbehandlungen (ambulant, stationär, Reha), soweit bekannt
+    asks:
+      - key: frequenz
+        question: Wie oft finden die Termine statt, einzeln oder in der Gruppe?
+        chips: [wöchentlich, 14-täglich, Einzeltherapie]
+      - key: sprache
+        question: In welcher Sprache findet die Behandlung statt?
+        chips: [Deutsch, in der Muttersprache, mit Sprachmittlung]
+      - key: letzte
+        question: Datum der letzten Behandlung?
+      - key: vorbehandlungen
+        question: Gab es Vorbehandlungen (ambulant, stationär, Reha)?
+        chips: [keine, nicht bekannt]
+
+  - key: diagnosen
+    heading: Diagnosen (ICD-10)
+    field: diagnoses
+    ai_allowed: false
+    hints:
+      - text: ICD-10-Diagnosen mit Angabe der Diagnosesicherheit
+
+  - key: somatik
+    heading: Somatische Begleiterkrankungen
+    field: prose
+    optional: true
+    hints:
+      - text: Körperliche Erkrankungen, soweit sie für die psychische Belastbarkeit relevant sind
+      - text: Aktuelle Medikation, nur wie von der Therapeutin angegeben
+    asks:
+      - key: somatisch
+        question: Welche körperlichen Erkrankungen sind bekannt?
+        chips: [keine bekannt, nicht relevant]
+      - key: medikation
+        question: Aktuelle Medikation (Präparat, Dosis, verordnet von)?
+        chips: [keine, nicht bekannt]
+
+  - key: befund
+    heading: Psychopathologischer Befund und Symptomatik
+    field: prose
+    hints:
+      - text: Stimmung und Affekt, Antrieb, Ängste
+      - text: Schmerzerleben und körperliche Beschwerden, Schlaf
+      - text: Konzentration, Gedächtnis, Auffassung und Durchhaltevermögen
+      - text: Belastbarkeit im Alltag, Suizidalität
+      - text: Verlauf und Schwere der Symptomatik in der Behandlung
+    asks:
+      - key: befund
+        question: Psychischer Befund (Stimmung, Antrieb, Konzentration, Suizidalität)?
+        chips: [keine akute Suizidalität]
+      - key: schlaf_schmerz
+        question: Wie sind Schlaf und Schmerzerleben?
+        chips: [unauffällig, nicht bekannt]
+      - key: verlauf
+        question: Wie hat sich die Symptomatik seit Behandlungsbeginn entwickelt?
+        chips: [unverändert, wechselhaft, verschlechtert, gebessert]
+
+  - key: beurteilung
+    heading: Psychotherapeutische Beurteilung
+    field: prose
+    hints:
+      - text: >-
+          Quantitatives Leistungsvermögen aus psychotherapeutischer Sicht (unter 3 Stunden, 3 bis unter 6
+          Stunden, 6 Stunden und mehr täglich), nur wenn die Therapeutin es einschätzt
+      - text: Qualitative Einschränkungen (Stress, Zeitdruck, Kundenkontakt, Schichtarbeit, Verantwortung)
+      - text: Prognose und was einer Besserung im Weg steht
+    asks:
+      - key: leistung
+        question: Wie viele Stunden täglich kann Pat. aus Ihrer Sicht arbeiten?
+        chips: [unter 3 Stunden, 3 bis unter 6 Stunden, 6 Stunden und mehr, keine Einschätzung]
+      - key: qualitativ
+        question: Welche Tätigkeiten oder Arbeitsbedingungen sind nicht mehr zumutbar?
+      - key: prognose
+        question: Ist mit einer Besserung zu rechnen, in welchem Zeitraum?
+        chips: [nicht absehbar, eher ungünstig]
+
+  - key: behandlungsbeduerftigkeit
+    heading: Behandlungsbedürftigkeit
+    field: prose
+    hints:
+      - text: Ob und wie lange die Behandlung fortgesetzt wird, was sie erreichen soll
+    asks:
+      - key: weiter
+        question: Wird die Behandlung fortgesetzt, wie lange und mit welchem Ziel?
+
+  - key: empfehlung
+    heading: Zusammenfassende Empfehlung
+    field: prose
+    hints:
+      - text: Worum es geht (Erst- oder Weitergewährung der Erwerbsminderungsrente, Reha) und die Empfehlung
+      - text: Bei befristeter Rente das Ende der Befristung
+    asks:
+      - key: anliegen
+        question: Worum geht es?
+        chips: [Weitergewährung der Erwerbsminderungsrente, Erstantrag Erwerbsminderungsrente, Rehabilitation]
+      - key: befristung
+        question: Ist die Rente befristet, bis wann?
+        chips: [unbefristet, nicht bekannt]
+      - key: empfehlung
+        question: Was empfehlen Sie?

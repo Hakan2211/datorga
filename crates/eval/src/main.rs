@@ -403,7 +403,7 @@ fn draft_episode(
     answered_by: &mut Option<String>,
 ) -> EpisodeReport {
     let first = &suite.cases[ep.sessions[0]];
-    let frame = Frame { method: first.method, age_group: first.age_group, kind: ep.kind };
+    let frame = Frame { method: first.method, age_group: first.age_group, target: thera_core::draft::Target::Ptv3(ep.kind) };
     let mut dict = thera_core::pseudo::Dictionary::from_patient(&first.patient);
     for &c in &ep.sessions {
         for term in &suite.cases[c].terms {

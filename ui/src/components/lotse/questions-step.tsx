@@ -1,3 +1,4 @@
+import i18n from '@/lib/i18n'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -156,8 +157,9 @@ function groupBySection(items: QuestionView[]): [string, QuestionView[]][] {
   return [...groups.entries()]
 }
 
-/** The PTV 3 heading up to its first comma or parenthesis. */
+/** The PTV 3 heading up to its first comma or parenthesis; a letter's untitled opening paragraph. */
 export function shortHeading(h: string) {
+  if (!h.trim()) return i18n.t('lotse.opening')
   const i = h.search(/[,(]/)
   return (i > 0 ? h.slice(0, i) : h).trim()
 }

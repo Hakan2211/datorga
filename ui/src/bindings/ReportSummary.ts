@@ -19,4 +19,9 @@ sessions_left: number | null,
 /**
  * … and the planned session that uses up the last one, when the calendar has it.
  */
-due_by: string | null, };
+due_by: string | null, template_key: string, 
+/**
+ * Letter-type Berichte (slice 46): the type's title ("Befundbericht Rentenversicherung");
+ * `None` for PTV 3.
+ */
+title: string | null, };

@@ -20,7 +20,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { PatientLabel } from '@/components/patient-label'
 import { NewReportDialog } from '@/components/lotse/new-report'
 import { q } from '@/lib/api'
-import { BOARD_COLUMNS, boardColumn, matchesReport, noReportFilter, sortBoard, type ReportFilter } from '@/lib/queue'
+import { BOARD_COLUMNS, boardColumn, matchesReport, noReportFilter, reportLabel, sortBoard, type ReportFilter } from '@/lib/queue'
 import { cn, storedChoice } from '@/lib/utils'
 
 export const Route = createFileRoute('/reports/')({ component: Reports })
@@ -100,6 +100,11 @@ function Reports() {
                   {t(`enums.kind.${k}`)}
                 </FilterChip>
               ))}
+              {all.some((r) => r.title) && (
+                <FilterChip active={filter.kind === 'letter'} onClick={() => toggle('kind', 'letter')} data-testid="reports-filter-letter">
+                  {t('lotse.group.more')}
+                </FilterChip>
+              )}
             </div>
             {view === 'board' ? (
               <Board reports={shown} />
@@ -162,9 +167,8 @@ function ReportCard({ report: r }: { report: ReportSummary }) {
             </Badge>
           )}
         </div>
-        <div className="mt-1 truncate text-sm text-muted-foreground">
-          {r.kind ? t(`enums.kind.${r.kind}`) : '—'}
-          {r.kind === 'fortfuehrung' && r.seq ? ` Nr. ${r.seq}` : ''}
+        <div className="mt-1 truncate text-sm text-muted-foreground" title={reportLabel(r, t)}>
+          {reportLabel(r, t)}
         </div>
         {open ? (
           <>

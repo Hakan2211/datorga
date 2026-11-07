@@ -6,6 +6,7 @@ import { AlertTriangle, ArrowLeftRight, FileText, History, LineChart, RefreshCw 
 import type { ApplicationKind } from '@/bindings/ApplicationKind'
 import type { SectionDraft } from '@/bindings/SectionDraft'
 import { formatDate } from '@/components/bits'
+import { LetterStartCard } from '@/components/lotse/letter-start'
 import { PatientFormDialog } from '@/components/patient-form'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -50,7 +51,7 @@ export function StartStep({
   const qc = useQueryClient()
   const { report, template, patient, episode, application } = view
   const readOnly = report.status === 'signed' || report.status === 'exported'
-  const candidate = useQuery({ ...q.berichtCandidates(episode?.id), enabled: !!episode }).data?.[0]
+  const candidate = useQuery({ ...q.berichtCandidates(episode?.id), enabled: !!episode && report.kind !== 'brief' }).data?.[0]
   const changeable =
     !readOnly &&
     drafts.length === 0 &&
@@ -74,85 +75,96 @@ export function StartStep({
   const reportDiagnoses = diagDef ? parseDiagnoses(bodies[diagDef.key] ?? '') : null
   const diagnosesDiffer =
     !readOnly && !!diagDef && !!episode && episode.diagnoses.length > 0 && !sameDiagnoses(reportDiagnoses!.diagnoses, episode.diagnoses)
-  const stageMissing = !!episode && episode.stage === 'probatorik' && application?.kind !== 'erstantrag'
-  const chiffreMissing = !patient.chiffre?.trim()
+  // A letter-type Bericht is named and has no Antragsart.
+  const isLetter = report.kind === 'brief'
+  const stageMissing = !isLetter && !!episode && episode.stage === 'probatorik' && application?.kind !== 'erstantrag'
+  const chiffreMissing = !isLetter && !patient.chiffre?.trim()
+  const factsLine = (
+    <p className="flex items-center gap-2 pt-1 text-sm text-muted-foreground">
+      <LineChart className="size-4 shrink-0" />
+      {facts.length === 0
+        ? t('lotse.noFactsYet')
+        : since
+          ? t('lotse.sinceLast', { sessions, facts: recent.length })
+          : t('lotse.allFacts', { sessions, facts: recent.length })}
+    </p>
+  )
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]" data-testid="lotse-start">
-      <Card className="self-start">
-        <CardHeader>
-          <CardTitle className="text-base">{t('lotse.kindTitle')}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div role="radiogroup" aria-label={t('lotse.kindTitle')} className="space-y-3">
-            {KINDS.map(({ kind, icon: Icon }) => {
-              const selected = application?.kind === kind
-              const recommended = candidate?.suggested === kind
-              return (
-                <button
-                  key={kind}
-                  type="button"
-                  role="radio"
-                  aria-checked={selected}
-                  disabled={!selected && (!changeable || change.isPending)}
-                  onClick={() => !selected && change.mutate(kind)}
-                  className={cn(
-                    'flex w-full items-start gap-3 rounded-lg border bg-card p-3.5 text-left transition-colors',
-                    selected ? 'border-primary bg-primary/5 ring-1 ring-primary/40' : 'hover:border-primary/40 disabled:opacity-55 disabled:hover:border-border',
-                  )}
-                  data-testid={`lotse-kind-${kind}`}
-                >
-                  <span
+      {isLetter ? (
+        <LetterStartCard view={view} readOnly={readOnly}>
+          {factsLine}
+        </LetterStartCard>
+      ) : (
+        <Card className="self-start">
+          <CardHeader>
+            <CardTitle className="text-base">{t('lotse.kindTitle')}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div role="radiogroup" aria-label={t('lotse.kindTitle')} className="space-y-3">
+              {KINDS.map(({ kind, icon: Icon }) => {
+                const selected = application?.kind === kind
+                const recommended = candidate?.suggested === kind
+                return (
+                  <button
+                    key={kind}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    disabled={!selected && (!changeable || change.isPending)}
+                    onClick={() => !selected && change.mutate(kind)}
                     className={cn(
-                      'mt-1 flex size-4 shrink-0 items-center justify-center rounded-full border',
-                      selected ? 'border-primary' : 'border-muted-foreground/50',
+                      'flex w-full items-start gap-3 rounded-lg border bg-card p-3.5 text-left transition-colors',
+                      selected ? 'border-primary bg-primary/5 ring-1 ring-primary/40' : 'hover:border-primary/40 disabled:opacity-55 disabled:hover:border-border',
                     )}
+                    data-testid={`lotse-kind-${kind}`}
                   >
-                    {selected && <span className="size-2 rounded-full bg-primary" />}
-                  </span>
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-                    <Icon className="size-4" />
-                  </span>
-                  <span className="min-w-0 flex-1 space-y-1.5">
-                    <span className="block pt-1 text-sm font-medium">
-                      {t(`enums.kind.${kind}`)}
-                      {selected && kind === 'fortfuehrung' && application ? ` Nr. ${application.seq}` : ''}
+                    <span
+                      className={cn(
+                        'mt-1 flex size-4 shrink-0 items-center justify-center rounded-full border',
+                        selected ? 'border-primary' : 'border-muted-foreground/50',
+                      )}
+                    >
+                      {selected && <span className="size-2 rounded-full bg-primary" />}
                     </span>
-                    {recommended && candidate && (
-                      <span className="block rounded-md bg-sand px-2 py-1 text-xs text-sand-foreground" data-testid="lotse-recommended">
-                        <span className="font-medium">{t('lotse.recommended')}</span> · {reason(candidate.contingent, t)}
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                      <Icon className="size-4" />
+                    </span>
+                    <span className="min-w-0 flex-1 space-y-1.5">
+                      <span className="block pt-1 text-sm font-medium">
+                        {t(`enums.kind.${kind}`)}
+                        {selected && kind === 'fortfuehrung' && application ? ` Nr. ${application.seq}` : ''}
                       </span>
-                    )}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-          {!changeable && !readOnly && <p className="text-xs text-muted-foreground">{t('lotse.kindLocked')}</p>}
-          <p className="flex items-center gap-2 pt-1 text-sm text-muted-foreground">
-            <LineChart className="size-4 shrink-0" />
-            {facts.length === 0
-              ? t('lotse.noFactsYet')
-              : since
-                ? t('lotse.sinceLast', { sessions, facts: recent.length })
-                : t('lotse.allFacts', { sessions, facts: recent.length })}
-          </p>
-          {sources?.prior && (
-            <p className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="lotse-prior">
-              <History className="size-4 shrink-0" />
-              <span>
-                {t('lotse.prior', {
-                  kind: sources.prior.kind ? t(`enums.kind.${sources.prior.kind}`) : t('lotse.priorBericht'),
-                  date: formatDate(sources.prior.signed_at),
-                })}{' '}
-                <Link to="/reports/$reportId" params={{ reportId: sources.prior.report_id }} search={{ doc: true }} className="underline-offset-2 hover:underline">
-                  {t('lotse.priorOpen')}
-                </Link>
-              </span>
-            </p>
-          )}
-        </CardContent>
-      </Card>
+                      {recommended && candidate && (
+                        <span className="block rounded-md bg-sand px-2 py-1 text-xs text-sand-foreground" data-testid="lotse-recommended">
+                          <span className="font-medium">{t('lotse.recommended')}</span> · {reason(candidate.contingent, t)}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+            {!changeable && !readOnly && <p className="text-xs text-muted-foreground">{t('lotse.kindLocked')}</p>}
+            {factsLine}
+            {sources?.prior && (
+              <p className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="lotse-prior">
+                <History className="size-4 shrink-0" />
+                <span>
+                  {t('lotse.prior', {
+                    kind: sources.prior.kind ? t(`enums.kind.${sources.prior.kind}`) : t('lotse.priorBericht'),
+                    date: formatDate(sources.prior.signed_at),
+                  })}{' '}
+                  <Link to="/reports/$reportId" params={{ reportId: sources.prior.report_id }} search={{ doc: true }} className="underline-offset-2 hover:underline">
+                    {t('lotse.priorOpen')}
+                  </Link>
+                </span>
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -195,7 +207,7 @@ export function StartStep({
                 <li key={def.key} className="flex items-center gap-3 py-2.5 text-sm" data-section={def.key} data-state={state}>
                   <span className="w-5 shrink-0 text-muted-foreground tabular-nums">{def.number}</span>
                   <span className={cn('min-w-0 flex-1 truncate', off && 'text-muted-foreground line-through')} title={def.heading}>
-                    {def.heading}
+                    {def.heading || t('lotse.opening')}
                   </span>
                   {def.optional && !readOnly && (
                     <Button

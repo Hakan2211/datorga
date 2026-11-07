@@ -13,6 +13,7 @@ import {
   FileSignature,
   FileText,
   LayoutList,
+  Mail,
   Mic,
   Sparkles,
   TextSelect,
@@ -95,6 +96,9 @@ function ReportEditor({ view }: { view: ReportView }) {
   const { report, template, patient, episode, application, session } = view
   const readOnly = report.status === 'signed' || report.status === 'exported'
   const isNote = report.kind === 'sitzungsnotiz'
+  // A letter-type Bericht (Rentenversicherung, Pflegegrad, …): the same Lotse; its letter frame
+  // (address, Betreff, Anrede) lives on the letter page.
+  const isLetter = report.kind === 'brief'
   // Target for text picked from the transcript: the section last focused.
   const [activeKey, setActiveKey] = useState(() => template.sections[0]?.key ?? '')
   const [mode, setModeState] = useState<EditorView>(() => (localStorage.getItem(VIEW_KEY) === 'document' ? 'document' : 'sections'))
@@ -208,7 +212,7 @@ function ReportEditor({ view }: { view: ReportView }) {
   const applyFacts = useCallback((edits: FactEdit[]) => flushThen(() => api.applyFacts(report.id, edits)), [flushThen, report.id])
 
   // Bericht drafting from the episode's applied Sitzungsnotiz facts.
-  const drafting = !isNote && !readOnly && !!application
+  const drafting = !isNote && !readOnly && (!!application || (isLetter && !!episode))
   const draftable = useMemo(() => relevantSections.filter((s) => s.field === 'prose' && s.ai_allowed), [relevantSections])
   // A note has drafts only from its Werkstatt.
   const drafts = useQuery(q.reportDrafts(report.id))
@@ -261,7 +265,7 @@ function ReportEditor({ view }: { view: ReportView }) {
   )
 
   // Guided flow for a Bericht; a note's flow is its session's.
-  const flowOn = !isNote && !!application
+  const flowOn = !isNote && (!!application || isLetter)
   const sources = useQuery({ ...q.draftSources(report.id), enabled: flowOn && !readOnly })
   const questions = useQuery({ ...q.reportQuestions(report.id), enabled: flowOn })
   // Questions of a section that already has text are no gap: they don't count as open.
@@ -321,8 +325,11 @@ function ReportEditor({ view }: { view: ReportView }) {
   const selectSection = (section: string) =>
     void navigate({ to: '/reports/$reportId', params: { reportId: report.id }, search: (s: ReportSearch): ReportSearch => ({ ...s, step: 'abschnitte', section }) })
   // "Ganzes Dokument": today's editor as a view, from every step; back to the focus mode from there.
+  // A letter's whole document is the letter page.
   const showDocument = (on: boolean) =>
-    void navigate({ to: '/reports/$reportId', params: { reportId: report.id }, search: (s: ReportSearch) => ({ ...s, step: on ? s.step : 'abschnitte', doc: on || undefined }) })
+    on && isLetter
+      ? void navigate({ to: '/briefe/$briefId', params: { briefId: report.id } })
+      : void navigate({ to: '/reports/$reportId', params: { reportId: report.id }, search: (s: ReportSearch) => ({ ...s, step: on ? s.step : 'abschnitte', doc: on || undefined }) })
   const focusOn = stepOn && viewing === 'abschnitte'
   const openStep = (step: LotseStep) => setStep(step)
   // After a view switch the target exists only once React has rendered it.
@@ -393,16 +400,18 @@ function ReportEditor({ view }: { view: ReportView }) {
             <Link to="/patients/$patientId" params={{ patientId: patient.id }} className="hover:underline">
               {patient.first_name} {patient.last_name}
             </Link>
-            <Badge variant="outline" className="font-mono">
-              {patient.chiffre ?? t('patients.noChiffre')}
-            </Badge>
+            {!isLetter && (
+              <Badge variant="outline" className="font-mono">
+                {patient.chiffre ?? t('patients.noChiffre')}
+              </Badge>
+            )}
             {episode && <span>· {t(`enums.method.${episode.method}`)}, {t(`enums.age_group.${episode.age_group}`)}</span>}
             {session && (
               <Link to="/sessions/$sessionId" params={{ sessionId: session.id }} className="hover:underline">
                 · {t('note.session')} {formatDate(session.scheduled_at ?? session.started_at, true)}
               </Link>
             )}
-            <span className="text-xs">· {template.source}</span>
+            {template.source && <span className="text-xs">· {template.source}</span>}
           </span>
         }
         actions={
@@ -411,6 +420,13 @@ function ReportEditor({ view }: { view: ReportView }) {
               <Button asChild variant="outline" size="sm">
                 <Link to="/reports/$reportId/werkstatt" params={{ reportId: report.id }} data-testid="open-workshop">
                   <Mic /> {t('workshop.open')}
+                </Link>
+              </Button>
+            )}
+            {isLetter && (
+              <Button asChild variant="outline" size="sm">
+                <Link to="/briefe/$briefId" params={{ briefId: report.id }} data-testid="open-as-letter">
+                  <Mail /> {t('lotse.letter.asLetter')}
                 </Link>
               </Button>
             )}
@@ -473,6 +489,7 @@ function ReportEditor({ view }: { view: ReportView }) {
         ) : stepOn && viewing === 'pruefen' ? (
           <CheckStep
             view={view}
+            ai={!isLetter}
             bodies={bodies}
             content={content}
             flush={flush}

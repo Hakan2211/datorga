@@ -86,11 +86,20 @@ export function boardColumn(r: ReportSummary): BoardColumn {
   }
 }
 
-export type ReportFilter = { method: 'VT' | 'TP' | 'AP' | null; kind: ReportSummary['kind'] }
+/** `letter`: the letter-type Berichte (Rentenversicherung, Pflegegrad, …). */
+export type ReportFilter = { method: 'VT' | 'TP' | 'AP' | null; kind: ReportSummary['kind'] | 'letter' }
 export const noReportFilter: ReportFilter = { method: null, kind: null }
 
 export function matchesReport(r: ReportSummary, f: ReportFilter): boolean {
-  return (!f.method || r.method === f.method) && (!f.kind || r.kind === f.kind)
+  const kind = !f.kind || (f.kind === 'letter' ? r.title !== null : r.kind === f.kind)
+  return (!f.method || r.method === f.method) && kind
+}
+
+/** "Umwandlungsantrag", "Fortführungsantrag Nr. 2", or a letter-type Bericht's title. */
+export function reportLabel(r: ReportSummary, t: (key: string) => string): string {
+  if (r.title) return r.title
+  if (!r.kind) return '—'
+  return `${t(`enums.kind.${r.kind}`)}${r.kind === 'fortfuehrung' && r.seq ? ` Nr. ${r.seq}` : ''}`
 }
 
 /** Open Berichte by deadline (sessions left, then planned date), the rest by last change. */

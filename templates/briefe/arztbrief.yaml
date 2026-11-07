@@ -1,0 +1,61 @@
+# Befundbericht an eine Ärztin oder einen Arzt (slice 46): Hausärztin, Neurologe, Psychiaterin.
+# Our own wording. Draft catalogue, to be reviewed by the therapist.
+key: arztbrief
+version: "2026.1"
+title: Befundbericht an Ärzt:in
+description: Befund, Verlauf und Empfehlung für die haus- oder fachärztliche Mitbehandlung
+category: bericht
+layout: letter
+audience: arzt
+release: true
+recipients: [arzt]
+subject: "Befundbericht über {Frau/Herrn} {Name}, geb. {Geburtsdatum}"
+closing: Für Rückfragen stehe ich Ihnen gerne zur Verfügung.
+rules:
+  target_pages: 1
+  signature_required: true
+intro: >-
+  Befundbericht an eine mitbehandelnde Ärztin oder einen mitbehandelnden Arzt. Knapp, mit Befund,
+  Verlauf und dem, was für die Mitbehandlung wichtig ist.
+sections:
+  - key: anlass
+    heading: ""
+    field: prose
+    starter: |-
+      ich berichte Ihnen über {Frau/Herrn} {Name}, geb. {Geburtsdatum}, {die/der} sich seit dem {Behandlung seit} in meiner ambulanten psychotherapeutischen Behandlung befindet.
+    hints:
+      - text: Seit wann in Behandlung, Anlass des Berichts
+
+  - key: diagnosen
+    heading: Diagnosen (ICD-10)
+    field: diagnoses
+    ai_allowed: false
+    hints:
+      - text: ICD-10-Diagnosen mit Angabe der Diagnosesicherheit
+
+  - key: befund
+    heading: Befund und Verlauf
+    field: prose
+    hints:
+      - text: Psychischer Befund, Symptomatik und ihr Verlauf in der Behandlung
+      - text: Datum der letzten Behandlung
+    asks:
+      - key: befund
+        question: Psychischer Befund (Stimmung, Antrieb, Konzentration, Suizidalität)?
+        chips: [keine akute Suizidalität]
+      - key: verlauf
+        question: Wie hat sich die Symptomatik entwickelt?
+        chips: [gebessert, unverändert, verschlechtert]
+
+  - key: therapie
+    heading: Therapie und Empfehlung
+    field: prose
+    hints:
+      - text: Verfahren, Frequenz und Ziele der Psychotherapie
+      - text: Was für die Mitbehandlung wichtig ist (Rückmeldung, Abstimmung, weitere Abklärung)
+    asks:
+      - key: therapie
+        question: Wie wird behandelt (Verfahren, Frequenz) und mit welchem Ziel?
+        chips: [wöchentlich, 14-täglich]
+      - key: empfehlung
+        question: Was möchten Sie der Kollegin bzw. dem Kollegen mitgeben?

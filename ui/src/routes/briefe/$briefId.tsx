@@ -4,15 +4,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { save } from '@tauri-apps/plugin-dialog'
-import { AlertTriangle, BookUser, CheckCircle2, Download, Eye, FileSignature, Plus, Send, Star, X } from 'lucide-react'
+import { AlertTriangle, BookUser, Compass, CheckCircle2, Download, Eye, FileSignature, Plus, Send, Star, X } from 'lucide-react'
 import type { Letter } from '@/bindings/Letter'
 import type { LetterMeta } from '@/bindings/LetterMeta'
 import type { RecipientKind } from '@/bindings/RecipientKind'
-import type { SentVia } from '@/bindings/SentVia'
 import { Page, PageHeader } from '@/components/app-shell'
 import { SectionCard, formatDate } from '@/components/bits'
 import { LetterStatePill } from '@/components/briefe/letter-state'
 import { RecipientPicker } from '@/components/briefe/recipient-picker'
+import { ReleaseDialog } from '@/components/briefe/release'
+import { SendDialog } from '@/components/briefe/send-dialog'
 import { DeleteReport } from '@/components/delete-button'
 import { ReportDocument } from '@/components/report-document'
 import { ReportPreview } from '@/components/report-preview'
@@ -25,7 +26,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { Toggle } from '@/components/ui/toggle'
 import { api, errorMessage, q, type ReportView } from '@/lib/api'
-import { RECIPIENT_KINDS, germanDay, isoDay, linesFromText, placeDate, practiceLine } from '@/lib/letters'
+import { DEFAULT_SALUTATION, RECIPIENT_KINDS, metaOf, germanDay, isoDay, linesFromText, placeDate, practiceLine } from '@/lib/letters'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/briefe/$briefId')({ component: LetterPage })
@@ -41,21 +42,8 @@ function LetterPage() {
 }
 
 const SAVE_DELAY_MS = 700
-const SENT_VIA: SentVia[] = ['post', 'fax', 'email', 'kim', 'personal']
 const NO_CASE = 'none'
 
-const metaOf = (l: Letter): LetterMeta => ({
-  episode_id: l.episode_id,
-  recipient_id: l.recipient_id,
-  recipient: l.recipient,
-  salutation: l.salutation,
-  subject: l.subject,
-  refs: l.refs,
-  place: l.place,
-  letter_date: l.letter_date,
-  follow_up_on: l.follow_up_on,
-  follow_up_note: l.follow_up_note,
-})
 
 function LetterEditor({ view, letter }: { view: ReportView; letter: Letter }) {
   const { t } = useTranslation()
@@ -302,6 +290,13 @@ function LetterEditor({ view, letter }: { view: ReportView; letter: Letter }) {
             <Toggle variant="outline" size="sm" className="px-3" pressed={preview} onPressedChange={setPreview} data-testid="letter-preview-toggle">
               <Eye /> {t('briefe.preview')}
             </Toggle>
+            {template.category === 'bericht' && (
+              <Button asChild variant="outline" size="sm">
+                <Link to="/reports/$reportId" params={{ reportId }} search={{ step: readOnly ? 'fertig' : 'start' }} data-testid="letter-guided">
+                  <Compass /> {t('briefe.guided')}
+                </Link>
+              </Button>
+            )}
             <DeleteReport report={report} label onDeleted={() => void navigate({ to: '/briefe' })} />
           </>
         }
@@ -353,7 +348,7 @@ function LetterEditor({ view, letter }: { view: ReportView; letter: Letter }) {
                         setMeta({
                           recipient_id: r.id,
                           recipient: { kind: r.kind, name: r.name, department: r.department, lines: r.lines },
-                          salutation: r.salutation ?? 'Sehr geehrte Damen und Herren,',
+                          salutation: r.salutation ?? DEFAULT_SALUTATION,
                         })
                       }}
                       trigger={
@@ -514,7 +509,23 @@ function LetterEditor({ view, letter }: { view: ReportView; letter: Letter }) {
                         ) : (
                           <AlertTriangle className={cn('mt-0.5 size-3.5 shrink-0', c.severity === 'block' ? 'text-destructive' : 'text-warning')} />
                         )}
-                        <span className={cn(c.ok && 'text-muted-foreground')}>{c.message}</span>
+                        <span className={cn(c.ok && 'text-muted-foreground')}>
+                          {c.message}
+                          {!c.ok && c.key === 'letter_release' && (
+                            <ReleaseDialog
+                              patientId={patient.id}
+                              recipientId={meta.recipient_id}
+                              recipientName={meta.recipient.name}
+                              kind={meta.recipient.kind}
+                              reportId={reportId}
+                              trigger={
+                                <Button variant="link" size="sm" className="ml-1 h-auto p-0 text-[13px]" data-testid="letter-release">
+                                  {t('release.addNow')}
+                                </Button>
+                              }
+                            />
+                          )}
+                        </span>
                       </li>
                     ))}
                   </ul>
@@ -633,58 +644,6 @@ function SignDialog({
           </Button>
           <Button disabled={!name.trim() || sign.isPending} onClick={() => sign.mutate()} data-testid="letter-sign-confirm">
             <FileSignature /> {t('briefe.sign')}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function SendDialog({ reportId, onClose, onSent }: { reportId: string; onClose: () => void; onSent: () => void }) {
-  const { t } = useTranslation()
-  const [day, setDay] = useState(isoDay())
-  const [via, setVia] = useState<SentVia>('post')
-  const send = useMutation({
-    mutationFn: () => api.markLetterSent(reportId, day, via),
-    onSuccess: () => {
-      onClose()
-      onSent()
-    },
-    onError: (e) => toast.error(errorMessage(e)),
-  })
-  return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>{t('briefe.sentTitle')}</DialogTitle>
-        </DialogHeader>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="sent-at">{t('briefe.sentAt')}</Label>
-            <Input id="sent-at" type="date" value={day} onChange={(e) => setDay(e.target.value)} />
-          </div>
-          <div className="space-y-1.5">
-            <Label>{t('briefe.via')}</Label>
-            <Select value={via} onValueChange={(v) => setVia(v as SentVia)}>
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {SENT_VIA.map((v) => (
-                  <SelectItem key={v} value={v}>
-                    {t(`enums.sent_via.${v}`)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            {t('common.cancel')}
-          </Button>
-          <Button disabled={!day || send.isPending} onClick={() => send.mutate()} data-testid="letter-sent-confirm">
-            {t('briefe.markSent')}
           </Button>
         </DialogFooter>
       </DialogContent>

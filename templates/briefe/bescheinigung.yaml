@@ -7,6 +7,7 @@ description: Kurze Bestätigung, dass und wie oft die Behandlung stattfindet
 category: brief
 layout: letter
 recipients: [sonstige, krankenkasse]
+audience: patient
 subject: "Behandlungsbestätigung für {Frau/Herrn} {Name}, geb. {Geburtsdatum}"
 closing: Bei Fragen stehe ich Ihnen gerne zur Verfügung.
 rules:

@@ -36,7 +36,7 @@ pub fn chat_options() -> ChatOptions {
 pub enum Audience {
     /// The Sitzungsnotiz of one session.
     Note,
-    /// A Bericht an den Gutachter.
+    /// A Bericht an den Gutachter, or a letter-type Bericht (slice 46).
     Bericht(Frame),
 }
 
@@ -75,12 +75,7 @@ impl Prepared {
 pub fn system_prompt(template: &Template, audience: &Audience) -> String {
     let what = match audience {
         Audience::Note => "einer Sitzungsnotiz (Dokumentation einer Psychotherapiesitzung, bleibt in der Praxis)".to_string(),
-        Audience::Bericht(f) => format!(
-            "eines Berichts an die Gutachterin oder den Gutachter ({}; {}, {})",
-            template.title,
-            draft::kind_name(f.kind),
-            draft::method_name(f.method)
-        ),
+        Audience::Bericht(f) => draft::what(template, f),
     };
     let others = match audience {
         Audience::Note => "",
@@ -240,6 +235,7 @@ fn check(raw: &str, map: &TokenMap, audience: &Audience) -> Option<String> {
 mod tests {
     use super::*;
     use crate::domain::{AgeGroup, ApplicationKind, Method};
+    use crate::draft::Target;
     use crate::templates::{self, Context};
 
     fn template(key: &str) -> Template {
@@ -272,7 +268,7 @@ mod tests {
     }
 
     fn bericht() -> Audience {
-        Audience::Bericht(Frame { method: Method::Vt, age_group: AgeGroup::Adult, kind: ApplicationKind::Erstantrag })
+        Audience::Bericht(Frame { method: Method::Vt, age_group: AgeGroup::Adult, target: Target::Ptv3(ApplicationKind::Erstantrag) })
     }
 
     #[test]

@@ -1,9 +1,15 @@
 // Briefe (slice 45): pure helpers for the list, the letter page and the settings.
+import type { Letter } from '@/bindings/Letter'
+import type { LetterMeta } from '@/bindings/LetterMeta'
 import type { LetterState } from '@/bindings/LetterState'
 import type { LetterSummary } from '@/bindings/LetterSummary'
 import type { Practice } from '@/bindings/Practice'
 import type { RecipientKind } from '@/bindings/RecipientKind'
+import type { Category } from '@/bindings/Category'
 import type { Template } from '@/bindings/Template'
+
+/** As `letter::DEFAULT_SALUTATION`. */
+export const DEFAULT_SALUTATION = 'Sehr geehrte Damen und Herren,'
 
 export const RECIPIENT_KINDS: RecipientKind[] = ['rentenversicherung', 'pflegekasse', 'versorgungsamt', 'arzt', 'krankenkasse', 'sonstige']
 
@@ -38,10 +44,17 @@ export function practiceLine(p: Practice | null | undefined): string | null {
   return joined([p.name, p.street, joined([p.postal_code, p.city], ' ')], ' · ') || null
 }
 
-/** Templates the Briefe page offers: the letter layouts, recommended ones for the recipient first. */
-export function letterTemplates(templates: Template[], kind: RecipientKind | null): { template: Template; recommended: boolean }[] {
+/**
+ * Templates a "Neuer Brief" offers: the letter layouts (optionally of some categories only),
+ * recommended ones for the recipient first.
+ */
+export function letterTemplates(
+  templates: Template[],
+  kind: RecipientKind | null,
+  categories?: Category[],
+): { template: Template; recommended: boolean }[] {
   return templates
-    .filter((t) => t.layout === 'letter')
+    .filter((t) => t.layout === 'letter' && (!categories || categories.includes(t.category)))
     .map((template) => ({ template, recommended: !!kind && template.recipients.includes(kind) }))
     .sort((a, b) => Number(b.recommended) - Number(a.recommended) || a.template.title.localeCompare(b.template.title, 'de'))
 }
@@ -80,3 +93,17 @@ export function placeDate(place: string | null | undefined, date: string): strin
   const p = place?.trim()
   return p ? `${p}, den ${germanDay(date)}` : germanDay(date)
 }
+
+/** The editable part of a letter, for `letter_meta_save`. */
+export const metaOf = (l: Letter): LetterMeta => ({
+  episode_id: l.episode_id,
+  recipient_id: l.recipient_id,
+  recipient: l.recipient,
+  salutation: l.salutation,
+  subject: l.subject,
+  refs: l.refs,
+  place: l.place,
+  letter_date: l.letter_date,
+  follow_up_on: l.follow_up_on,
+  follow_up_note: l.follow_up_note,
+})

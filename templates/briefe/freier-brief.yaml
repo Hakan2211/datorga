@@ -6,6 +6,8 @@ description: Briefkopf, Empfänger und Betreff, der Text ist frei
 category: brief
 layout: letter
 recipients: [sonstige, arzt, krankenkasse, rentenversicherung, pflegekasse, versorgungsamt]
+audience: frei
+release: true
 subject: "{Name}, geb. {Geburtsdatum}"
 closing: Bei Fragen stehe ich Ihnen gerne zur Verfügung.
 rules:

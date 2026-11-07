@@ -13,6 +13,7 @@ import type { Stage } from '@/bindings/Stage'
 import { Page, PageHeader } from '@/components/app-shell'
 import { ExportOutdatedBadge, StatusBadge, formatDate } from '@/components/bits'
 import { ConsentCard } from '@/components/consent-card'
+import { ReleaseCard } from '@/components/briefe/release'
 import { NewLetterDialog } from '@/components/briefe/new-letter-dialog'
 import { DeletePatient } from '@/components/delete-button'
 import { DiagnosisRows } from '@/components/diagnoses'
@@ -96,6 +97,7 @@ function PatientDetail() {
           <TabsContent value="overview" className="space-y-6">
             <ConsentCard patientId={patientId} kind="recording" />
             <ConsentCard patientId={patientId} kind="cloud_transcription" />
+            <ReleaseCard patientId={patientId} />
             <div className="flex items-center justify-between">
               <h2 className="text-base font-semibold">{t('episodes.title')}</h2>
               <NewEpisodeDialog patientId={patientId} />

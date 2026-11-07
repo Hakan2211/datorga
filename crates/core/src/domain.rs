@@ -52,7 +52,9 @@ str_enum!(SectionOrigin { Ai => "ai", Human => "human", Mixed => "mixed" });
 str_enum!(
     /// What a consent covers. `cloud_transcription` adds sending session recordings to a cloud
     /// speech service; without it they are transcribed only on this computer.
-    ConsentKind { Recording => "recording", CloudTranscription => "cloud_transcription" }
+    /// `release_of_information` (slice 46): Schweigepflichtentbindung towards one recipient (address book
+    /// entry) or a kind of recipient; several may be active at once.
+    ConsentKind { Recording => "recording", CloudTranscription => "cloud_transcription", ReleaseOfInformation => "release_of_information" }
 );
 str_enum!(
     /// Who a letter goes to; picks the recommended document types and the address book filter.
@@ -204,7 +206,10 @@ pub struct Consent {
     pub id: String,
     pub patient_id: String,
     pub kind: ConsentKind,
+    /// Schweigepflichtentbindung: the recipient kind it covers (`rentenversicherung`, …), if not one entry.
     pub scope: Option<String>,
+    /// Schweigepflichtentbindung: the address book entry it covers.
+    pub recipient_id: Option<String>,
     pub text_version: String,
     pub text_hash: String,
     pub granted_at: String,
@@ -811,6 +816,10 @@ pub struct ReportSummary {
     pub sessions_left: Option<i64>,
     /// … and the planned session that uses up the last one, when the calendar has it.
     pub due_by: Option<String>,
+    pub template_key: String,
+    /// Letter-type Berichte (slice 46): the type's title ("Befundbericht Rentenversicherung");
+    /// `None` for PTV 3.
+    pub title: Option<String>,
 }
 
 /// A row in the Sitzungen work queue: the calendar row plus what the list shows besides it.

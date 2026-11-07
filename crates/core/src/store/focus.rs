@@ -183,7 +183,7 @@ impl Store {
     pub(super) fn sync_review_statuses(&self) -> Result<()> {
         let ids: Vec<String> = self
             .conn
-            .prepare("SELECT id FROM report WHERE kind = 'bericht' AND status IN ('draft', 'in_review')")?
+            .prepare("SELECT id FROM report WHERE kind IN ('bericht', 'brief') AND status IN ('draft', 'in_review')")?
             .query_map([], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;
         for id in ids {
@@ -211,7 +211,7 @@ fn append_sentence(body: &str, text: &str, continues: bool) -> String {
 pub(super) fn sync_review(conn: &Connection, report_id: &str) -> Result<()> {
     let (kind, status): (String, ReportStatus) =
         conn.query_row("SELECT kind, status FROM report WHERE id = ?1", [report_id], |r| Ok((r.get(0)?, super::parse_col(r, 1)?)))?;
-    if kind != "bericht" || !matches!(status, ReportStatus::Draft | ReportStatus::InReview) {
+    if !matches!(kind.as_str(), "bericht" | "brief") || !matches!(status, ReportStatus::Draft | ReportStatus::InReview) {
         return Ok(());
     }
     let sections: Vec<(String, bool)> = conn

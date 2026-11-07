@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::domain::{Episode, Gender, Patient, RecipientKind, Report, ReportStatus, SentVia};
+use crate::domain::{Consent, Episode, Gender, Patient, RecipientKind, Report, ReportStatus, SentVia};
 use crate::pii::CheckItem;
 use crate::templates::{FieldKind, PatientRef, Template};
 
@@ -182,6 +182,22 @@ pub struct LetterInput {
     pub episode_id: Option<String>,
     #[serde(default)]
     pub recipient_id: Option<String>,
+}
+
+/// A Schweigepflichtentbindung she has on paper (slice 46): for one address book entry, or for
+/// every recipient of a kind.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReleaseInput {
+    #[serde(default)]
+    pub recipient_id: Option<String>,
+    #[serde(default)]
+    pub scope: Option<RecipientKind>,
+    /// YYYY-MM-DD it was signed; default today.
+    #[serde(default)]
+    pub granted_on: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 /// Status a letter list shows: the report status, plus "versendet" once sent.
@@ -521,6 +537,25 @@ pub fn checklist(letter: &Letter, report: &Report, template: &Template) -> Vec<C
         },
     ));
     items
+}
+
+/// Schweigepflichtentbindung for the letter's recipient (`None` when the type needs none or no
+/// recipient is set yet). A warning: she may have it on paper without having recorded it.
+pub fn release_check(letter: &Letter, template: &Template, found: Option<&Consent>) -> Option<CheckItem> {
+    if !template.release || letter.recipient.name.trim().is_empty() {
+        return None;
+    }
+    let name = letter.recipient.name.trim();
+    Some(CheckItem {
+        key: "letter_release".into(),
+        ok: found.is_some(),
+        severity: "warn".into(),
+        message: match found {
+            Some(c) => format!("Schweigepflichtentbindung für {name} liegt vor (vom {})", crate::render::german_date(&c.granted_at)),
+            None => format!("Keine Schweigepflichtentbindung für {name} erfasst"),
+        },
+        section_key: None,
+    })
 }
 
 #[cfg(test)]

@@ -8,6 +8,8 @@ import type { CheckItem } from '@/bindings/CheckItem'
 import type { ReviewHint } from '@/bindings/ReviewHint'
 import { formatDate } from '@/components/bits'
 import { RedactionDialog } from '@/components/fact-draft'
+import { ReleaseDialog } from '@/components/briefe/release'
+import { shortHeading } from '@/components/lotse/questions-step'
 import { PatientFormDialog } from '@/components/patient-form'
 import { ReportPreview } from '@/components/report-preview'
 import { Button } from '@/components/ui/button'
@@ -25,6 +27,7 @@ import { cn } from '@/lib/utils'
  */
 export function CheckStep({
   view,
+  ai = true,
   bodies,
   content,
   flush,
@@ -34,6 +37,8 @@ export function CheckStep({
   onChange,
 }: {
   view: ReportView
+  /** The AI Gutachter-Check (PTV 3 only; letters get their Empfänger-Check later). */
+  ai?: boolean
   bodies: Record<string, string>
   /** Changes whenever the text changes (re-renders the preview). */
   content: string
@@ -47,7 +52,8 @@ export function CheckStep({
   const qc = useQueryClient()
   const { report, template, patient, episode } = view
   const checklist = useQuery(q.checklist(report.id))
-  const review = useQuery(q.review(report.id))
+  const review = useQuery({ ...q.review(report.id), enabled: ai })
+  const letter = useQuery({ ...q.letter(report.id), enabled: report.kind === 'brief' })
   const [checking, setChecking] = useState(false)
   const [showIgnored, setShowIgnored] = useState(false)
 
@@ -64,7 +70,7 @@ export function CheckStep({
   const blocking = (checklist.data ?? []).some((c) => !c.ok && c.severity === 'block')
   const heading = (key: string | null) => {
     const def = key ? template.sections.find((s) => s.key === key) : null
-    return def ? (def.number ?? def.heading) : null
+    return def ? (def.number ?? shortHeading(def.heading)) : null
   }
 
   const ignore = (h: ReviewHint, on: boolean) =>
@@ -79,6 +85,21 @@ export function CheckStep({
       case 'check':
         if (e.item.key === 'chiffre')
           return <PatientFormDialog patient={patient} trigger={<Button size="sm" variant="outline">{t('lotse.chiffreSet')}</Button>} />
+        if (e.item.key === 'letter_release' && letter.data)
+          return (
+            <ReleaseDialog
+              patientId={patient.id}
+              recipientId={letter.data.recipient_id}
+              recipientName={letter.data.recipient.name}
+              kind={letter.data.recipient.kind}
+              reportId={report.id}
+              trigger={
+                <Button size="sm" variant="outline" data-testid="check-release">
+                  {t('release.addNow')}
+                </Button>
+              }
+            />
+          )
         return e.item.section_key ? <ToSection onClick={() => onSection(e.item.section_key!)} /> : null
       case 'diagnoses':
         return (
@@ -185,12 +206,14 @@ export function CheckStep({
               )}
             </div>
           )}
-          <AiLine
-            review={review.data}
-            readOnly={readOnly}
-            llmActive={llmActive}
-            onCheck={() => flush().then(() => setChecking(true), (e) => toast.error(errorMessage(e)))}
-          />
+          {ai && (
+            <AiLine
+              review={review.data}
+              readOnly={readOnly}
+              llmActive={llmActive}
+              onCheck={() => flush().then(() => setChecking(true), (e) => toast.error(errorMessage(e)))}
+            />
+          )}
         </CardContent>
       </Card>
 

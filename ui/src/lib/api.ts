@@ -12,6 +12,7 @@ import type { ReportReview } from '@/bindings/ReportReview'
 import type { Consent } from '@/bindings/Consent'
 import type { DeleteOutcome } from '@/bindings/DeleteOutcome'
 import type { TrashItem } from '@/bindings/TrashItem'
+import type { ReleaseInput } from '@/bindings/ReleaseInput'
 import type { ConsentKind } from '@/bindings/ConsentKind'
 import type { ConsentText } from '@/bindings/ConsentText'
 import type { Episode } from '@/bindings/Episode'
@@ -369,6 +370,8 @@ export const api = {
   grantConsent: (patientId: string, kind: ConsentKind, note: string) =>
     invoke<Consent>('consent_grant', { patientId, kind, note: note || null }),
   revokeConsent: (id: string) => invoke<Consent>('consent_revoke', { id }),
+  /** Records a Schweigepflichtentbindung she has on paper. */
+  grantRelease: (patientId: string, input: ReleaseInput) => invoke<Consent>('release_grant', { patientId, input }),
 
   episodes: (patientId: string) => invoke<Episode[]>('episodes_list', { patientId }),
   createEpisode: (input: EpisodeInput) => invoke<Episode>('episode_create', { input }),

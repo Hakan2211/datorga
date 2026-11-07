@@ -3,5 +3,7 @@
 /**
  * What a consent covers. `cloud_transcription` adds sending session recordings to a cloud
  * speech service; without it they are transcribed only on this computer.
+ * `release_of_information` (slice 46): Schweigepflichtentbindung towards one recipient (address book
+ * entry) or a kind of recipient; several may be active at once.
  */
-export type ConsentKind = "recording" | "cloud_transcription";
+export type ConsentKind = "recording" | "cloud_transcription" | "release_of_information";

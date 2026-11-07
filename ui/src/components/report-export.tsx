@@ -6,7 +6,10 @@ import { api, errorMessage, type ReportView } from '@/lib/api'
 
 export type ExportFormat = 'pdf' | 'docx'
 
-/** Asks for a path (Chiffre in the file name, never the name) and exports the signed report there. */
+/**
+ * Asks for a path (Chiffre in the file name, never the name; a letter carries the name like the
+ * letter itself) and exports the signed report there.
+ */
 export function useReportExport(view: ReportView | undefined) {
   const { t } = useTranslation()
   const qc = useQueryClient()
@@ -16,7 +19,14 @@ export function useReportExport(view: ReportView | undefined) {
       const chiffre = view.patient.chiffre ?? 'ohne-Chiffre'
       const day = (view.session?.scheduled_at ?? view.session?.started_at ?? view.report.created_at).slice(0, 10)
       const unsigned = view.report.status === 'draft' || view.report.status === 'in_review'
-      const base = `${view.session ? `Sitzungsnotiz-${chiffre}-${day}` : `Bericht-${chiffre}-${view.application?.kind ?? 'bericht'}`}${unsigned ? '-unsigniert' : ''}`
+      // A letter is named (it goes to its recipient), as on the letter page.
+      const stem =
+        view.report.kind === 'brief'
+          ? `${view.template.title}-${view.patient.last_name}-${(view.report.signed_at ?? view.report.created_at).slice(0, 10)}`.replace(/[\\/:*?"<>|]/g, '')
+          : view.session
+            ? `Sitzungsnotiz-${chiffre}-${day}`
+            : `Bericht-${chiffre}-${view.application?.kind ?? 'bericht'}`
+      const base = `${stem}${unsigned ? '-unsigniert' : ''}`
       const path = await save({
         defaultPath: `${base}.${format}`,
         filters: [{ name: format.toUpperCase(), extensions: [format] }],
@@ -31,6 +41,7 @@ export function useReportExport(view: ReportView | undefined) {
       void qc.invalidateQueries({ queryKey: ['report', view.report.id] })
       void qc.invalidateQueries({ queryKey: ['reports'] })
       void qc.invalidateQueries({ queryKey: ['sessions'] })
+      void qc.invalidateQueries({ queryKey: ['letters'] })
       if (view.session) void qc.invalidateQueries({ queryKey: ['session', view.session.id] })
     },
     onError: (e) => toast.error(errorMessage(e)),

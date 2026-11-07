@@ -794,6 +794,12 @@ fn consent_form_export(state: State<'_, AppState>, patient_id: String, kind: Con
     })
 }
 
+/// Records a Schweigepflichtentbindung she has on paper (slice 46).
+#[tauri::command]
+fn release_grant(state: State<'_, AppState>, patient_id: String, input: letter::ReleaseInput) -> CmdResult<Consent> {
+    state.with(|s| s.grant_release(&patient_id, input))
+}
+
 #[tauri::command]
 fn consents_list(state: State<'_, AppState>, patient_id: String) -> CmdResult<Vec<Consent>> {
     state.with(|s| s.list_consents(&patient_id))
@@ -1748,7 +1754,9 @@ fn report_checklist(state: State<'_, AppState>, id: String) -> CmdResult<Vec<Che
 fn checklist(s: &Store, v: &ReportView) -> thera_core::Result<Vec<CheckItem>> {
     let mut items = pii::checklist(&v.report, &v.template, &v.patient);
     if v.report.kind == letter::KIND {
-        items.extend(letter::checklist(&s.letter(&v.report.id)?, &v.report, &v.template));
+        let l = s.letter(&v.report.id)?;
+        items.extend(letter::checklist(&l, &v.report, &v.template));
+        items.extend(letter::release_check(&l, &v.template, s.letter_release(&l)?.as_ref()));
     }
     Ok(items)
 }
@@ -2828,6 +2836,20 @@ fn prior_input(s: &Store, view: &ReportView) -> thera_core::Result<(Vec<PriorRef
     Ok((refs, input))
 }
 
+/// What the AI drafts for: a PTV 3 Bericht with its application, or a letter in a Behandlungsfall.
+fn frame_of(view: &ReportView) -> Option<draft::Frame> {
+    let ep = view.episode.as_ref()?;
+    draft::Frame::of(&view.template, ep.method, ep.age_group, view.application.as_ref().map(|a| a.kind), view.patient.gender)
+}
+
+fn no_frame(view: &ReportView) -> &'static str {
+    if view.report.kind == letter::KIND {
+        "Entwürfe gibt es nur für Briefe zu einem Behandlungsfall: im Brief einen Behandlungsfall wählen"
+    } else {
+        "Entwürfe gibt es nur für Berichte zu einem Antrag"
+    }
+}
+
 /// Exactly what drafting the chosen sections of this Bericht would send, from the episode's
 /// applied facts of the chosen sessions, her answers to the Lotse questions and the Vorbericht.
 #[allow(clippy::type_complexity)]
@@ -2837,8 +2859,8 @@ fn prepare_draft(
     choice: &DraftChoice,
 ) -> thera_core::Result<(draft::Prepared, Vec<EpisodeFact>, Vec<ReportAnswer>, Vec<PriorRef>, Vec<draft::InputFact>)> {
     let view = report_view(s, report_id)?;
-    let (Some(episode), Some(application)) = (&view.episode, &view.application) else {
-        return Err(thera_core::Error::Invalid("Entwürfe gibt es nur für Berichte zu einem Antrag".into()));
+    let (Some(episode), Some(frame)) = (&view.episode, frame_of(&view)) else {
+        return Err(thera_core::Error::Invalid(no_frame(&view).into()));
     };
     let mut facts = s.episode_facts(&episode.id)?;
     if let Some(ids) = &choice.session_ids {
@@ -2859,7 +2881,6 @@ fn prepare_draft(
     } else {
         vec![]
     };
-    let frame = draft::Frame { method: episode.method, age_group: episode.age_group, kind: application.kind };
     let dict = s.pseudo_dictionary(&view.patient.id)?;
     // Sections marked "nicht relevant" are not drafted.
     let keys: Vec<String> = choice.sections.iter().filter(|k| !not_relevant(&view, k)).cloned().collect();
@@ -3072,8 +3093,8 @@ fn report_answer_set(
 /// Exactly what the coverage check would send: the open questions and the recent facts.
 fn prepare_gaps(s: &Store, report_id: &str) -> thera_core::Result<(gaps::Prepared, Vec<EpisodeFact>)> {
     let view = report_view(s, report_id)?;
-    if view.application.is_none() {
-        return Err(thera_core::Error::Invalid("Fragen gibt es nur für Berichte zu einem Antrag".into()));
+    if frame_of(&view).is_none() {
+        return Err(thera_core::Error::Invalid(no_frame(&view).replace("Entwürfe", "Fragen")));
     }
     let answers = current_answers(s, &view)?;
     let facts = recent_facts(s, &view.report)?;
@@ -3196,7 +3217,7 @@ fn prepare_review(s: &Store, report_id: &str) -> thera_core::Result<(review::Pre
         return Err(thera_core::Error::Invalid("Den Gutachter-Check gibt es nur für Berichte zu einem Antrag".into()));
     };
     let sections = review_sections(&view);
-    let frame = draft::Frame { method: episode.method, age_group: episode.age_group, kind: application.kind };
+    let frame = draft::Frame { method: episode.method, age_group: episode.age_group, target: draft::Target::Ptv3(application.kind) };
     let dict = s.pseudo_dictionary(&view.patient.id)?;
     let prepared = review::prepare(&view.template, &frame, &sections, &view.patient, dict)?;
     Ok((prepared, review::text_digest(&sections), sections.len()))
@@ -3739,10 +3760,10 @@ fn prepare_workshop(s: &Store, report_id: &str, choice: &WorkshopChoice) -> ther
     let audience = if view.report.kind == "sitzungsnotiz" {
         workshop::Audience::Note
     } else {
-        let (Some(episode), Some(application)) = (&view.episode, &view.application) else {
-            return Err(thera_core::Error::Invalid("Entwürfe gibt es nur für Berichte zu einem Antrag".into()));
+        let Some(frame) = frame_of(&view) else {
+            return Err(thera_core::Error::Invalid(no_frame(&view).into()));
         };
-        workshop::Audience::Bericht(draft::Frame { method: episode.method, age_group: episode.age_group, kind: application.kind })
+        workshop::Audience::Bericht(frame)
     };
     let text = draft::plain_text(&s.workshop_text(report_id)?);
     let existing: Vec<(String, String)> = if choice.with_existing {
@@ -4471,6 +4492,7 @@ pub fn run() {
             consent_text,
             consent_form_export,
             consents_list,
+            release_grant,
             consent_grant,
             consent_revoke,
             audio_devices,

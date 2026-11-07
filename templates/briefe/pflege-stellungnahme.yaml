@@ -1,0 +1,109 @@
+# Stellungnahme zum Pflegegrad (slice 46): to the Pflegekasse or the Medizinischer Dienst.
+# Structure from the pilot therapist's letters; hints and questions are our own wording, the
+# everyday-life section follows the modules of the Begutachtungsinstrument (NBA 2, 3, 4, 5, 6).
+# Draft catalogue, to be reviewed by the therapist.
+key: pflege-stellungnahme
+version: "2026.1"
+title: Stellungnahme Pflegegrad
+description: Psychische Einschränkungen und ihre Folgen für Selbstversorgung und Alltag
+category: bericht
+layout: letter
+audience: behoerde
+release: true
+recipients: [pflegekasse]
+subject: "Psychotherapeutische Stellungnahme zum Antrag auf einen Pflegegrad für {Frau/Herrn} {Name}, geb. {Geburtsdatum}"
+refs:
+  - label: Versichertennummer
+    from: insurance_no
+closing: Bei Fragen stehe ich Ihnen gerne zur Verfügung.
+rules:
+  target_pages: 2
+  signature_required: true
+intro: >-
+  Stellungnahme für die Pflegekasse bzw. die Gutachterin oder den Gutachter des Medizinischen Dienstes.
+  Beschreibt, wie sich die psychische Erkrankung auf Selbstständigkeit und Alltag auswirkt, mit konkreten
+  Beobachtungen. Den Pflegegrad stellt der Medizinische Dienst fest.
+sections:
+  - key: anlass
+    heading: ""
+    field: prose
+    starter: |-
+      {Frau/Herr} {Name}, geb. {Geburtsdatum}, befindet sich seit dem {Behandlung seit} in meiner ambulanten psychotherapeutischen Behandlung. Zum Antrag auf Feststellung eines Pflegegrades nehme ich aus psychotherapeutischer Sicht wie folgt Stellung.
+    hints:
+      - text: Seit wann in Behandlung, wozu Stellung genommen wird
+
+  - key: diagnosen
+    heading: Diagnosen (ICD-10)
+    field: diagnoses
+    ai_allowed: false
+    hints:
+      - text: ICD-10-Diagnosen mit Angabe der Diagnosesicherheit
+
+  - key: verlauf
+    heading: Anamnese und Behandlungsverlauf
+    field: prose
+    hints:
+      - text: Beginn und Entwicklung der Erkrankung, bisherige Behandlungen
+      - text: Verlauf der Psychotherapie, Frequenz der Termine
+    asks:
+      - key: anamnese
+        question: Wie begann die Erkrankung und wie hat sie sich entwickelt?
+      - key: verlauf
+        question: Wie verlief die Behandlung bisher, wie oft sehen Sie Pat.?
+        chips: [wöchentlich, 14-täglich]
+
+  - key: befund
+    heading: Klinischer Befund und Belastungsfaktoren
+    field: prose
+    hints:
+      - text: Psychischer Befund (Stimmung, Antrieb, Ängste, Orientierung, Suizidalität)
+      - text: Soziale Belastungen (allein lebend, Verluste, Konflikte, finanzielle Sorgen)
+      - text: Körperliche Belastungen, soweit sie mit der psychischen Erkrankung zusammenwirken
+    asks:
+      - key: befund
+        question: Psychischer Befund (Stimmung, Antrieb, Orientierung, Suizidalität)?
+        chips: [allseits orientiert, keine akute Suizidalität]
+      - key: belastung
+        question: Welche sozialen oder körperlichen Belastungen kommen hinzu?
+        chips: [lebt allein, nicht bekannt]
+
+  - key: funktion
+    heading: Funktionseinschränkungen
+    field: prose
+    hints:
+      - text: Kognitiv (Gedächtnis, Orientierung, Konzentration, Entscheidungen treffen), mit konkreten Beobachtungen
+      - text: Emotional und im Verhalten (Ängste, Antrieb, Rückzug, Affektregulation), mit konkreten Beobachtungen
+    asks:
+      - key: kognitiv
+        question: Vergisst Pat. Termine oder Medikamente, gibt es Orientierungsprobleme oder Stürze?
+        chips: [nein, nicht bekannt]
+      - key: beobachtung
+        question: Welche konkreten Beobachtungen belegen die Einschränkungen?
+
+  - key: alltag
+    heading: Auswirkungen auf Selbstversorgung und Alltag
+    field: prose
+    hints:
+      - text: Verständigung und Erinnern, sich im Alltag zurechtfinden
+      - text: Psychische Problemlagen, die Hilfe nötig machen (Ängste, Antriebslosigkeit, nächtliche Unruhe)
+      - text: Selbstversorgung (Körperpflege, Ernährung, Haushalt)
+      - text: Umgang mit Medikamenten, Arztterminen und Behandlungen
+      - text: Tagesstruktur und soziale Kontakte
+      - text: Wer wobei und wie oft unterstützt
+    asks:
+      - key: hilfe
+        question: Wer unterstützt Pat. im Alltag, wobei und wie oft?
+        chips: [niemand, Angehörige, Pflegedienst, nicht bekannt]
+      - key: selbstversorgung
+        question: Wobei braucht Pat. Hilfe (Körperpflege, Essen, Haushalt, Termine, Medikamente)?
+      - key: tagesstruktur
+        question: Wie sehen Tagesstruktur und soziale Kontakte aus?
+
+  - key: fazit
+    heading: Fazit und Empfehlung
+    field: prose
+    hints:
+      - text: Zusammenfassung der Einschränkungen und die Empfehlung aus psychotherapeutischer Sicht
+    asks:
+      - key: fazit
+        question: Was empfehlen Sie aus psychotherapeutischer Sicht?

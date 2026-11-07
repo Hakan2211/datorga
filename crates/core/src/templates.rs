@@ -13,6 +13,10 @@ const BUILTIN: &[&str] = &[
     include_str!("../../../templates/notes/sitzungsnotiz.yaml"),
     include_str!("../../../templates/briefe/bescheinigung.yaml"),
     include_str!("../../../templates/briefe/freier-brief.yaml"),
+    include_str!("../../../templates/briefe/drv-befund.yaml"),
+    include_str!("../../../templates/briefe/pflege-stellungnahme.yaml"),
+    include_str!("../../../templates/briefe/versorgungsamt-befund.yaml"),
+    include_str!("../../../templates/briefe/arztbrief.yaml"),
 ];
 
 /// Template of the per-session note (Verlaufsdokumentation).
@@ -49,6 +53,13 @@ pub struct Template {
     /// Recipient kinds this type is recommended for in the "Neuer Brief" dialog.
     #[serde(default)]
     pub recipients: Vec<crate::domain::RecipientKind>,
+    /// Letters drafted by the AI: who reads them (picks the prompt's wording). Required for the
+    /// `bericht` category.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audience: Option<Audience>,
+    /// Letters: a Schweigepflichtentbindung for the recipient is expected (checked before signing).
+    #[serde(default)]
+    pub release: bool,
     pub rules: Rules,
     #[serde(default)]
     pub intro: String,
@@ -68,6 +79,21 @@ pub enum Category {
     Brief,
     /// The Sitzungsnotiz.
     Note,
+}
+
+/// Who reads a letter: the AI's wording and what it stresses follow from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum Audience {
+    /// Rentenversicherung, Pflegekasse / MD, Versorgungsamt: function and participation count.
+    Behoerde,
+    /// A treating doctor: findings, course, recommendation.
+    Arzt,
+    /// The patient or someone they pass it on to (Bescheinigung).
+    Patient,
+    /// Anyone (freier Brief).
+    Frei,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -243,8 +269,14 @@ impl Template {
         if letter != matches!(self.category, Category::Bericht | Category::Brief) {
             return Err(Error::Template("letter layout goes with the categories bericht and brief".into()));
         }
-        if !letter && (self.subject.is_some() || !self.refs.is_empty() || self.closing.is_some()) {
-            return Err(Error::Template("subject, refs and closing are for letters".into()));
+        if !letter && (self.subject.is_some() || !self.refs.is_empty() || self.closing.is_some() || self.audience.is_some() || self.release) {
+            return Err(Error::Template("subject, refs, closing, audience and release are for letters".into()));
+        }
+        if self.category == Category::Bericht && self.audience.is_none() {
+            return Err(Error::Template("a bericht template needs an audience".into()));
+        }
+        if self.category == Category::Bericht && !self.report_kinds.is_empty() {
+            return Err(Error::Template("report_kinds are for PTV 3 templates".into()));
         }
         let mut seen = std::collections::HashSet::new();
         for s in &self.sections {
@@ -395,5 +427,42 @@ mod tests {
     fn diagnoses_cannot_be_ai_drafted() {
         let src = include_str!("../../../templates/ptv3/fortfuehrung.yaml").replace("ai_allowed: false", "ai_allowed: true");
         assert!(Template::from_yaml(&src).is_err());
+    }
+
+    #[test]
+    fn letter_berichte_are_complete_and_safe() {
+        let all = builtin().unwrap();
+        for key in ["drv-befund", "pflege-stellungnahme", "versorgungsamt-befund", "arztbrief"] {
+            let t = all.iter().find(|t| t.key == key).unwrap();
+            assert_eq!((t.category, t.layout), (Category::Bericht, Layout::Letter), "{key}");
+            assert!(t.audience.is_some() && t.release && t.subject.is_some() && !t.recipients.is_empty(), "{key}");
+            assert!(!t.rules.pseudonymized, "{key}: named letters");
+            let r = t.resolve(&Context { method: Method::Tp, age_group: AgeGroup::Adult, kind: None });
+            assert_eq!(r.sections.len(), t.sections.len(), "{key}: no section depends on the Antragsart");
+            assert!(r.sections.iter().any(|s| s.field == FieldKind::Diagnoses && !s.ai_allowed), "{key}: diagnoses by her");
+            assert!(r.sections.iter().map(|s| s.asks.len()).sum::<usize>() >= 4, "{key}: questions for the Fragen step");
+            // The opening paragraph has text, so its questions would never count as open.
+            assert!(r.sections.iter().all(|s| s.starter.is_none() || s.asks.is_empty()), "{key}");
+        }
+        let drv = all.iter().find(|t| t.key == "drv-befund").unwrap();
+        assert!(drv.refs.iter().any(|r| r.required && r.from == Some(PatientRef::PensionNo)));
+        assert!(!all.iter().find(|t| t.key == "bescheinigung").unwrap().release);
+    }
+
+    #[test]
+    fn a_bericht_letter_needs_an_audience_and_no_antragsart() {
+        let src = include_str!("../../../templates/briefe/arztbrief.yaml").replace("\r\n", "\n");
+        assert!(Template::from_yaml(&src).is_ok());
+        assert!(Template::from_yaml(&src.replace("audience: arzt\n", "")).is_err());
+        assert!(Template::from_yaml(&src.replace("audience: arzt\n", "audience: arzt\nreport_kinds: [erstantrag]\n")).is_err());
+        let ptv3 = include_str!("../../../templates/ptv3/fortfuehrung.yaml");
+        assert!(Template::from_yaml(&format!("{ptv3}\nrelease: true\n")).is_err(), "release is for letters");
+    }
+
+    #[test]
+    fn umwandlung_asks_for_the_family_history() {
+        let t = erst().resolve(&Context { method: Method::Vt, age_group: AgeGroup::Adult, kind: Some(ApplicationKind::Umwandlung) });
+        assert!(asks(&t, "symptomatik_befund").contains(&"familienanamnese".to_string()));
+        assert!(hints(&t, "symptomatik_befund").iter().any(|h| h.contains("Familienanamnese")));
     }
 }

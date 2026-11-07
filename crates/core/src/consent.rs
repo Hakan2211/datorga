@@ -14,6 +14,8 @@ const RECORDING_DE: &str = include_str!("../../../templates/consent/recording.de
 const RECORDING_VERSION: &str = "recording-de-2026-10b-entwurf";
 const CLOUD_TRANSCRIPTION_DE: &str = include_str!("../../../templates/consent/cloud_transcription.de.md");
 const CLOUD_TRANSCRIPTION_VERSION: &str = "cloud-transcription-de-2026-10-entwurf";
+const RELEASE_DE: &str = include_str!("../../../templates/consent/release_of_information.de.md");
+const RELEASE_VERSION: &str = "release-de-2026-11-entwurf";
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -28,6 +30,7 @@ pub fn current(kind: ConsentKind) -> ConsentText {
     let (version, text) = match kind {
         ConsentKind::Recording => (RECORDING_VERSION, RECORDING_DE),
         ConsentKind::CloudTranscription => (CLOUD_TRANSCRIPTION_VERSION, CLOUD_TRANSCRIPTION_DE),
+        ConsentKind::ReleaseOfInformation => (RELEASE_VERSION, RELEASE_DE),
     };
     // Normalize line endings so a CRLF checkout hashes the same as LF.
     let text = text.replace("\r\n", "\n").trim().to_string();
@@ -48,5 +51,7 @@ mod tests {
         let c = current(ConsentKind::CloudTranscription);
         assert_ne!(c.hash, a.hash);
         assert!(c.text.starts_with("Einwilligung in die Cloud-Transkription") && c.version.contains("entwurf"));
+        let r = current(ConsentKind::ReleaseOfInformation);
+        assert!(r.text.starts_with("Entbindung von der Schweigepflicht") && r.version.contains("entwurf"));
     }
 }

@@ -13,6 +13,7 @@ const tpl = (key: string, title: string, layout: 'letter' | 'bericht', recipient
   layout,
   refs: [],
   recipients,
+  release: false,
   rules: { target_pages: null, keyword_style_allowed: false, signature_required: true, pseudonymized: false, numbered: false },
   intro: '',
   sections: [],
@@ -57,6 +58,9 @@ describe('letters', () => {
       ['best', false],
     ])
     expect(letterTemplates([tpl('frei', 'B', 'letter'), tpl('best', 'A', 'letter')], null).map((x) => x.template.key)).toEqual(['best', 'frei'])
+    // "Neuer Bericht" → "Weitere Berichte": the bericht category only.
+    const drv = { ...tpl('drv', 'Befundbericht Rentenversicherung', 'letter', ['rentenversicherung']), category: 'bericht' as const }
+    expect(letterTemplates([drv, tpl('frei', 'B', 'letter')], null, ['bericht']).map((x) => x.template.key)).toEqual(['drv'])
   })
 
   it('filters by state and search', () => {

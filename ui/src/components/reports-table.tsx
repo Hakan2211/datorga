@@ -4,6 +4,7 @@ import type { ReportSummary } from '@/bindings/ReportSummary'
 import { StatusBadge, formatDate } from '@/components/bits'
 import { DeleteReport } from '@/components/delete-button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { reportLabel } from '@/lib/queue'
 
 export function ReportsTable({ reports }: { reports: ReportSummary[] }) {
   const { t } = useTranslation()
@@ -32,10 +33,7 @@ export function ReportsTable({ reports }: { reports: ReportSummary[] }) {
             </TableCell>
             <TableCell className="font-mono text-xs">{r.chiffre ?? '—'}</TableCell>
             <TableCell>{r.method ?? '—'}</TableCell>
-            <TableCell>
-              {r.kind ? t(`enums.kind.${r.kind}`) : '—'}
-              {r.kind === 'fortfuehrung' && r.seq ? ` Nr. ${r.seq}` : ''}
-            </TableCell>
+            <TableCell>{reportLabel(r, t)}</TableCell>
             <TableCell>
               <StatusBadge status={r.status} />
             </TableCell>

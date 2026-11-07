@@ -66,7 +66,12 @@ sections:
       - text: Krankheitsverständnis der relevanten Bezugspersonen
         when: { age: [kjp] }
       - text: Ergebnisse psychodiagnostischer Testverfahren
+      # Slice 46: her Umwandlungs-Gutachten name the family history under point 2.
+      - text: Familienanamnese (psychische Erkrankungen in der Familie), soweit behandlungsrelevant
     asks:
+      - key: familienanamnese
+        question: Gibt es psychische Erkrankungen in der Familie?
+        chips: [keine bekannt, nicht bekannt]
       - key: befund
         question: Psychischer Befund (Bewusstsein, Orientierung, Stimmung, Antrieb, Denken, Suizidalität)?
         chips: [wach und allseits orientiert, keine akute Suizidalität]

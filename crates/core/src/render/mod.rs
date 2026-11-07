@@ -200,6 +200,9 @@ impl ConsentForm {
             ConsentKind::CloudTranscription => format!(
                 "Hiermit widerrufe ich meine Einwilligung in die Cloud-Transkription meiner Sitzungsaufnahmen ({name}). Der Widerruf gilt ab sofort; Aufnahmen werden dann nur noch auf dem Praxisrechner in Text umgewandelt."
             ),
+            ConsentKind::ReleaseOfInformation => format!(
+                "Hiermit widerrufe ich die Entbindung von der Schweigepflicht ({name}) gegenüber: ____________________. Der Widerruf gilt ab sofort."
+            ),
         };
         Self {
             revoke_text,

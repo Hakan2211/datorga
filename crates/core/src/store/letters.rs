@@ -5,12 +5,13 @@ use std::collections::HashMap;
 use rusqlite::{params, OptionalExtension};
 use serde_json::json;
 
-use super::{new_id, now, parse_col, row_to_episode, Store, ACTOR, EPISODE_SELECT};
+use super::{new_id, now, parse_col, row_to_consent, row_to_episode, Store, ACTOR, CONSENT_SELECT, EPISODE_SELECT};
 use crate::audit::{self, Entry};
+use crate::consent;
 use crate::domain::*;
 use crate::letter::{
     self, FillContext, Letter, LetterInput, LetterMeta, LetterRecipient, LetterState, LetterSummary, Practice, PracticeAsset,
-    Recipient, RecipientInput, RefLine,
+    Recipient, RecipientInput, RefLine, ReleaseInput,
 };
 use crate::templates::{self, FieldKind, Layout};
 use crate::{Error, Result};
@@ -522,6 +523,81 @@ impl Store {
         tx.commit()?;
         self.letter(report_id)
     }
+
+    // ---------- Schweigepflichtentbindung (slice 46) ----------
+
+    /// Records a Schweigepflichtentbindung she has on paper: for one address book entry or for a
+    /// kind of recipient, dated the day it was signed (default today). One active per target.
+    pub fn grant_release(&self, patient_id: &str, input: ReleaseInput) -> Result<Consent> {
+        self.patient(patient_id)?;
+        let recipient_id = opt_text(&input.recipient_id);
+        if let Some(id) = &recipient_id {
+            self.recipient(id)?;
+        }
+        let scope = if recipient_id.is_some() { None } else { input.scope };
+        if recipient_id.is_none() && scope.is_none() {
+            return Err(Error::Invalid("Für wen gilt die Schweigepflichtentbindung?".into()));
+        }
+        if self.release_for(patient_id, recipient_id.as_deref(), scope)?.is_some_and(|c| c.recipient_id == recipient_id) {
+            return Err(Error::Invalid("Diese Schweigepflichtentbindung ist bereits erfasst".into()));
+        }
+        let granted_at = match check_date("Datum", &input.granted_on)? {
+            // Noon UTC: the same calendar day in German time.
+            Some(d) => format!("{d}T12:00:00Z"),
+            None => now(),
+        };
+        let text = consent::current(ConsentKind::ReleaseOfInformation);
+        let tx = self.conn.unchecked_transaction()?;
+        let id = new_id();
+        tx.execute(
+            "INSERT INTO consent (id, patient_id, kind, scope, recipient_id, text_version, text_hash, granted_at, note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                id,
+                patient_id,
+                ConsentKind::ReleaseOfInformation.as_str(),
+                scope.map(RecipientKind::as_str),
+                recipient_id,
+                text.version,
+                text.hash,
+                granted_at,
+                opt_text(&input.note),
+            ],
+        )?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "consent.grant", entity_type: "consent", entity_id: Some(&id),
+            meta: json!({
+                "kind": ConsentKind::ReleaseOfInformation.as_str(),
+                "scope": scope.map(RecipientKind::as_str),
+                "recipient": recipient_id.is_some(),
+                "text_version": text.version,
+            }),
+        })?;
+        tx.commit()?;
+        self.consent(&id)
+    }
+
+    /// The active Schweigepflichtentbindung covering a recipient: for this book entry, else for
+    /// its kind.
+    pub fn release_for(&self, patient_id: &str, recipient_id: Option<&str>, kind: Option<RecipientKind>) -> Result<Option<Consent>> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!(
+                    "{CONSENT_SELECT} WHERE patient_id = ?1 AND kind = 'release_of_information' AND revoked_at IS NULL
+                       AND ((?2 IS NOT NULL AND recipient_id = ?2) OR (?3 IS NOT NULL AND recipient_id IS NULL AND scope = ?3))
+                     ORDER BY recipient_id IS NULL, granted_at DESC LIMIT 1"
+                ),
+                params![patient_id, recipient_id, kind.map(RecipientKind::as_str)],
+                row_to_consent,
+            )
+            .optional()?)
+    }
+
+    /// The Schweigepflichtentbindung a letter's recipient has, if any.
+    pub fn letter_release(&self, letter: &Letter) -> Result<Option<Consent>> {
+        self.release_for(&letter.patient_id, letter.recipient_id.as_deref(), letter.recipient.kind)
+    }
 }
 
 #[cfg(test)]
@@ -679,5 +755,89 @@ mod tests {
         let (store, p, _) = setup();
         let err = store.create_letter(LetterInput { patient_id: p.id, template_key: "ptv3-fortfuehrung".into(), episode_id: None, recipient_id: None });
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn letter_berichte_fill_from_the_record_and_join_the_board() {
+        let (store, p, ep) = setup();
+        let dx = vec![Diagnosis { code: "F33.1".into(), label: "Rezidivierende depressive Störung".into(), certainty: "G".into() }];
+        store.set_episode_diagnoses(&ep.id, dx).unwrap();
+        store.conn.execute("UPDATE patient SET pension_no = '12 030485 B 123' WHERE id = ?1", [&p.id]).unwrap();
+        for key in ["drv-befund", "pflege-stellungnahme", "versorgungsamt-befund", "arztbrief"] {
+            let l = store.create_letter(LetterInput { patient_id: p.id.clone(), template_key: key.into(), episode_id: None, recipient_id: None }).unwrap();
+            assert!(l.subject.contains("Frau Anna Beispiel, geb. 03.04.1985"), "{key}: {}", l.subject);
+            let report = store.report(&l.report_id).unwrap();
+            let first = &report.sections.iter().find(|s| s.key == "anlass" || s.key == "bezug").unwrap().body;
+            assert!(first.contains("in meiner ambulanten psychotherapeutischen Behandlung"), "{key}: {first}");
+            let diagnoses = report.sections.iter().find(|s| s.key == "diagnosen").unwrap();
+            assert!(diagnoses.body.contains("F33.1"), "{key}: diagnoses of the case");
+        }
+        let letters = store.list_letters(None).unwrap();
+        let drv = letters.iter().find(|l| l.template_key == "drv-befund").unwrap();
+        let letter = store.letter(&drv.report_id).unwrap();
+        assert_eq!(letter.refs, vec![RefLine { label: "Versicherungsnummer".into(), value: "12 030485 B 123".into() }]);
+        let amt = letters.iter().find(|l| l.template_key == "versorgungsamt-befund").unwrap();
+        let body = &store.report(&amt.report_id).unwrap().sections.iter().find(|s| s.key == "bezug").unwrap().body.clone();
+        assert!(body.contains("{Datum des Anschreibens}") && body.contains(", die sich seit dem"), "unknown placeholder stays: {body}");
+
+        // The board lists the four Berichte with their titles; a Bescheinigung stays in Briefe.
+        store.create_letter(LetterInput { patient_id: p.id.clone(), template_key: "bescheinigung".into(), episode_id: None, recipient_id: None }).unwrap();
+        let board = store.list_reports(None, &now()).unwrap();
+        assert_eq!(board.len(), 4);
+        assert!(board.iter().all(|r| r.title.is_some() && r.kind.is_none()));
+        assert!(board.iter().any(|r| r.title.as_deref() == Some("Befundbericht Rentenversicherung")));
+    }
+
+    #[test]
+    fn release_of_information_per_recipient_or_kind() {
+        let (store, p, _) = setup();
+        let drv = store
+            .create_recipient(RecipientInput {
+                kind: RecipientKind::Rentenversicherung,
+                name: "Deutsche Rentenversicherung Bund".into(),
+                department: String::new(),
+                lines: vec!["10704 Berlin".into()],
+                salutation: None,
+                default_template: None,
+            })
+            .unwrap();
+        let l = store
+            .create_letter(LetterInput { patient_id: p.id.clone(), template_key: "drv-befund".into(), episode_id: None, recipient_id: Some(drv.id.clone()) })
+            .unwrap();
+        let template = store.template("drv-befund").unwrap();
+        let check = |store: &Store| {
+            let l = store.letter(&l.report_id).unwrap();
+            letter::release_check(&l, &template, store.letter_release(&l).unwrap().as_ref()).unwrap()
+        };
+        let missing = check(&store);
+        assert!(!missing.ok && missing.severity == "warn");
+        assert_eq!(missing.message, "Keine Schweigepflichtentbindung für Deutsche Rentenversicherung Bund erfasst");
+
+        assert!(store.grant_release(&p.id, ReleaseInput::default()).is_err(), "for whom?");
+        assert!(store.grant_consent(&p.id, ConsentKind::ReleaseOfInformation, None).is_err());
+        // For every Pflegekasse: doesn't cover the DRV.
+        store.grant_release(&p.id, ReleaseInput { scope: Some(RecipientKind::Pflegekasse), ..Default::default() }).unwrap();
+        assert!(!check(&store).ok);
+        let by_kind = store
+            .grant_release(&p.id, ReleaseInput { scope: Some(RecipientKind::Rentenversicherung), granted_on: Some("2026-10-02".into()), ..Default::default() })
+            .unwrap();
+        assert_eq!(by_kind.granted_at, "2026-10-02T12:00:00Z");
+        let found = check(&store);
+        assert!(found.ok, "{}", found.message);
+        assert_eq!(found.message, "Schweigepflichtentbindung für Deutsche Rentenversicherung Bund liegt vor (vom 02.10.2026)");
+        assert!(store.grant_release(&p.id, ReleaseInput { scope: Some(RecipientKind::Rentenversicherung), ..Default::default() }).is_err(), "twice");
+        // One for the entry itself wins over the kind; the same one twice is refused.
+        let own = store.grant_release(&p.id, ReleaseInput { recipient_id: Some(drv.id.clone()), note: Some(" Scan in Akte ".into()), ..Default::default() }).unwrap();
+        assert_eq!((own.scope.as_deref(), own.note.as_deref()), (None, Some("Scan in Akte")));
+        assert!(store.grant_release(&p.id, ReleaseInput { recipient_id: Some(drv.id.clone()), ..Default::default() }).is_err());
+        assert_eq!(store.letter_release(&store.letter(&l.report_id).unwrap()).unwrap().unwrap().id, own.id);
+        store.revoke_consent(&own.id).unwrap();
+        store.revoke_consent(&by_kind.id).unwrap();
+        assert!(!check(&store).ok, "revoked ones don't count");
+        assert!(!store.patient(&p.id).unwrap().consent_recording, "no recording consent from a release");
+        // Short letters to the patient need none.
+        let b = store.create_letter(LetterInput { patient_id: p.id.clone(), template_key: "bescheinigung".into(), episode_id: None, recipient_id: Some(drv.id) }).unwrap();
+        let bt = store.template("bescheinigung").unwrap();
+        assert!(letter::release_check(&store.letter(&b.report_id).unwrap(), &bt, None).is_none());
     }
 }

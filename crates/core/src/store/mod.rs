@@ -554,6 +554,9 @@ impl Store {
     /// Records consent against the current text version. Only one active consent per kind.
     pub fn grant_consent(&self, patient_id: &str, kind: ConsentKind, note: Option<&str>) -> Result<Consent> {
         self.patient(patient_id)?;
+        if kind == ConsentKind::ReleaseOfInformation {
+            return Err(Error::Invalid("Eine Schweigepflichtentbindung gilt für einen Empfänger (grant_release)".into()));
+        }
         if self.active_consent(patient_id, kind)?.is_some() {
             return Err(Error::Invalid("Einwilligung ist bereits erteilt".into()));
         }
@@ -2093,14 +2096,21 @@ impl Store {
 
     /// The Berichte queue, newest change first. Sitzungsnotizen are reached through their session.
     pub fn list_reports(&self, status: Option<ReportStatus>, now: &str) -> Result<Vec<ReportSummary>> {
+        // Letter-type Berichte (DRV, Pflegegrad, …) are on the board too; short letters only in Briefe.
+        let letter_berichte: std::collections::HashMap<String, String> = self
+            .list_templates()?
+            .into_iter()
+            .filter(|t| t.category == templates::Category::Bericht)
+            .map(|t| (t.key, t.title))
+            .collect();
         let mut stmt = self.conn.prepare(
             "SELECT r.id, r.patient_id, p.first_name || ' ' || p.last_name, p.chiffre, e.method, a.kind, a.seq,
-                    r.status, r.updated_at, r.episode_id
+                    r.status, r.updated_at, r.episode_id, r.kind, r.template_key
              FROM report r
              JOIN patient p ON p.id = r.patient_id
              LEFT JOIN episode e ON e.id = r.episode_id
              LEFT JOIN application a ON a.id = r.application_id
-             WHERE r.kind = 'bericht' AND (?1 IS NULL OR r.status = ?1)
+             WHERE r.kind IN ('bericht', 'brief') AND (?1 IS NULL OR r.status = ?1)
              ORDER BY r.updated_at DESC",
         )?;
         let rows = stmt
@@ -2121,14 +2131,23 @@ impl Store {
                         sections_total: 0,
                         sessions_left: None,
                         due_by: None,
+                        template_key: r.get(11)?,
+                        title: None,
                     },
                     opt(9)?,
+                    r.get::<_, String>(10)?,
                 ))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let mut bodies = self.conn.prepare("SELECT body, not_relevant FROM report_section WHERE report_id = ?1")?;
         let mut out = Vec::with_capacity(rows.len());
-        for (mut summary, episode_id) in rows {
+        for (mut summary, episode_id, kind) in rows {
+            if kind == crate::letter::KIND {
+                match letter_berichte.get(&summary.template_key) {
+                    Some(title) => summary.title = Some(title.clone()),
+                    None => continue,
+                }
+            }
             let sections: Vec<(String, bool)> =
                 bodies.query_map([&summary.id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<std::result::Result<_, _>>()?;
             summary.sections_total = sections.len() as i64;
@@ -2396,7 +2415,7 @@ const PATIENT_SELECT: &str = "SELECT id, external_ref, first_name, last_name, bi
     consent_recording, status, created_at, archived_at, gender, street, postal_code, city, insurer, insurance_no,
     pension_no FROM patient";
 const CONSENT_SELECT: &str = "SELECT id, patient_id, kind, scope, text_version, text_hash, granted_at, revoked_at,
-    note FROM consent";
+    note, recipient_id FROM consent";
 const EPISODE_SELECT: &str =
     "SELECT id, patient_id, method, age_group, setting, stage, started_at, ended_at, diagnoses_json, therapy_since FROM episode";
 const SESSION_SELECT: &str = "SELECT s.id, s.patient_id, s.episode_id, s.scheduled_at, s.started_at, s.ended_at,
@@ -2513,6 +2532,7 @@ fn row_to_consent(r: &rusqlite::Row<'_>) -> rusqlite::Result<Consent> {
         granted_at: r.get(6)?,
         revoked_at: r.get(7)?,
         note: r.get(8)?,
+        recipient_id: r.get(9)?,
     })
 }
 

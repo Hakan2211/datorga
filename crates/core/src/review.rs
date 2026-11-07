@@ -154,7 +154,7 @@ pub fn system_prompt(template: &Template, frame: &Frame) -> String {
          Antworte ausschließlich mit JSON in dieser Form, ohne weiteren Text:\n\
          {{\"hints\": [{{\"section\": 3, \"level\": \"wichtig\", \"text\": \"…\"}}]}}\n",
         title = template.title,
-        kind = kind_name(frame.kind),
+        kind = frame.kind().map(kind_name).unwrap_or("Brief"),
         method = method_name(frame.method),
         intro = template.intro.trim(),
         max = MAX_HINTS,
@@ -264,7 +264,7 @@ mod tests {
     }
 
     fn frame() -> Frame {
-        Frame { method: Method::Vt, age_group: AgeGroup::Adult, kind: ApplicationKind::Umwandlung }
+        Frame { method: Method::Vt, age_group: AgeGroup::Adult, target: crate::draft::Target::Ptv3(ApplicationKind::Umwandlung) }
     }
 
     fn patient() -> Patient {

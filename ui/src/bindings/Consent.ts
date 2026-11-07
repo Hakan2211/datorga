@@ -4,4 +4,12 @@ import type { ConsentKind } from "./ConsentKind";
 /**
  * One grant of consent. Revoking sets `revoked_at`; the row is never deleted (except on erasure).
  */
-export type Consent = { id: string, patient_id: string, kind: ConsentKind, scope: string | null, text_version: string, text_hash: string, granted_at: string, revoked_at: string | null, note: string | null, };
+export type Consent = { id: string, patient_id: string, kind: ConsentKind, 
+/**
+ * Schweigepflichtentbindung: the recipient kind it covers (`rentenversicherung`, …), if not one entry.
+ */
+scope: string | null, 
+/**
+ * Schweigepflichtentbindung: the address book entry it covers.
+ */
+recipient_id: string | null, text_version: string, text_hash: string, granted_at: string, revoked_at: string | null, note: string | null, };

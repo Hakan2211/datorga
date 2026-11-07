@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { QueueSession } from '@/bindings/QueueSession'
 import type { ReportSummary } from '@/bindings/ReportSummary'
-import { boardColumn, dayGroup, groupSessions, matchesPatient, sessionTodo, sortBoard, todoCounts } from './queue'
+import { boardColumn, dayGroup, groupSessions, matchesPatient, matchesReport, noReportFilter, reportLabel, sessionTodo, sortBoard, todoCounts } from './queue'
 
 // Wednesday 29.10.2026, 12:00 local.
 const now = new Date(2026, 9, 29, 12, 0)
@@ -106,9 +106,27 @@ function report(id: string, patch: Partial<ReportSummary> = {}): ReportSummary {
     sections_total: 7,
     sessions_left: null,
     due_by: null,
+    template_key: 'ptv3-erst-umwandlung',
+    title: null,
     ...patch,
   }
 }
+
+describe('letter-type Berichte on the board', () => {
+  const drv = report('d', { kind: null, seq: null, method: null, template_key: 'drv-befund', title: 'Befundbericht Rentenversicherung' })
+  const t = (k: string) => ({ 'enums.kind.umwandlung': 'Umwandlungsantrag', 'enums.kind.fortfuehrung': 'Fortführungsantrag' })[k] ?? k
+  it('labels them by their title, PTV 3 by the Antragsart', () => {
+    expect(reportLabel(drv, t)).toBe('Befundbericht Rentenversicherung')
+    expect(reportLabel(report('a'), t)).toBe('Umwandlungsantrag')
+    expect(reportLabel(report('f', { kind: 'fortfuehrung', seq: 2n }), t)).toBe('Fortführungsantrag Nr. 2')
+  })
+  it('filters them as "Weitere Berichte"', () => {
+    expect(matchesReport(drv, { method: null, kind: 'letter' })).toBe(true)
+    expect(matchesReport(report('a'), { method: null, kind: 'letter' })).toBe(false)
+    expect(matchesReport(drv, { method: null, kind: 'umwandlung' })).toBe(false)
+    expect(matchesReport(drv, noReportFilter)).toBe(true)
+  })
+})
 
 describe('board', () => {
   it('follows the status', () => {

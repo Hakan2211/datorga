@@ -1,0 +1,119 @@
+# Befundbericht an das Versorgungsamt (slice 46): GdB, Merkzeichen, Widerspruch (SGB IX).
+# Structure from the pilot therapist's letters; hints and questions are our own wording, the
+# participation section follows the Versorgungsmedizinische Grundsätze. No GdB number is proposed.
+# Draft catalogue, to be reviewed by the therapist.
+key: versorgungsamt-befund
+version: "2026.1"
+title: Befundbericht Versorgungsamt (GdB)
+description: Befund und Teilhabe für den Grad der Behinderung, Merkzeichen oder einen Widerspruch
+category: bericht
+layout: letter
+audience: behoerde
+release: true
+recipients: [versorgungsamt]
+subject: "Befundbericht nach dem SGB IX für {Frau/Herrn} {Name}, geb. {Geburtsdatum}"
+refs:
+  - label: Aktenzeichen
+    required: true
+closing: Bei Fragen stehe ich Ihnen gerne zur Verfügung.
+rules:
+  target_pages: 2
+  signature_required: true
+intro: >-
+  Befundbericht für das Versorgungsamt bzw. Landratsamt. Beschreibt Art, Häufigkeit und Dauer der
+  Beschwerden und ihre Auswirkungen auf die Teilhabe in Alltag, Familie und Beruf. Den Grad der
+  Behinderung legt das Amt fest; ein Wert steht nur im Bericht, wenn die Therapeutin ihn selbst nennt.
+sections:
+  - key: bezug
+    heading: ""
+    field: prose
+    starter: |-
+      bezugnehmend auf Ihr Schreiben vom {Datum des Anschreibens} berichte ich über {Frau/Herrn} {Name}, geb. {Geburtsdatum}, {die/der} sich seit dem {Behandlung seit} in meiner ambulanten psychotherapeutischen Behandlung befindet.
+    hints:
+      - text: Bezug auf das Anschreiben des Amtes (Datum, Widerspruch, beantragte Merkzeichen)
+
+  - key: behandlung
+    heading: Behandlung
+    field: prose
+    hints:
+      - text: Behandlung seit, Datum der letzten Behandlung, Frequenz der Termine
+      - text: Erbetene Befunde aus früheren Jahren, soweit vorhanden
+    asks:
+      - key: letzte
+        question: Datum der letzten Behandlung?
+      - key: frequenz
+        question: Wie oft finden die Termine statt?
+        chips: [wöchentlich, 14-täglich, monatlich]
+
+  - key: diagnosen
+    heading: Diagnosen (ICD-10)
+    field: diagnoses
+    ai_allowed: false
+    hints:
+      - text: ICD-10-Diagnosen mit Angabe der Diagnosesicherheit
+
+  - key: befund
+    heading: Psychopathologischer Befund
+    field: prose
+    hints:
+      - text: Art und Ausprägung der Beschwerden (z. B. depressive Symptomatik, Ängste, Panikattacken)
+      - text: Häufigkeit und Dauer, Verlauf über die Zeit
+    asks:
+      - key: befund
+        question: Psychischer Befund (Stimmung, Antrieb, Ängste, Konzentration, Suizidalität)?
+        chips: [keine akute Suizidalität]
+      - key: haeufigkeit
+        question: Wie häufig und wie lange treten die Beschwerden auf?
+        chips: [durchgehend, phasenweise]
+
+  - key: teilhabe
+    heading: Auswirkungen auf die Teilhabe
+    field: prose
+    hints:
+      - text: Soziale Integration (Familie, Partnerschaft, Freundschaften, Rückzug)
+      - text: Alltag (Haushalt, Einkaufen, Behördengänge, Tagesstruktur)
+      - text: Beruf bzw. Ausbildung (Arbeitsfähigkeit, Fehlzeiten, Einschränkungen)
+      - text: Kognitive und emotionale Belastbarkeit
+    asks:
+      - key: alltag
+        question: Wie wirken sich die Beschwerden auf Alltag und Haushalt aus?
+      - key: sozial
+        question: Wie sind Familie und soziale Kontakte betroffen?
+      - key: beruf
+        question: Arbeitet Pat., mit welchen Einschränkungen?
+        chips: [arbeitsunfähig, berentet, arbeitssuchend, nicht bekannt]
+
+  - key: medikation
+    heading: Medikation
+    field: prose
+    optional: true
+    hints:
+      - text: Aktuelle Medikation, nur wie von der Therapeutin angegeben
+    asks:
+      - key: medikation
+        question: Aktuelle Medikation (Präparat, Dosis, verordnet von)?
+        chips: [keine, nicht bekannt]
+
+  - key: therapie
+    heading: Therapie und Behandlungsintensität
+    field: prose
+    hints:
+      - text: Psychotherapie, weitere Behandlungen (Psychiatrie, Klinik, Reha), Intensität
+    asks:
+      - key: weitere
+        question: Welche weiteren Behandlungen gibt oder gab es (Psychiatrie, Klinik, Reha)?
+        chips: [keine, nicht bekannt]
+
+  - key: einschaetzung
+    heading: Einschätzung und Prognose
+    field: prose
+    hints:
+      - text: Zusammenfassende Einschätzung der Einschränkungen und Prognose
+      - text: Zu beantragten Merkzeichen oder zum Widerspruch, soweit gefragt
+    asks:
+      - key: merkzeichen
+        question: Geht es um Merkzeichen oder einen Widerspruch?
+        chips: [nein, Widerspruch, Merkzeichen beantragt]
+      - key: prognose
+        question: Wie schätzen Sie die Prognose ein?
+        chips: [nicht absehbar, eher ungünstig, günstig]

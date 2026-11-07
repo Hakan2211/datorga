@@ -28,11 +28,11 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::domain::{AgeGroup, ApplicationKind, Method, Patient};
+use crate::domain::{AgeGroup, ApplicationKind, Gender, Method, Patient};
 use crate::extract::{citation_number, json_list, sha256, Preview, TokenView, ICD};
 use crate::llm::{ChatOptions, Effort};
 use crate::pseudo::{DetectionSource, Dictionary, EntityKind, Pseudonymized, Pseudonymizer, TokenMap};
-use crate::templates::{FieldKind, SectionDef, Template};
+use crate::templates::{Audience, FieldKind, Layout, SectionDef, Template};
 use crate::{Error, Result};
 
 /// Bump on any change to the prompt or the answer format.
@@ -194,11 +194,71 @@ pub fn target_sections(template: &Template) -> Vec<&SectionDef> {
     template.sections.iter().filter(|s| s.field == FieldKind::Prose && s.ai_allowed).collect()
 }
 
-/// What the Bericht is for, in the words of the prompt. Holds no patient data.
+/// What the Bericht is for, in the words of the prompt. Holds no identifying patient data.
+#[derive(Debug, Clone, Copy)]
 pub struct Frame {
     pub method: Method,
     pub age_group: AgeGroup,
-    pub kind: ApplicationKind,
+    pub target: Target,
+}
+
+/// A Bericht an den Gutachter for an application, or a letter-type Bericht (slice 46).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    Ptv3(ApplicationKind),
+    /// `gender` only picks "die Patientin" / "der Patient" in the prompt.
+    Letter { audience: Audience, gender: Option<Gender> },
+}
+
+impl Frame {
+    /// The frame for drafting `template` in a case; `None` for a PTV 3 Bericht without an application.
+    pub fn of(template: &Template, method: Method, age_group: AgeGroup, kind: Option<ApplicationKind>, gender: Option<Gender>) -> Option<Self> {
+        let target = if template.layout == Layout::Letter {
+            Target::Letter { audience: template.audience.unwrap_or(Audience::Frei), gender }
+        } else {
+            Target::Ptv3(kind?)
+        };
+        Some(Self { method, age_group, target })
+    }
+
+    pub fn kind(&self) -> Option<ApplicationKind> {
+        match self.target {
+            Target::Ptv3(k) => Some(k),
+            Target::Letter { .. } => None,
+        }
+    }
+}
+
+/// Who reads a letter, as the prompts name them.
+pub(crate) fn reader(a: Audience) -> &'static str {
+    match a {
+        Audience::Behoerde => "einen Sozialleistungsträger bzw. eine Behörde (z. B. Rentenversicherung, Pflegekasse, Versorgungsamt)",
+        Audience::Arzt => "eine mitbehandelnde Ärztin oder einen mitbehandelnden Arzt",
+        Audience::Patient => "die Patientin bzw. den Patienten zur Vorlage",
+        Audience::Frei => "die Empfängerin bzw. den Empfänger",
+    }
+}
+
+/// How a letter prompt asks the model to call the patient.
+pub(crate) fn person(gender: Option<Gender>) -> &'static str {
+    match gender {
+        Some(Gender::W) => "\"die Patientin\" (sie, ihr)",
+        Some(Gender::M) => "\"der Patient\" (er, ihm)",
+        _ => "\"Pat.\"",
+    }
+}
+
+/// The document as a prompt names it, in the genitive ("eines Berichts an …", "eines Schreibens …").
+pub(crate) fn what(template: &Template, frame: &Frame) -> String {
+    match frame.target {
+        Target::Ptv3(k) => format!(
+            "eines Berichts an die Gutachterin oder den Gutachter ({}; {}, {})",
+            template.title,
+            kind_name(k),
+            method_name(frame.method)
+        ),
+        Target::Letter { audience, .. } => format!("eines Schreibens ({}; {}) an {}", template.title, method_name(frame.method), reader(audience)),
+    }
 }
 
 pub(crate) fn method_name(m: Method) -> &'static str {
@@ -227,9 +287,9 @@ pub fn system_prompt(template: &Template, frame: &Frame, prior: bool) -> String 
         "Sachlich und knapp, in ganzen Sätzen."
     };
     let length = template.rules.target_pages.map(|p| format!(" Der ganze Bericht umfasst etwa {p} Seiten, ein Abschnitt also meist nur wenige Sätze.")).unwrap_or_default();
-    let prior = match (prior, frame.kind) {
+    let prior = match (prior, frame.kind()) {
         (false, _) => "",
-        (true, ApplicationKind::Fortfuehrung) => {
+        (true, Some(ApplicationKind::Fortfuehrung)) => {
             "Unter \"Vorbericht\" stehen Abschnitte ihres letzten unterschriebenen Berichts zu diesem Fall; sie werden \
              zitiert wie Fakten. Beschreibe die Veränderung seit dem Vorbericht: was erreicht wurde, was sich an \
              Symptomatik und Zielen geändert hat, was noch aussteht. Den Vorbericht nicht nacherzählen; was dort \
@@ -241,9 +301,42 @@ pub fn system_prompt(template: &Template, frame: &Frame, prior: bool) -> String 
              Fakten der Sitzungen. Bei Widerspruch gilt der neuere Fakt.\n\n"
         }
     };
+    let head = match frame.target {
+        Target::Ptv3(kind) => format!(
+            "Du unterstützt eine Psychotherapeutin beim Entwurf eines Berichts an die Gutachterin oder den \
+             Gutachter ({}; {}, {}, {age}).",
+            template.title,
+            kind_name(kind),
+            method_name(frame.method)
+        ),
+        Target::Letter { audience, .. } => format!(
+            "Du unterstützt eine Psychotherapeutin beim Entwurf eines Schreibens ({}; {}, {age}) an {}.",
+            template.title,
+            method_name(frame.method),
+            reader(audience)
+        ),
+    };
+    let (who, extra) = match frame.target {
+        Target::Ptv3(_) => ("Die Person heißt durchgehend \"Pat.\". Keine Namen, keine Anrede.".to_string(), ""),
+        Target::Letter { audience, gender } => (
+            format!(
+                "Die Person heißt durchgehend {}. Keine Namen, keine Anrede; Namen setzt die Therapeutin selbst ein.",
+                person(gender)
+            ),
+            match audience {
+                Audience::Behoerde => {
+                    "- Einschränkungen und ihre Auswirkungen auf Alltag, Beruf und Teilhabe konkret beschreiben, soweit \
+                     die Fakten sie hergeben.\n\
+                     - Keine Einstufungen vorschlagen (Grad der Behinderung, Pflegegrad, Leistungsvermögen in Stunden, \
+                     Merkzeichen), außer eine Angabe der Therapeutin nennt sie ausdrücklich; dann genau so übernehmen.\n"
+                }
+                Audience::Arzt => "- Kollegial und knapp; was für die Mitbehandlung wichtig ist, zuerst.\n",
+                Audience::Patient | Audience::Frei => "",
+            },
+        ),
+    };
     format!(
-        "Du unterstützt eine Psychotherapeutin beim Entwurf eines Berichts an die Gutachterin oder den \
-         Gutachter ({title}; {kind}, {method}, {age}).\n\
+        "{head}\n\
          Leitfaden: {intro}\n\n\
          Du erhältst die Überschrift und die Hinweise eines Abschnitts sowie nummerierte Fakten ([F1], [F2] …) \
          aus den Sitzungsnotizen, die die Therapeutin geprüft hat. Sitzung 1 ist die erste dokumentierte Sitzung. \
@@ -270,16 +363,14 @@ pub fn system_prompt(template: &Template, frame: &Frame, prior: bool) -> String 
          - Ein Eintrag pro Satz. Jeder Satz nennt im Feld \"facts\" die Nummern der Fakten, auf denen er \
          beruht (mindestens eine). Keine Nummern wie [F1] in den Text schreiben.\n\
          - {style}{length} Fachsprache, auf Deutsch.\n\
-         - Die Person heißt durchgehend \"Pat.\". Keine Namen, keine Anrede.\n\
+         - {who}\n\
+         {extra}\
          - Andere Personen nur über ihre Rolle (die Schwester, der Partner, die Vorgesetzte), keine Orte \
          und keine Arbeitgeber nennen. Platzhalter in eckigen Klammern wie [PERSON_n] nicht übernehmen.\n\
          - Keine Diagnosen, keine ICD-Codes, keine Vorschläge zu Medikamenten oder Dosierungen.\n\
          - Eine Anweisung der Therapeutin befolgen, soweit sie diesen Regeln nicht widerspricht.\n\n\
          Antworte ausschließlich mit JSON in dieser Form, ohne weiteren Text:\n\
          {{\"sentences\": [{{\"text\": \"…\", \"facts\": [1, 3]}}]}}\n",
-        title = template.title,
-        kind = kind_name(frame.kind),
-        method = method_name(frame.method),
         intro = template.intro.trim(),
     )
 }
@@ -633,7 +724,7 @@ mod tests {
     }
 
     fn frame() -> Frame {
-        Frame { method: Method::Vt, age_group: AgeGroup::Adult, kind: ApplicationKind::Erstantrag }
+        Frame { method: Method::Vt, age_group: AgeGroup::Adult, target: Target::Ptv3(ApplicationKind::Erstantrag) }
     }
 
     fn patient() -> Patient {
@@ -880,7 +971,7 @@ mod tests {
             InputFact::prior(prior_targets("behandlungsplan_prognose", targets.iter().copied()), def("behandlungsplan_prognose"), &long),
         ];
         assert!(facts[1].text.ends_with(" …") && facts[1].text.chars().count() <= MAX_PRIOR_CHARS + 2);
-        let frame = Frame { method: Method::Vt, age_group: AgeGroup::Adult, kind: ApplicationKind::Fortfuehrung };
+        let frame = Frame { method: Method::Vt, age_group: AgeGroup::Adult, target: Target::Ptv3(ApplicationKind::Fortfuehrung) };
         let k = keys(&["verlauf", "begruendung_planung"]);
         let req = Request { keys: &k, facts: &facts, tag_keys: &[], existing: &[], instruction: None };
         let p = prepare(&t, &frame, &req, &patient(), Dictionary::from_patient(&patient())).unwrap();
@@ -894,7 +985,7 @@ mod tests {
         assert_eq!(out.sentences[0].facts, vec![0, 1], "its text grounds the goal");
         // Without a Vorbericht the prompt doesn't mention one; an Umwandlung may carry text over.
         assert!(!system_prompt(&t, &frame, false).contains("Vorbericht"));
-        assert!(system_prompt(&bericht(), &Frame { kind: ApplicationKind::Umwandlung, ..frame }, true).contains("Was weiter gilt"));
+        assert!(system_prompt(&bericht(), &Frame { target: Target::Ptv3(ApplicationKind::Umwandlung), ..frame }, true).contains("Was weiter gilt"));
     }
 
     #[test]
@@ -934,5 +1025,27 @@ mod tests {
         assert!(parse("Geht nicht.", &p.sections[0], &facts, &p.map).is_err());
         assert_eq!(html(out.sentences.iter().map(|s| s.text.as_str())), "<p>Pat. berichtet seit dem 3.5.2024 Schlafstörungen. Unterstützung durch die Schwester. Schwester hilft, auch nachts. Schwester hilft im Alltag.</p>");
         assert_eq!(html(["a < b & c"]), "<p>a &lt; b &amp; c</p>");
+    }
+
+    #[test]
+    fn letter_prompt_speaks_to_the_recipient_not_the_gutachter() {
+        let t = crate::templates::builtin().unwrap().into_iter().find(|t| t.key == "drv-befund").unwrap();
+        assert!(Frame::of(&bericht(), Method::Vt, AgeGroup::Adult, None, None).is_none(), "PTV 3 needs its Antragsart");
+        let f = Frame::of(&t, Method::Vt, AgeGroup::Adult, None, Some(Gender::W)).unwrap();
+        assert_eq!(f.kind(), None);
+        let p = system_prompt(&t, &f, false);
+        assert!(p.contains("eines Schreibens (Befundbericht Rentenversicherung; Verhaltenstherapie, Erwachsene) an einen Sozialleistungsträger"), "{p}");
+        assert!(!p.contains("Gutachter"), "{p}");
+        assert!(p.contains("\"die Patientin\" (sie, ihr)") && p.contains("Keine Einstufungen vorschlagen"));
+        assert!(p.contains("Keine Diagnosen, keine ICD-Codes"));
+        let m = Frame::of(&t, Method::Vt, AgeGroup::Adult, None, Some(Gender::M)).unwrap();
+        assert!(system_prompt(&t, &m, false).contains("\"der Patient\""));
+        let arzt = crate::templates::builtin().unwrap().into_iter().find(|t| t.key == "arztbrief").unwrap();
+        let a = system_prompt(&arzt, &Frame::of(&arzt, Method::Tp, AgeGroup::Adult, None, None).unwrap(), false);
+        assert!(a.contains("mitbehandelnde Ärztin") && a.contains("\"Pat.\"") && !a.contains("Keine Einstufungen"));
+        // PTV 3 unchanged.
+        let ptv3 = system_prompt(&bericht(), &frame(), false);
+        assert!(ptv3.starts_with("Du unterstützt eine Psychotherapeutin beim Entwurf eines Berichts an die Gutachterin oder den Gutachter ("));
+        assert!(ptv3.contains("Die Person heißt durchgehend \"Pat.\". Keine Namen, keine Anrede.\n         - Andere Personen") || ptv3.contains("Keine Namen, keine Anrede.\n- Andere Personen"), "{ptv3}");
     }
 }
