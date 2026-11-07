@@ -19,6 +19,7 @@ use thera_core::crypto::{self, KeyStore, MasterKey, Unlock};
 use thera_core::diarize;
 use thera_core::domain::*;
 use thera_core::catalog::{self, CloudModel, Tier};
+use thera_core::compose;
 use thera_core::draft;
 use thera_core::extract;
 use thera_core::gaps;
@@ -1708,6 +1709,10 @@ fn report_view(s: &Store, id: &str) -> thera_core::Result<ReportView> {
         None => vec![],
     };
     let mut template = s.template(&report.template_key)?;
+    if report.kind == letter::KIND {
+        // Sections from a request's questions, in place of template sections she let go.
+        template = letter::effective_template(template, &report.sections);
+    }
     if let Some(ep) = &episode {
         // A Bericht resolves for its application kind; a Sitzungsnotiz has none.
         let kind = application.as_ref().map(|a| a.kind);
@@ -3840,6 +3845,285 @@ async fn workshop_run(app: AppHandle, report_id: String, choice: WorkshopChoice,
     .await
 }
 
+// ---------- quick AI writing in Briefe (slice 47) ----------
+
+/// What she chose for "Mit KI schreiben" or "Neu schreiben".
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LetterChoice {
+    /// Sections to write; `None`: every empty one the AI may write.
+    #[serde(default)]
+    sections: Option<Vec<String>>,
+    instruction: Option<String>,
+    /// Re-write this one section: its text goes along, the result replaces it.
+    #[serde(default)]
+    rewrite: Option<String>,
+}
+
+/// The material a letter draft may use, as ticked in the rail: the Behandlungsfall's applied facts,
+/// her answers, the Vorbericht (all its prose sections with text, offered to every section).
+#[allow(clippy::type_complexity)]
+fn letter_material(
+    s: &Store,
+    view: &ReportView,
+    material: letter::Material,
+) -> thera_core::Result<(Vec<EpisodeFact>, Vec<ReportAnswer>, Vec<PriorRef>, Vec<draft::InputFact>)> {
+    let facts = match (&view.episode, material.facts) {
+        (Some(ep), true) => s.episode_facts(&ep.id)?,
+        _ => vec![],
+    };
+    let answers = if material.answers { current_answers(s, view)? } else { vec![] };
+    let mut input = input_facts(s, &facts)?;
+    input.extend(answers.iter().map(|a| draft::InputFact::answer(&a.section_key, &a.question, &a.text)));
+    let mut priors = Vec::new();
+    if let (true, Some(prior)) = (material.prior, s.letter_prior(&view.report.id)?) {
+        let pv = report_view(s, &prior.id)?;
+        let all: Vec<String> = draft::target_sections(&view.template).iter().map(|d| d.key.clone()).collect();
+        for def in pv.template.sections.iter().filter(|d| d.field == thera_core::templates::FieldKind::Prose) {
+            let text = prior.sections.iter().find(|sec| sec.key == def.key && !sec.not_relevant).map(|sec| draft::plain_text(&sec.body)).unwrap_or_default();
+            if text.trim().is_empty() {
+                continue;
+            }
+            priors.push(PriorRef { report_id: prior.id.clone(), section_key: def.key.clone() });
+            input.push(draft::InputFact::prior(all.clone(), def, &text));
+        }
+    }
+    Ok((facts, answers, priors, input))
+}
+
+/// Exactly what "Mit KI schreiben" (or "Neu schreiben") would send for this letter.
+#[allow(clippy::type_complexity)]
+fn prepare_letter(
+    s: &Store,
+    report_id: &str,
+    choice: &LetterChoice,
+) -> thera_core::Result<(compose::Prepared, Vec<EpisodeFact>, Vec<ReportAnswer>, Vec<PriorRef>, Vec<draft::InputFact>)> {
+    let view = report_view(s, report_id)?;
+    if view.report.kind != letter::KIND {
+        return Err(thera_core::Error::Invalid("Nur für Briefe".into()));
+    }
+    let Some(ep) = view.episode.as_ref() else {
+        return Err(thera_core::Error::Invalid(no_frame(&view).into()));
+    };
+    let frame = draft::Frame {
+        method: ep.method,
+        age_group: ep.age_group,
+        target: draft::Target::Letter { audience: view.template.audience.unwrap_or(thera_core::templates::Audience::Frei), gender: view.patient.gender },
+    };
+    let l = s.letter(report_id)?;
+    let (facts, answers, priors, input) = letter_material(s, &view, l.material)?;
+    let body = |key: &str| view.report.sections.iter().find(|sec| sec.key == key).map(|sec| draft::plain_text(&sec.body)).unwrap_or_default();
+    let targets: Vec<String> = draft::target_sections(&view.template).iter().map(|d| d.key.clone()).collect();
+    let (keys, rewrite): (Vec<String>, Option<String>) = match &choice.rewrite {
+        Some(key) => {
+            if !targets.contains(key) {
+                return Err(thera_core::Error::Invalid("Diesen Abschnitt schreibt die KI nicht".into()));
+            }
+            (vec![key.clone()], Some(body(key)))
+        }
+        None => {
+            let keys: Vec<String> = match &choice.sections {
+                Some(k) => k.iter().filter(|k| targets.contains(k)).cloned().collect(),
+                None => targets.iter().filter(|k| body(k).trim().is_empty() && !not_relevant(&view, k)).cloned().collect(),
+            };
+            if keys.is_empty() {
+                return Err(thera_core::Error::Invalid(
+                    "Alle Abschnitte haben schon Text. Einen Abschnitt leeren oder „Neu schreiben“ für einen Abschnitt nutzen.".into(),
+                ));
+            }
+            (keys, None)
+        }
+    };
+    let questions: Vec<(String, String)> = l.questions.iter().filter_map(|q| q.section_key.clone().map(|k| (k, q.text.clone()))).collect();
+    let dict = s.pseudo_dictionary(&view.patient.id)?;
+    let req = compose::Request { keys: &keys, facts: &input, questions: &questions, rewrite: rewrite.as_deref(), instruction: choice.instruction.as_deref() };
+    let prepared = compose::prepare(&view.template, &frame, &req, &view.patient, dict)?;
+    Ok((prepared, facts, answers, priors, input))
+}
+
+fn preview_of(state: &AppState, patient_id: &str, preview: extract::Preview) -> CmdResult<ExtractPreview> {
+    let terms = state.with(|s| s.pseudo_terms(patient_id))?;
+    let config = state.with(|s| s.llm_config())?;
+    let provider = config.active.map(llm::provider);
+    let model = config.active.and_then(|id| config.settings(id).model).filter(|m| !m.is_empty());
+    Ok(ExtractPreview { preview, terms, provider, model })
+}
+
+/// What the material rail offers for this letter.
+#[derive(Serialize)]
+struct LetterSources {
+    material: letter::Material,
+    /// Applied facts of the Behandlungsfall.
+    facts: usize,
+    /// Her answers to the Lotse questions.
+    answers: usize,
+    /// The Vorbericht and how many of its sections have text.
+    prior: Option<PriorInfo>,
+    /// The deadline the request names ("bis zum …"), read locally.
+    deadline: Option<String>,
+}
+
+#[tauri::command]
+fn letter_sources(state: State<'_, AppState>, id: String) -> CmdResult<LetterSources> {
+    state.with(|s| {
+        let view = report_view(s, &id)?;
+        let l = s.letter(&id)?;
+        let all = letter::Material { facts: true, answers: true, prior: true };
+        let (facts, answers, priors, _) = letter_material(s, &view, all)?;
+        let prior = match s.letter_prior(&id)? {
+            Some(p) => Some(PriorInfo { report_id: p.id, kind: None, seq: None, signed_at: p.signed_at, sections: priors.len() }),
+            None => None,
+        };
+        Ok(LetterSources { material: l.material, facts: facts.len(), answers: answers.len(), prior, deadline: compose::deadline(&l.request_text) })
+    })
+}
+
+#[tauri::command]
+fn letter_material_set(state: State<'_, AppState>, id: String, material: letter::Material) -> CmdResult<Letter> {
+    state.with(|s| s.set_letter_material(&id, material))
+}
+
+#[tauri::command]
+fn letter_request_save(state: State<'_, AppState>, id: String, text: String) -> CmdResult<Letter> {
+    state.with(|s| s.save_letter_request(&id, &text))
+}
+
+#[tauri::command]
+fn letter_questions_set(state: State<'_, AppState>, id: String, questions: Vec<String>) -> CmdResult<Letter> {
+    state.with(|s| s.set_letter_questions(&id, &questions))
+}
+
+#[tauri::command]
+fn letter_sections_set(state: State<'_, AppState>, id: String, sections: Vec<letter::RequestSection>, keep_template: bool) -> CmdResult<Letter> {
+    state.with(|s| s.set_request_sections(&id, &sections, keep_template))
+}
+
+fn prepare_letter_questions(s: &Store, id: &str) -> thera_core::Result<compose::PreparedQuestions> {
+    let l = s.letter(id)?;
+    let patient = s.patient(&l.patient_id)?;
+    compose::prepare_questions(&l.request_text, &patient, s.pseudo_dictionary(&patient.id)?)
+}
+
+/// The redaction preview for finding the request's questions.
+#[tauri::command]
+fn letter_questions_preview(state: State<'_, AppState>, id: String) -> CmdResult<ExtractPreview> {
+    let prepared = state.with(|s| prepare_letter_questions(s, &id))?;
+    let patient_id = state.with(|s| s.letter(&id))?.patient_id;
+    preview_of(&state, &patient_id, prepared.preview())
+}
+
+/// Sends the previewed request text and stores the questions found (replacing the earlier ones;
+/// a question that is already a section keeps it).
+#[tauri::command]
+async fn letter_questions_run(app: AppHandle, id: String, digest: String, request_id: String) -> CmdResult<Option<Letter>> {
+    let events = app.clone();
+    blocking(app, move |state| {
+        let run = LlmRun::start(state, &request_id)?;
+        let (provider, model) = active_llm(state)?;
+        let prepared = state.with(|s| prepare_letter_questions(s, &id))?;
+        if prepared.digest != digest {
+            return Err(CmdError::Other("Der Text hat sich seit der Vorschau geändert. Bitte die Vorschau erneut prüfen.".into()));
+        }
+        let ep = match llm_endpoint(state, provider, &run.cancel) {
+            Err(_) if run.cancelled() => return Ok(None),
+            r => r?.0,
+        };
+        let messages = [(llm::Role::System, &prepared.system), (llm::Role::User, &prepared.user)];
+        let Some(completion) = stream_call(state, &events, &run, "llm.letter_questions", (provider, &model), &ep, &messages, &compose::questions_options())? else {
+            return Ok(None);
+        };
+        let questions = compose::parse_questions(&completion.text, &prepared)?;
+        Ok(Some(state.with(|s| s.set_letter_questions(&id, &questions))?))
+    })
+    .await
+}
+
+/// The redaction preview for "Mit KI schreiben" / "Neu schreiben": one request for the letter.
+#[tauri::command]
+fn letter_preview(state: State<'_, AppState>, id: String, choice: LetterChoice) -> CmdResult<ExtractPreview> {
+    let (prepared, ..) = state.with(|s| prepare_letter(s, &id, &choice))?;
+    let patient_id = state.with(|s| s.letter(&id))?.patient_id;
+    preview_of(&state, &patient_id, prepared.preview())
+}
+
+#[derive(Serialize)]
+struct LetterResult {
+    /// Sections that got text.
+    written: Vec<String>,
+    sentences: usize,
+    /// Kept but marked "ohne Beleg".
+    unsupported: usize,
+    dropped: usize,
+    cancelled: bool,
+}
+
+/// Sends the previewed letter request (streamed, cancelable) and puts the text straight into the
+/// sections: empty ones on "Mit KI schreiben", the one section on "Neu schreiben". The drafts keep
+/// their sources for "Woher kommt das?"; a sentence "ohne Beleg" stays marked in the text.
+#[tauri::command]
+async fn letter_run(app: AppHandle, id: String, choice: LetterChoice, digest: String, request_id: String) -> CmdResult<LetterResult> {
+    let events = app.clone();
+    blocking(app, move |state| {
+        let run = LlmRun::start(state, &request_id)?;
+        let (provider, model) = active_llm(state)?;
+        let (prepared, facts, answers, priors, input) = state.with(|s| prepare_letter(s, &id, &choice))?;
+        if prepared.digest != digest {
+            return Err(CmdError::Other("Der Text hat sich seit der Vorschau geändert. Bitte die Vorschau erneut prüfen.".into()));
+        }
+        let progress = |stage, done| {
+            let _ = events.emit("draft-progress", ExtractProgress { report_id: id.clone(), stage, done, total: 1 });
+        };
+        let nothing = || Ok(LetterResult { written: vec![], sentences: 0, unsupported: 0, dropped: 0, cancelled: true });
+        if provider == ProviderId::Local {
+            progress("loading", 0);
+        }
+        let ep = match llm_endpoint(state, provider, &run.cancel) {
+            Err(_) if run.cancelled() => return nothing(),
+            r => r?.0,
+        };
+        progress("running", 0);
+        let messages = [(llm::Role::System, &prepared.system), (llm::Role::User, &prepared.user)];
+        let Some(completion) = stream_call(state, &events, &run, "llm.letter", (provider, &model), &ep, &messages, &compose::chat_options())? else {
+            return nothing();
+        };
+        let results = compose::parse(&completion.text, &prepared, &input)?;
+        progress("running", 1);
+        let sentences = results.iter().map(|r| r.parsed.sentences.len()).sum();
+        let unsupported = results.iter().map(|r| r.parsed.unsupported.len()).sum();
+        let dropped = results.iter().map(|r| r.parsed.dropped).sum();
+        if results.is_empty() {
+            return Ok(LetterResult { written: vec![], sentences: 0, unsupported: 0, dropped, cancelled: false });
+        }
+        let meta = DraftMeta {
+            provider: provider_str(provider),
+            model: completion.model,
+            prompt_hash: prepared.prompt_hash.clone(),
+            instructed: draft::clean_instruction(choice.instruction.as_deref())?.is_some(),
+            session_ids: None,
+            source: DraftSource::Letter,
+        };
+        let written = state.with(|s| {
+            let drafts = s.save_drafts(&id, &meta, &results, &facts, &answers, &priors)?;
+            let mut written = Vec::new();
+            for r in &results {
+                if let Some(d) = drafts.iter().find(|d| d.section_key == r.key && d.status == DraftStatus::Proposed) {
+                    s.apply_draft(&id, &d.id, ApplyMode::Replace)?;
+                    written.push(r.key.clone());
+                }
+            }
+            Ok::<_, thera_core::Error>(written)
+        })?;
+        Ok(LetterResult { written, sentences, unsupported, dropped, cancelled: false })
+    })
+    .await
+}
+
+/// The applied letter drafts with their sources ("Woher kommt das?").
+#[tauri::command]
+fn letter_drafts(state: State<'_, AppState>, id: String) -> CmdResult<Vec<SectionDraft>> {
+    state.with(|s| Ok(s.section_drafts(&id)?.into_iter().filter(|d| d.status == DraftStatus::Applied).collect()))
+}
+
 // ---------- voice prep (slice 26) ----------
 
 #[derive(Serialize)]
@@ -4507,6 +4791,16 @@ pub fn run() {
             workshop_set,
             workshop_preview,
             workshop_run,
+            letter_sources,
+            letter_material_set,
+            letter_request_save,
+            letter_questions_set,
+            letter_sections_set,
+            letter_questions_preview,
+            letter_questions_run,
+            letter_preview,
+            letter_run,
+            letter_drafts,
             session_get,
             source_audio_wav,
             transcription_start,

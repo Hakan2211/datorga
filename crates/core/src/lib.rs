@@ -7,6 +7,7 @@ pub mod backup;
 pub mod audit;
 pub mod calendar;
 pub mod catalog;
+pub mod compose;
 pub mod context;
 pub mod consent;
 pub mod contingent;

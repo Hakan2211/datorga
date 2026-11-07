@@ -94,8 +94,8 @@ str_enum!(
 );
 str_enum!(
     /// What a section draft was written from: the applied Sitzungsnotiz facts (cited per sentence)
-    /// or the therapist's Werkstatt dictation.
-    DraftSource { Facts => "facts", Dictation => "dictation" }
+    /// or the therapist's Werkstatt dictation, or a quick letter draft in Briefe (slice 47).
+    DraftSource { Facts => "facts", Dictation => "dictation", Letter => "letter" }
 );
 str_enum!(
     /// How the therapist answered a Lotse question: typed, dictated or with a quick chip.
@@ -543,6 +543,13 @@ pub struct ReportSection {
     /// An optional section marked "nicht relevant": no blocking, left out of the export.
     #[serde(default)]
     pub not_relevant: bool,
+    /// A letter section from a request's question (slice 47): its own heading; `None` for a
+    /// template section.
+    #[serde(default)]
+    pub heading: Option<String>,
+    /// Order of a request section among the others.
+    #[serde(default)]
+    pub ord: Option<i64>,
 }
 
 /// ICD-10 diagnosis, entered by the therapist only (never AI-filled; MDR boundary).
@@ -690,6 +697,9 @@ pub struct DraftSentenceView {
     pub decision: Option<SentenceDecision>,
     /// Taken over in her own wording.
     pub edited: bool,
+    /// A letter draft's sentence the material doesn't back ("ohne Beleg", slice 47).
+    #[serde(default)]
+    pub unsupported: bool,
 }
 
 /// A section of the Vorbericht a draft sentence cites (slice 40).

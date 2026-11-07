@@ -3,7 +3,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Search, X } from 'lucide-react'
+import { FileQuestion, Search, X } from 'lucide-react'
 import type { Category } from '@/bindings/Category'
 import type { Letter } from '@/bindings/Letter'
 import type { Recipient } from '@/bindings/Recipient'
@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { api, errorMessage, q } from '@/lib/api'
 import { letterTemplates } from '@/lib/letters'
 import { cn } from '@/lib/utils'
@@ -85,14 +86,19 @@ export function NewLetterForm({
   const [recipient, setRecipient] = useState<Recipient | null>(null)
   const [pickRecipient, setPickRecipient] = useState(false)
   const [templateKey, setTemplateKey] = useState<string | null>(null)
+  const [request, setRequest] = useState('')
+  const [withRequest, setWithRequest] = useState(false)
   const patients = useQuery({ ...q.patients(), enabled: !fixedPatient })
   const templates = useQuery(q.templates())
   const types = useMemo(() => letterTemplates(templates.data ?? [], recipient?.kind ?? null, categories), [templates.data, recipient, categories])
   const chosenType = templateKey ?? types[0]?.template.key ?? null
 
   const create = useMutation({
-    mutationFn: () =>
-      api.createLetter({ patient_id: patientId!, template_key: chosenType!, episode_id: null, recipient_id: recipient?.id ?? null }),
+    mutationFn: async () => {
+      const l = await api.createLetter({ patient_id: patientId!, template_key: chosenType!, episode_id: null, recipient_id: recipient?.id ?? null })
+      // The pasted request goes with it; its questions are found on the letter page.
+      return request.trim() ? api.saveLetterRequest(l.report_id, request) : l
+    },
     onSuccess: (l) => {
       void qc.invalidateQueries({ queryKey: ['letters'] })
       void qc.invalidateQueries({ queryKey: ['reports'] })
@@ -205,6 +211,28 @@ export function NewLetterForm({
             </button>
           ))}
         </div>
+      </section>
+
+      <section className="space-y-2">
+        {withRequest ? (
+          <>
+            <Label htmlFor="new-letter-request">{t('letterAi.requestTitle')}</Label>
+            <Textarea
+              id="new-letter-request"
+              rows={4}
+              value={request}
+              onChange={(e) => setRequest(e.target.value)}
+              placeholder={t('letterAi.requestPlaceholder')}
+              className="max-h-48 text-[13px]"
+              data-testid="new-letter-request"
+            />
+            <p className="text-xs text-muted-foreground">{t('letterAi.requestHint')}</p>
+          </>
+        ) : (
+          <Button variant="ghost" size="sm" className="px-0" onClick={() => setWithRequest(true)} data-testid="new-letter-with-request">
+            <FileQuestion /> {t('letterAi.requestAdd')}
+          </Button>
+        )}
       </section>
 
       <DialogFooter>

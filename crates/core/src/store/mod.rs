@@ -74,6 +74,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/V23__review.sql"),
     include_str!("migrations/V24__trash.sql"),
     include_str!("migrations/V25__letters.sql"),
+    include_str!("migrations/V26__letter_ai.sql"),
 ];
 
 /// Longest clip `audio_clip` returns (10 min, ~19 MB of WAV).
@@ -1789,12 +1790,15 @@ impl Store {
     }
 
     /// A report that can still take a draft of `source` (`None`: any): fact drafts are for
-    /// Berichte, Werkstatt drafts for Berichte and Sitzungsnotizen; neither once signed.
+    /// Berichte and letters, Werkstatt drafts for all three, quick letter drafts for letters;
+    /// none once signed.
     fn editable_for_drafts(&self, report_id: &str, source: Option<DraftSource>) -> Result<Report> {
         let report = self.report(report_id)?;
         let ok = match report.kind.as_str() {
-            "bericht" => true,
-            "sitzungsnotiz" => source != Some(DraftSource::Facts),
+            // Letters take fact drafts (Lotse, slice 46) and quick letter drafts (slice 47).
+            "bericht" => source != Some(DraftSource::Letter),
+            crate::letter::KIND => true,
+            "sitzungsnotiz" => matches!(source, None | Some(DraftSource::Dictation)),
             _ => false,
         };
         if !ok {
@@ -1839,17 +1843,17 @@ impl Store {
             })?
             .collect::<std::result::Result<_, _>>()?;
         let answers = self.report_answers(report_id)?;
-        let mut sentences = self.conn.prepare("SELECT id, text, decision, edited FROM draft_sentence WHERE draft_id = ?1 ORDER BY seq")?;
+        let mut sentences = self.conn.prepare("SELECT id, text, decision, edited, unsupported FROM draft_sentence WHERE draft_id = ?1 ORDER BY seq")?;
         let mut cites = self.conn.prepare("SELECT fact_id FROM report_citation WHERE sentence_id = ?1")?;
         let mut answer_cites = self.conn.prepare("SELECT answer_id FROM answer_citation WHERE sentence_id = ?1")?;
         let mut prior_cites = self.conn.prepare("SELECT report_id, section_key FROM prior_citation WHERE sentence_id = ?1 ORDER BY rowid")?;
         // Vorberichte are signed: read each once.
         let mut priors: Vec<Report> = Vec::new();
         for d in &mut drafts {
-            let rows: Vec<(String, String, Option<String>, bool)> = sentences
-                .query_map([&d.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            let rows: Vec<(String, String, Option<String>, bool, bool)> = sentences
+                .query_map([&d.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
                 .collect::<std::result::Result<_, _>>()?;
-            for (id, text, decision, edited) in rows {
+            for (id, text, decision, edited, unsupported) in rows {
                 let decision = decision.map(|d| d.parse()).transpose()?;
                 let ids: Vec<String> = cites.query_map([&id], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
                 let sources = facts.iter().filter(|f| ids.contains(&f.fact_id)).cloned().collect();
@@ -1865,7 +1869,7 @@ impl Store {
                     let body = p.sections.iter().find(|s| s.key == key).map(|s| s.body.as_str()).unwrap_or("");
                     prior.push(PriorSource { report_id: prior_id, section_key: key, signed_at: p.signed_at.clone(), excerpt: excerpt(&crate::pii::plain_text(body)) });
                 }
-                d.sentences.push(DraftSentenceView { id, text, sources, answers, prior, decision, edited });
+                d.sentences.push(DraftSentenceView { id, text, sources, answers, prior, decision, edited, unsupported });
             }
         }
         Ok(drafts)
@@ -1891,6 +1895,7 @@ impl Store {
         let prompt_version = match meta.source {
             DraftSource::Facts => crate::draft::PROMPT_VERSION,
             DraftSource::Dictation => crate::workshop::PROMPT_VERSION,
+            DraftSource::Letter => crate::compose::PROMPT_VERSION,
         };
         for crate::draft::SectionResult { key, parsed, with_existing } in drafts {
             if !report.sections.iter().any(|s| &s.key == key) {
@@ -1911,8 +1916,8 @@ impl Store {
             for (seq, sentence) in parsed.sentences.iter().enumerate() {
                 let sid = new_id();
                 tx.execute(
-                    "INSERT INTO draft_sentence (id, draft_id, seq, text) VALUES (?1, ?2, ?3, ?4)",
-                    params![sid, id, seq as i64, sentence.text],
+                    "INSERT INTO draft_sentence (id, draft_id, seq, text, unsupported) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![sid, id, seq as i64, sentence.text, parsed.unsupported.contains(&seq)],
                 )?;
                 for &i in &sentence.facts {
                     if let Some(f) = facts.get(i) {
@@ -1982,7 +1987,7 @@ impl Store {
         // Into an empty section, append and replace are the same.
         let replaces = mode == ApplyMode::Replace || crate::pii::plain_text(&section.body).trim().is_empty();
         // Sentences taken over one by one are in the text already, discarded ones stay out.
-        let taken: Vec<&str> = draft
+        let taken: Vec<(&str, bool)> = draft
             .sentences
             .iter()
             .filter(|s| match s.decision {
@@ -1990,12 +1995,13 @@ impl Store {
                 Some(SentenceDecision::Accepted) => replaces,
                 Some(SentenceDecision::Rejected) => false,
             })
-            .map(|s| s.text.as_str())
+            .map(|s| (s.text.as_str(), s.unsupported))
             .collect();
         if !draft.sentences.iter().any(|s| s.decision.is_none()) {
             return Err(Error::Invalid("Der Entwurf ist leer".into()));
         }
-        let html = crate::draft::html(taken);
+        // A letter draft's sentences "ohne Beleg" stay marked in the text until she decides.
+        let html = crate::compose::html(taken);
         let (body, origin) = if replaces {
             (html, SectionOrigin::Ai)
         } else {
@@ -2069,7 +2075,7 @@ impl Store {
             .optional()?
             .ok_or_else(|| Error::NotFound(format!("report {id}")))?;
         let mut stmt =
-            self.conn.prepare("SELECT key, body, origin, edited_at, not_relevant FROM report_section WHERE report_id = ?1")?;
+            self.conn.prepare("SELECT key, body, origin, edited_at, not_relevant, heading, ord FROM report_section WHERE report_id = ?1")?;
         report.sections = stmt
             .query_map([id], |r| {
                 Ok(ReportSection {
@@ -2078,6 +2084,8 @@ impl Store {
                     origin: parse_col(r, 2)?,
                     edited_at: r.get(3)?,
                     not_relevant: r.get(4)?,
+                    heading: r.get(5)?,
+                    ord: r.get(6)?,
                 })
             })?
             .collect::<std::result::Result<_, _>>()?;
@@ -3484,14 +3492,14 @@ mod tests {
         let meta = DraftMeta { provider: "local".into(), model: "m".into(), prompt_hash: "h".into(), instructed: false, session_ids: None, source: DraftSource::Facts };
         let run = vec![SectionResult {
             key: "somatik".into(),
-            parsed: Parsed { sentences: vec![DraftSentence { text: "Pat. nimmt Sertralin 50 mg.".into(), facts: vec![0, 1] }], dropped: 0 },
+            parsed: Parsed { sentences: vec![DraftSentence { text: "Pat. nimmt Sertralin 50 mg.".into(), facts: vec![0, 1] }], dropped: 0, unsupported: vec![] },
             with_existing: false,
         }];
         let drafts = store.save_drafts(&rid, &meta, &run, &facts, &answers, &[]).unwrap();
         let s = &drafts[0].sentences[0];
         assert_eq!((s.sources.len(), s.answers.len()), (1, 1));
         assert_eq!(s.answers[0].question, q);
-        let bad = vec![SectionResult { key: "somatik".into(), parsed: Parsed { sentences: vec![DraftSentence { text: "x".into(), facts: vec![3] }], dropped: 0 }, with_existing: false }];
+        let bad = vec![SectionResult { key: "somatik".into(), parsed: Parsed { sentences: vec![DraftSentence { text: "x".into(), facts: vec![3] }], dropped: 0, unsupported: vec![] }, with_existing: false }];
         assert!(store.save_drafts(&rid, &meta, &bad, &facts, &answers, &[]).is_err(), "unknown index");
 
         let covered = vec![CoveredAsk { section: "symptomatik_befund".into(), ask: "befund".into(), facts: vec![facts[0].fact_id.clone()] }];
@@ -3547,7 +3555,7 @@ mod tests {
         let rid = app.report_id.clone().unwrap();
         let meta = DraftMeta { provider: "local".into(), model: "m".into(), prompt_hash: "ph".into(), instructed: false, session_ids: None, source: DraftSource::Facts };
         let sentence = |t: &str| DraftSentence { text: t.into(), facts: vec![0] };
-        let run = |key: &str, s: Vec<DraftSentence>| vec![SectionResult { key: key.into(), parsed: Parsed { sentences: s, dropped: 0 }, with_existing: false }];
+        let run = |key: &str, s: Vec<DraftSentence>| vec![SectionResult { key: key.into(), parsed: Parsed { sentences: s, dropped: 0, unsupported: vec![] }, with_existing: false }];
         let choice = |id: &str, accept: bool, text: Option<&str>| SentenceChoice { sentence_id: id.into(), accept, text: text.map(Into::into) };
         let body = |r: &Report, k: &str| r.sections.iter().find(|s| s.key == k).unwrap().body.clone();
 
@@ -3675,7 +3683,7 @@ mod tests {
         let run = |sections: Vec<(&str, Vec<DraftSentence>)>| -> Vec<SectionResult> {
             sections
                 .into_iter()
-                .map(|(k, s)| SectionResult { key: k.to_string(), parsed: Parsed { sentences: s, dropped: 1 }, with_existing: k == "somatik" })
+                .map(|(k, s)| SectionResult { key: k.to_string(), parsed: Parsed { sentences: s, dropped: 1, unsupported: vec![] }, with_existing: k == "somatik" })
                 .collect()
         };
         fn meta() -> DraftMeta {
@@ -3772,7 +3780,7 @@ mod tests {
         let meta = |source| DraftMeta { provider: "openrouter".into(), model: "m".into(), prompt_hash: "ph".into(), instructed: false, session_ids: None, source };
         let run = vec![SectionResult {
             key: key.clone(),
-            parsed: Parsed { sentences: vec![DraftSentence { text: "Pat. schläft schlecht.".into(), facts: vec![] }], dropped: 0 },
+            parsed: Parsed { sentences: vec![DraftSentence { text: "Pat. schläft schlecht.".into(), facts: vec![] }], dropped: 0, unsupported: vec![] },
             with_existing: false,
         }];
         assert!(store.save_drafts(&note.id, &meta(DraftSource::Facts), &run, &[], &[], &[]).is_err(), "fact drafts are for Berichte only");

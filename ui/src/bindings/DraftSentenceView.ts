@@ -20,4 +20,8 @@ decision: SentenceDecision | null,
 /**
  * Taken over in her own wording.
  */
-edited: boolean, };
+edited: boolean, 
+/**
+ * A letter draft's sentence the material doesn't back ("ohne Beleg", slice 47).
+ */
+unsupported: boolean, };

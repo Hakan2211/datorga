@@ -194,14 +194,14 @@ mod tests {
         let meta = DraftMeta { provider: "local".into(), model: "m".into(), prompt_hash: "h".into(), instructed: false, session_ids: None, source: DraftSource::Facts };
         let run = vec![SectionResult {
             key: "umwandlung".into(),
-            parsed: Parsed { sentences: vec![DraftSentence { text: "Pat. fährt wieder Bus.".into(), facts: vec![0, 1] }], dropped: 0 },
+            parsed: Parsed { sentences: vec![DraftSentence { text: "Pat. fährt wieder Bus.".into(), facts: vec![0, 1] }], dropped: 0, unsupported: vec![] },
             with_existing: false,
         }];
         let d = store.save_drafts(&next_id, &meta, &run, &[], &[a], &priors).unwrap();
         let s = &d[0].sentences[0];
         assert_eq!((s.answers.len(), s.prior.len()), (1, 1));
         assert_eq!((s.prior[0].excerpt.as_str(), s.prior[0].signed_at.is_some()), ("Ziel: allein Bus fahren.", true));
-        let bad = vec![SectionResult { key: "umwandlung".into(), parsed: Parsed { sentences: vec![DraftSentence { text: "x".into(), facts: vec![2] }], dropped: 0 }, with_existing: false }];
+        let bad = vec![SectionResult { key: "umwandlung".into(), parsed: Parsed { sentences: vec![DraftSentence { text: "x".into(), facts: vec![2] }], dropped: 0, unsupported: vec![] }, with_existing: false }];
         assert!(store.save_drafts(&next_id, &meta, &bad, &[], &[], &priors).is_err(), "unknown index");
         store.erase_patient(&p.id).unwrap();
         let left: i64 = store.conn().query_row("SELECT COUNT(*) FROM prior_citation", [], |r| r.get(0)).unwrap();

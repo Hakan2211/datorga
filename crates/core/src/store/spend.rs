@@ -33,6 +33,8 @@ pub enum SpendTask {
     Review,
     /// `llm.workshop`: Diktat-Werkstatt.
     Workshop,
+    /// `llm.letter` and `llm.letter_questions`: quick AI writing in Briefe.
+    Letter,
     /// `llm.agent`: assistant chat.
     Agent,
     /// `llm.prep_sheet` and `prep.live`: voice session prep.
@@ -53,6 +55,7 @@ fn task(action: &str) -> Option<SpendTask> {
         "llm.gaps" => SpendTask::Gaps,
         "llm.review" => SpendTask::Review,
         "llm.workshop" => SpendTask::Workshop,
+        "llm.letter" | "llm.letter_questions" => SpendTask::Letter,
         "llm.agent" => SpendTask::Agent,
         "llm.prep_sheet" | "prep.live" => SpendTask::Prep,
         "transcription.cloud" | "dictation.cloud" => SpendTask::Speech,

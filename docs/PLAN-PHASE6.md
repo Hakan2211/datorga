@@ -119,7 +119,7 @@ Anschrift (Straße, PLZ, Ort), Krankenkasse, Versichertennummer (KV), Rentenvers
 - `text_block` (id, title, body, template_keys_json, section_key, origin builtin|user, use_count, timestamps).
 - `practice_asset` (kind logo|signature PK, JPEG/PNG blob); practice fields as `app_setting` keys `practice.*`. Migrate the old `practice_header` text into `practice.name` + address lines on first open.
 - Consent kind `release_of_information` (+ `recipient_id`, `scope`) in the existing consent table.
-- V26 (slice 49): `style_exemplar` (id, template_key, section_key NULL, redacted_text, source sha256, created_at) as §3 of PLAN-AMENDMENTS planned; `source_document` (exists from V1) holds the upload.
+- V27 (slice 49; V26 went to slice 47's `draft_sentence.unsupported`): `style_exemplar` (id, template_key, section_key NULL, redacted_text, source sha256, created_at) as §3 of PLAN-AMENDMENTS planned; `source_document` (exists from V1) holds the upload.
 
 ### Core (`crates/core`)
 - `templates.rs`: `Template` + `category`, `audience` (gutachter | behoerde | arzt | patient | frei), `layout` (bericht | letter), `subject`, `refs` (required reference labels), `closing`; `report_kinds` stays for `ptv3`. Add `template_for_letter(key)` next to `template_key_for(kind)`. `BUILTIN` gains the six `templates/briefe/*.yaml`. `validate()` rules for the new fields.

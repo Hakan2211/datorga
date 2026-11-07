@@ -1,4 +1,4 @@
-import { Extension, Node, getHTMLFromFragment, mergeAttributes, type Editor, type Extensions } from '@tiptap/core'
+import { Extension, Mark, Node, getHTMLFromFragment, mergeAttributes, type Editor, type Extensions } from '@tiptap/core'
 import type { Node as PMNode, ResolvedPos, Schema } from '@tiptap/pm/model'
 import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
@@ -30,7 +30,54 @@ export function richExtensions({ document = true, placeholder }: { document?: bo
     }),
     Placeholder.configure({ placeholder, includeChildren: true }),
     DictationPending,
+    OhneBeleg,
   ]
+}
+
+// ---------- letters: AI sentences "ohne Beleg" (slice 47) ----------
+
+/** The attribute `core::compose` marks a sentence with that the material doesn't back. */
+export const OHNE_BELEG_ATTR = 'data-ohne-beleg'
+
+/**
+ * A letter sentence the AI wrote without a source: highlighted until she keeps it (mark removed)
+ * or deletes it. Signing is blocked while one is left. Not exclusive with bold/italic; not
+ * continued when typing at its end.
+ */
+export const OhneBeleg = Mark.create({
+  name: 'ohneBeleg',
+  inclusive: false,
+  parseHTML: () => [{ tag: `mark[${OHNE_BELEG_ATTR}]` }],
+  renderHTML: ({ HTMLAttributes }) => ['mark', mergeAttributes(HTMLAttributes, { [OHNE_BELEG_ATTR]: '', class: 'ohne-beleg' }), 0],
+})
+
+/** The sentences marked "ohne Beleg" in a section's HTML, in order. */
+export function unbackedSentences(html: string): string[] {
+  if (!html.includes(OHNE_BELEG_ATTR)) return []
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  return [...doc.querySelectorAll(`mark[${OHNE_BELEG_ATTR}]`)].map((m) => m.textContent ?? '')
+}
+
+/**
+ * The section's HTML with the `index`-th sentence "ohne Beleg" kept (mark removed) or deleted
+ * (with the space before it).
+ */
+export function decideUnbacked(html: string, index: number, keep: boolean): string {
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const mark = doc.querySelectorAll(`mark[${OHNE_BELEG_ATTR}]`)[index]
+  if (!mark) return html
+  if (keep) {
+    mark.replaceWith(...mark.childNodes)
+  } else {
+    const before = mark.previousSibling
+    if (before?.nodeType === 3) before.textContent = (before.textContent ?? '').replace(/\s+$/, '')
+    const after = mark.nextSibling
+    if (!before && after?.nodeType === 3) after.textContent = (after.textContent ?? '').replace(/^\s+/, '')
+    mark.remove()
+  }
+  // A paragraph left empty goes too.
+  for (const p of doc.body.querySelectorAll('p')) if (!p.textContent?.trim() && !p.querySelector('br')) p.remove()
+  return doc.body.innerHTML
 }
 
 // ---------- voice mode: dictated text at the cursor ----------

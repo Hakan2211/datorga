@@ -5,4 +5,13 @@ export type ReportSection = { key: string, body: string, origin: SectionOrigin, 
 /**
  * An optional section marked "nicht relevant": no blocking, left out of the export.
  */
-not_relevant: boolean, };
+not_relevant: boolean, 
+/**
+ * A letter section from a request's question (slice 47): its own heading; `None` for a
+ * template section.
+ */
+heading: string | null, 
+/**
+ * Order of a request section among the others.
+ */
+ord: bigint | null, };

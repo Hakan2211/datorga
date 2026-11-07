@@ -178,6 +178,8 @@ pub struct DraftSentence {
 pub struct Parsed {
     pub sentences: Vec<DraftSentence>,
     pub dropped: usize,
+    /// Sentences (indices) kept "ohne Beleg": a letter draft keeps what a Bericht draft drops.
+    pub unsupported: Vec<usize>,
 }
 
 /// One section's checked answer, ready to store.

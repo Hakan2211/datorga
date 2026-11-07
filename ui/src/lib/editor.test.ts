@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Editor, createNodeFromContent } from '@tiptap/core'
 import type { Fragment } from '@tiptap/pm/model'
 import type { SectionDef } from '@/bindings/SectionDef'
-import { ReportLocked, documentExtensions, documentHtml, sectionBodies, sectionPos } from './editor'
+import { ReportLocked, decideUnbacked, documentExtensions, documentHtml, sectionBodies, sectionPos, unbackedSentences } from './editor'
 
 const def = (key: string, field: SectionDef['field'] = 'prose') =>
   ({ key, heading: key, number: null, field, hints: [], required: true, ai_allowed: true }) as unknown as SectionDef
@@ -48,5 +48,29 @@ describe('document mode mapping', () => {
     const pos = sectionPos(ed.state.doc, 'plan')!
     ed.view.dispatch(ed.state.tr.replaceWith(pos.from, pos.to, createNodeFromContent('<p>neu</p><p>zwei</p>', ed.schema) as Fragment))
     expect(sectionBodies(ed.state.doc, ed.schema)).toEqual({ anamnese: '<p>a</p>', plan: '<p>neu</p><p>zwei</p>' })
+  })
+})
+
+describe('sentences "ohne Beleg" (slice 47)', () => {
+  const html = '<p>Erster Satz. <mark data-ohne-beleg="">Ohne Beleg.</mark> Dritter Satz.</p><p><mark data-ohne-beleg="">Allein.</mark></p>'
+
+  it('lists the marked sentences in order', () => {
+    expect(unbackedSentences(html)).toEqual(['Ohne Beleg.', 'Allein.'])
+    expect(unbackedSentences('<p>Nichts.</p>')).toEqual([])
+  })
+
+  it('keeps a sentence by removing its mark, or deletes it with its space', () => {
+    expect(decideUnbacked(html, 0, true)).toBe('<p>Erster Satz. Ohne Beleg. Dritter Satz.</p><p><mark data-ohne-beleg="">Allein.</mark></p>')
+    expect(decideUnbacked(html, 0, false)).toBe('<p>Erster Satz. Dritter Satz.</p><p><mark data-ohne-beleg="">Allein.</mark></p>')
+    expect(decideUnbacked(html, 1, false)).toBe('<p>Erster Satz. <mark data-ohne-beleg="">Ohne Beleg.</mark> Dritter Satz.</p>')
+    expect(decideUnbacked('<p><mark data-ohne-beleg="">Vorne.</mark> Rest.</p>', 0, false)).toBe('<p>Rest.</p>')
+    expect(decideUnbacked(html, 5, true)).toBe(html)
+  })
+
+  it('survives the editor: the mark is parsed and written back', () => {
+    const editor = new Editor({ extensions: documentExtensions(sections, ''), content: documentHtml(sections, { anamnese: html, plan: '' }) })
+    const body = sectionBodies(editor.state.doc, editor.schema).anamnese
+    expect(unbackedSentences(body)).toEqual(['Ohne Beleg.', 'Allein.'])
+    editor.destroy()
   })
 })

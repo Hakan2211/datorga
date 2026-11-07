@@ -10,6 +10,7 @@ import type { LetterMeta } from '@/bindings/LetterMeta'
 import type { RecipientKind } from '@/bindings/RecipientKind'
 import { Page, PageHeader } from '@/components/app-shell'
 import { SectionCard, formatDate } from '@/components/bits'
+import { ActiveSectionCard, LetterAiCard, RequestCard, UnbackedCard } from '@/components/briefe/letter-ai'
 import { LetterStatePill } from '@/components/briefe/letter-state'
 import { RecipientPicker } from '@/components/briefe/recipient-picker'
 import { ReleaseDialog } from '@/components/briefe/release'
@@ -59,6 +60,7 @@ function LetterEditor({ view, letter }: { view: ReportView; letter: Letter }) {
   const linked = useQuery(q.patientRecipients(patient.id))
   const checklist = useQuery(q.checklist(reportId))
   const [preview, setPreview] = useState(false)
+  const [active, setActive] = useState<string | null>(null)
 
   const refresh = useCallback(() => {
     void qc.invalidateQueries({ queryKey: ['checklist', reportId] })
@@ -134,6 +136,15 @@ function LetterEditor({ view, letter }: { view: ReportView; letter: Letter }) {
       ...waiting.map(([key, body]) => api.saveSection(reportId, key, body)),
       ...(m ? [api.saveLetterMeta(reportId, m).then((l) => qc.setQueryData(q.letter(reportId).queryKey, l))] : []),
     ])
+    refresh()
+  }, [qc, reportId, refresh])
+
+  // After AI text or new request sections: the sections as stored now.
+  const reload = useCallback(async () => {
+    const v = await qc.fetchQuery({ ...q.report(reportId), staleTime: 0 })
+    const fresh = Object.fromEntries(v.report.sections.map((s) => [s.key, s.body]))
+    setBodies(fresh)
+    void qc.invalidateQueries({ queryKey: ['letter', reportId] })
     refresh()
   }, [qc, reportId, refresh])
 
@@ -320,13 +331,14 @@ function LetterEditor({ view, letter }: { view: ReportView; letter: Letter }) {
               </div>
             )}
             <ReportDocument
+              key={template.sections.map((s) => s.key).join(',')}
               sections={template.sections}
               bodies={bodies}
               readOnly={readOnly}
               head={head}
               foot={foot}
               onChange={update}
-              onActive={() => {}}
+              onActive={setActive}
               onEditLocked={() => {}}
               dictateFor={reportId}
             />
@@ -337,6 +349,26 @@ function LetterEditor({ view, letter }: { view: ReportView; letter: Letter }) {
             </div>
           ) : (
             <aside className="space-y-4">
+              {!readOnly && (
+                <>
+                  <UnbackedCard
+                    sections={template.sections}
+                    bodies={bodies}
+                    onChange={update}
+                    onShow={(key) => document.getElementById(`section-${key}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+                  />
+                  <LetterAiCard view={view} letter={letter} bodies={bodies} flush={flush} onWritten={reload} />
+                  <ActiveSectionCard view={view} sectionKey={active} bodies={bodies} flush={flush} onWritten={reload} />
+                  <RequestCard
+                    view={view}
+                    letter={letter}
+                    bodies={bodies}
+                    flush={flush}
+                    onSections={reload}
+                    onDeadline={(day) => setMeta({ follow_up_on: day, follow_up_note: meta.follow_up_note || t('letterAi.deadlineNote') })}
+                  />
+                </>
+              )}
               <SectionCard
                 title={t('briefe.recipientCard')}
                 actions={

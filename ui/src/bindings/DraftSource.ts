@@ -2,6 +2,6 @@
 
 /**
  * What a section draft was written from: the applied Sitzungsnotiz facts (cited per sentence)
- * or the therapist's Werkstatt dictation.
+ * or the therapist's Werkstatt dictation, or a quick letter draft in Briefe (slice 47).
  */
-export type DraftSource = "facts" | "dictation";
+export type DraftSource = "facts" | "dictation" | "letter";

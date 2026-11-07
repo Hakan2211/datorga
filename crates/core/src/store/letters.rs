@@ -11,13 +11,14 @@ use crate::consent;
 use crate::domain::*;
 use crate::letter::{
     self, FillContext, Letter, LetterInput, LetterMeta, LetterRecipient, LetterState, LetterSummary, Practice, PracticeAsset,
-    Recipient, RecipientInput, RefLine, ReleaseInput,
+    Material, Recipient, RecipientInput, RefLine, ReleaseInput, RequestQuestion, RequestSection,
 };
 use crate::templates::{self, FieldKind, Layout};
 use crate::{Error, Result};
 
 const LETTER_SELECT: &str = "SELECT report_id, patient_id, episode_id, recipient_id, recipient_json, salutation, subject,
-    refs_json, place, letter_date, sent_at, sent_via, follow_up_on, follow_up_note FROM letter";
+    refs_json, place, letter_date, sent_at, sent_via, follow_up_on, follow_up_note, request_text, request_questions_json,
+    material_json FROM letter";
 const RECIPIENT_COLS: &str =
     "r.id, r.kind, r.name, r.department, r.lines_json, r.salutation, r.default_template, r.use_count, r.created_at, r.updated_at";
 
@@ -42,6 +43,9 @@ fn row_to_letter(r: &rusqlite::Row<'_>) -> rusqlite::Result<Letter> {
         sent_via: r.get::<_, Option<String>>(11)?.and_then(|v| v.parse().ok()),
         follow_up_on: r.get(12)?,
         follow_up_note: r.get(13)?,
+        request_text: r.get::<_, Option<String>>(14)?.unwrap_or_default(),
+        questions: json_col(r, 15)?,
+        material: json_col(r, 16)?,
     })
 }
 
@@ -470,6 +474,177 @@ impl Store {
         self.letter(report_id)
     }
 
+    /// A draft letter, or an error naming why it can't change.
+    fn draft_letter(tx: &rusqlite::Connection, report_id: &str) -> Result<()> {
+        if matches!(Self::letter_status(tx, report_id)?, ReportStatus::Signed | ReportStatus::Exported) {
+            return Err(Error::Invalid("Der Brief ist unterschrieben und schreibgeschützt".into()));
+        }
+        Ok(())
+    }
+
+    /// The pasted request ("Anschreiben"). Its text stays in the encrypted database; only its
+    /// length goes into the audit log.
+    pub fn save_letter_request(&self, report_id: &str, text: &str) -> Result<Letter> {
+        let text = text.trim();
+        if text.chars().count() > crate::compose::MAX_REQUEST_CHARS * 4 {
+            return Err(Error::Invalid("Das Anschreiben ist zu lang".into()));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        Self::draft_letter(&tx, report_id)?;
+        tx.execute("UPDATE letter SET request_text = ?2 WHERE report_id = ?1", params![report_id, (!text.is_empty()).then_some(text)])?;
+        tx.execute("UPDATE report SET updated_at = ?2 WHERE id = ?1", params![report_id, now()])?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "letter.request", entity_type: "report", entity_id: Some(report_id),
+            meta: json!({ "chars": text.chars().count() }),
+        })?;
+        tx.commit()?;
+        self.letter(report_id)
+    }
+
+    /// The request's questions as found (or as she edited them). Questions already taken over as
+    /// sections keep their section when the text is the same.
+    pub fn set_letter_questions(&self, report_id: &str, questions: &[String]) -> Result<Letter> {
+        let old = self.letter(report_id)?.questions;
+        let mut out: Vec<RequestQuestion> = Vec::new();
+        for q in questions {
+            let text = q.split_whitespace().collect::<Vec<_>>().join(" ");
+            if text.is_empty() || out.iter().any(|x| x.text == text) {
+                continue;
+            }
+            if text.chars().count() > crate::compose::MAX_QUESTION_CHARS {
+                return Err(Error::Invalid(format!("Eine Frage ist zu lang (höchstens {} Zeichen)", crate::compose::MAX_QUESTION_CHARS)));
+            }
+            let section_key = old.iter().find(|o| o.text == text).and_then(|o| o.section_key.clone());
+            out.push(RequestQuestion { text, section_key });
+        }
+        if out.len() > crate::compose::MAX_QUESTIONS {
+            return Err(Error::Invalid(format!("Höchstens {} Fragen", crate::compose::MAX_QUESTIONS)));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        Self::draft_letter(&tx, report_id)?;
+        tx.execute("UPDATE letter SET request_questions_json = ?2 WHERE report_id = ?1", params![report_id, serde_json::to_string(&out)?])?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "letter.questions", entity_type: "report", entity_id: Some(report_id),
+            meta: json!({ "questions": out.len() }),
+        })?;
+        tx.commit()?;
+        self.letter(report_id)
+    }
+
+    /// The letter's request sections, in her order: existing ones keep their text, new ones start
+    /// empty, the rest are removed. `keep_template`: the template's sections stay (missing ones
+    /// come back); otherwise its empty prose sections give way, except a headingless opening.
+    pub fn set_request_sections(&self, report_id: &str, sections: &[RequestSection], keep_template: bool) -> Result<Letter> {
+        let mut letter = self.letter(report_id)?;
+        let report = self.report(report_id)?;
+        let template = self.template(&report.template_key)?;
+        let existing: Vec<&crate::domain::ReportSection> = report.sections.iter().filter(|s| s.heading.is_some()).collect();
+        for s in sections {
+            if s.heading.trim().is_empty() {
+                return Err(Error::Invalid("Jeder Abschnitt braucht eine Überschrift".into()));
+            }
+            if s.heading.chars().count() > crate::compose::MAX_QUESTION_CHARS {
+                return Err(Error::Invalid(format!("Eine Überschrift ist zu lang (höchstens {} Zeichen)", crate::compose::MAX_QUESTION_CHARS)));
+            }
+            if let Some(k) = &s.key {
+                if !existing.iter().any(|e| &e.key == k) {
+                    return Err(Error::NotFound(format!("section {k}")));
+                }
+            }
+            if s.question.is_some_and(|i| i >= letter.questions.len()) {
+                return Err(Error::Invalid("Unbekannte Frage".into()));
+            }
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        Self::draft_letter(&tx, report_id)?;
+        let mut next = existing
+            .iter()
+            .filter_map(|e| e.key.strip_prefix(letter::REQUEST_SECTION_PREFIX).and_then(|n| n.parse::<usize>().ok()))
+            .max()
+            .unwrap_or(0);
+        for q in &mut letter.questions {
+            q.section_key = None;
+        }
+        let mut kept = Vec::new();
+        for (ord, s) in sections.iter().enumerate() {
+            let key = match &s.key {
+                Some(k) => {
+                    tx.execute(
+                        "UPDATE report_section SET heading = ?3, ord = ?4 WHERE report_id = ?1 AND key = ?2",
+                        params![report_id, k, s.heading.trim(), ord as i64],
+                    )?;
+                    k.clone()
+                }
+                None => {
+                    next += 1;
+                    let k = format!("{}{next}", letter::REQUEST_SECTION_PREFIX);
+                    tx.execute(
+                        "INSERT INTO report_section (id, report_id, key, body, heading, ord) VALUES (?1, ?2, ?3, '', ?4, ?5)",
+                        params![new_id(), report_id, k, s.heading.trim(), ord as i64],
+                    )?;
+                    k
+                }
+            };
+            if let Some(q) = s.question.and_then(|i| letter.questions.get_mut(i)) {
+                q.section_key = Some(key.clone());
+            }
+            kept.push(key);
+        }
+        for e in existing.iter().filter(|e| !kept.contains(&e.key)) {
+            tx.execute("DELETE FROM report_section WHERE report_id = ?1 AND key = ?2", params![report_id, e.key])?;
+            tx.execute("DELETE FROM section_draft WHERE report_id = ?1 AND section_key = ?2", params![report_id, e.key])?;
+        }
+        let opening = template.sections.first().filter(|d| d.heading.trim().is_empty()).map(|d| d.key.clone());
+        for def in &template.sections {
+            let row = report.sections.iter().find(|s| s.key == def.key);
+            if keep_template || sections.is_empty() {
+                if row.is_none() {
+                    tx.execute("INSERT INTO report_section (id, report_id, key, body) VALUES (?1, ?2, ?3, '')", params![new_id(), report_id, def.key])?;
+                }
+            } else if let Some(row) = row {
+                let empty = crate::pii::section_text(def.field, &row.body).trim().is_empty();
+                if def.field == FieldKind::Prose && empty && Some(&def.key) != opening.as_ref() {
+                    tx.execute("DELETE FROM report_section WHERE report_id = ?1 AND key = ?2", params![report_id, def.key])?;
+                    tx.execute("DELETE FROM section_draft WHERE report_id = ?1 AND section_key = ?2", params![report_id, def.key])?;
+                }
+            }
+        }
+        tx.execute("UPDATE letter SET request_questions_json = ?2 WHERE report_id = ?1", params![report_id, serde_json::to_string(&letter.questions)?])?;
+        tx.execute("UPDATE report SET updated_at = ?2 WHERE id = ?1", params![report_id, now()])?;
+        audit::append(&tx, Entry {
+            actor: ACTOR, action: "letter.sections", entity_type: "report", entity_id: Some(report_id),
+            meta: json!({ "sections": sections.len(), "keep_template": keep_template }),
+        })?;
+        super::focus::sync_review(&tx, report_id)?;
+        tx.commit()?;
+        self.letter(report_id)
+    }
+
+    /// The Vorbericht of a letter: the newest signed Bericht or letter of its Behandlungsfall.
+    pub fn letter_prior(&self, report_id: &str) -> Result<Option<Report>> {
+        let report = self.report(report_id)?;
+        let Some(episode_id) = &report.episode_id else { return Ok(None) };
+        let id: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT id FROM report WHERE episode_id = ?1 AND kind IN ('bericht', 'brief') AND status IN ('signed', 'exported')
+                   AND id != ?2 ORDER BY signed_at DESC, rowid DESC LIMIT 1",
+                params![episode_id, report_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        id.map(|id| self.report(&id)).transpose()
+    }
+
+    /// What "Mit KI schreiben" may use.
+    pub fn set_letter_material(&self, report_id: &str, material: Material) -> Result<Letter> {
+        let tx = self.conn.unchecked_transaction()?;
+        Self::draft_letter(&tx, report_id)?;
+        tx.execute("UPDATE letter SET material_json = ?2 WHERE report_id = ?1", params![report_id, serde_json::to_string(&material)?])?;
+        tx.commit()?;
+        self.letter(report_id)
+    }
+
     /// After signing: the recipient's use counts; a typed-in recipient goes into the address
     /// book (unless `save_recipient` is off) and the letter points to it.
     pub fn letter_signed(&self, report_id: &str, save_recipient: bool) -> Result<Letter> {
@@ -839,5 +1014,101 @@ mod tests {
         let b = store.create_letter(LetterInput { patient_id: p.id.clone(), template_key: "bescheinigung".into(), episode_id: None, recipient_id: Some(drv.id) }).unwrap();
         let bt = store.template("bescheinigung").unwrap();
         assert!(letter::release_check(&store.letter(&b.report_id).unwrap(), &bt, None).is_none());
+    }
+
+    #[test]
+    fn request_questions_become_sections_and_template_sections_give_way() {
+        let (store, p, _) = setup();
+        let l = store.create_letter(LetterInput { patient_id: p.id.clone(), template_key: "versorgungsamt-befund".into(), episode_id: None, recipient_id: None }).unwrap();
+        let id = l.report_id.clone();
+        let l = store.save_letter_request(&id, "  In der Angelegenheit von Frau Anna Beispiel bitten wir bis zum 15.12.2026 um ...  ").unwrap();
+        assert!(l.request_text.starts_with("In der Angelegenheit"));
+        assert_eq!(crate::compose::deadline(&l.request_text).as_deref(), Some("2026-12-15"));
+        let l = store
+            .set_letter_questions(&id, &["Datum der letzten Behandlung".into(), " Depressionen  (Art, Dauer) ".into(), "Datum der letzten Behandlung".into(), "".into()])
+            .unwrap();
+        assert_eq!(l.questions.iter().map(|q| q.text.as_str()).collect::<Vec<_>>(), ["Datum der letzten Behandlung", "Depressionen (Art, Dauer)"]);
+
+        let sections = vec![
+            RequestSection { key: None, heading: "Datum der letzten Behandlung".into(), question: Some(0) },
+            RequestSection { key: None, heading: "Depressionen (Art, Dauer)".into(), question: Some(1) },
+        ];
+        let l = store.set_request_sections(&id, &sections, false).unwrap();
+        assert_eq!(l.questions[0].section_key.as_deref(), Some("frage-1"));
+        let report = store.report(&id).unwrap();
+        let t = letter::effective_template(store.template("versorgungsamt-befund").unwrap(), &report.sections);
+        let keys: Vec<&str> = t.sections.iter().map(|d| d.key.as_str()).collect();
+        assert_eq!(keys, ["bezug", "diagnosen", "frage-1", "frage-2"], "opening and Diagnosen stay, empty template sections give way");
+        assert_eq!(t.sections[2].heading, "Datum der letzten Behandlung");
+        assert!(crate::draft::target_sections(&t).iter().any(|d| d.key == "frage-2"), "the AI may write request sections");
+        let checks = letter::checklist(&l, &report, &t);
+        assert!(checks.iter().any(|c| c.key == "letter_questions" && !c.ok && c.message.contains("2 Fragen")));
+
+        // Answer one, rename it, drop the other; then bring the template back.
+        store.save_section(&id, "frage-1", "<p>Zuletzt am 03.11.2026.</p>").unwrap();
+        let l = store.set_letter_questions(&id, &["Datum der letzten Behandlung".into(), "Depressionen (Art, Dauer)".into()]).unwrap();
+        assert_eq!(l.questions[0].section_key.as_deref(), Some("frage-1"), "same text keeps its section");
+        let renamed = vec![RequestSection { key: Some("frage-1".into()), heading: "Letzte Behandlung".into(), question: Some(0) }];
+        let l = store.set_request_sections(&id, &renamed, true).unwrap();
+        let report = store.report(&id).unwrap();
+        assert_eq!(report.sections.iter().find(|s| s.key == "frage-1").unwrap().body, "<p>Zuletzt am 03.11.2026.</p>");
+        assert!(!report.sections.iter().any(|s| s.key == "frage-2"));
+        let t = letter::effective_template(store.template("versorgungsamt-befund").unwrap(), &report.sections);
+        assert_eq!(t.sections.len(), 9, "all eight template sections are back, plus the request section");
+        assert_eq!(t.sections[3].heading, "Letzte Behandlung", "after the Diagnosen");
+        assert!(letter::checklist(&l, &report, &t).iter().any(|c| c.key == "letter_questions" && !c.ok && c.message.contains("1 Frage")));
+        assert!(store.set_request_sections(&id, &[RequestSection { key: Some("frage-9".into()), heading: "x".into(), question: None }], true).is_err());
+        assert!(store.set_request_sections(&id, &[RequestSection { key: None, heading: " ".into(), question: None }], true).is_err());
+        // No sections from the request: the letter is the template again.
+        store.set_request_sections(&id, &[], false).unwrap();
+        let report = store.report(&id).unwrap();
+        assert_eq!(letter::effective_template(store.template("versorgungsamt-befund").unwrap(), &report.sections).sections.len(), 8);
+
+        let l = store.set_letter_material(&id, Material { facts: false, ..Default::default() }).unwrap();
+        assert!(!l.material.facts && l.material.answers && l.material.prior);
+        store.sign_report(&id, "T").unwrap();
+        assert!(store.save_letter_request(&id, "neu").is_err(), "signed letters are read-only");
+        assert!(store.set_letter_questions(&id, &[]).is_err());
+        assert!(store.set_letter_material(&id, Material::default()).is_err());
+        let audit = crate::audit::list(store.conn(), 500).unwrap();
+        assert!(audit.iter().any(|e| e.action == "letter.questions"));
+        assert!(audit.iter().all(|e| !e.meta_json.contains("Behandlung") && !e.meta_json.contains("Beispiel")), "no request text in the audit log");
+    }
+
+    #[test]
+    fn letter_drafts_keep_unbacked_sentences_marked_until_she_decides() {
+        use crate::draft::{DraftSentence, Parsed, SectionResult};
+        let (store, p, _) = setup();
+        let l = store.create_letter(LetterInput { patient_id: p.id.clone(), template_key: "arztbrief".into(), episode_id: None, recipient_id: None }).unwrap();
+        let id = l.report_id;
+        let key = store.report(&id).unwrap().sections.iter().find(|s| s.body.is_empty()).unwrap().key.clone();
+        let meta = DraftMeta { provider: "local".into(), model: "m".into(), prompt_hash: "h".into(), instructed: true, session_ids: None, source: DraftSource::Letter };
+        let run = vec![SectionResult {
+            key: key.clone(),
+            parsed: Parsed {
+                sentences: vec![
+                    DraftSentence { text: "Die Behandlung findet wöchentlich statt.".into(), facts: vec![] },
+                    DraftSentence { text: "Die Prognose ist günstig.".into(), facts: vec![] },
+                ],
+                dropped: 0,
+                unsupported: vec![1],
+            },
+            with_existing: false,
+        }];
+        let drafts = store.save_drafts(&id, &meta, &run, &[], &[], &[]).unwrap();
+        assert_eq!(drafts[0].source, DraftSource::Letter);
+        assert_eq!(drafts[0].sentences.iter().map(|s| s.unsupported).collect::<Vec<_>>(), [false, true]);
+        let report = store.apply_draft(&id, &drafts[0].id, ApplyMode::Replace).unwrap();
+        let body = &report.sections.iter().find(|s| s.key == key).unwrap().body;
+        assert_eq!(body, "<p>Die Behandlung findet wöchentlich statt. <mark data-ohne-beleg=\"\">Die Prognose ist günstig.</mark></p>");
+        let t = store.template("arztbrief").unwrap();
+        let check = |r: &Report| letter::checklist(&store.letter(&id).unwrap(), r, &t).into_iter().find(|c| c.key == "letter_unsupported");
+        let item = check(&report).unwrap();
+        assert_eq!((item.ok, item.severity.as_str(), item.section_key.as_deref()), (false, "block", Some(key.as_str())));
+        // Kept: the mark goes, the sentence stays.
+        store.save_section(&id, &key, "<p>Die Behandlung findet wöchentlich statt. Die Prognose ist günstig.</p>").unwrap();
+        assert!(check(&store.report(&id).unwrap()).is_none());
+        // Werkstatt drafts still work on a letter.
+        assert!(store.save_drafts(&id, &DraftMeta { source: DraftSource::Dictation, ..meta.clone() }, &run, &[], &[], &[]).is_ok());
     }
 }

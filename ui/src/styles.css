@@ -214,3 +214,6 @@
 .doc-salutation { margin: 0.8em 0 0.2em; }
 .doc-closing { margin-top: 1.2em; }
 .doc-closing-titles { font-size: 9.5pt; }
+/* AI sentence without a source (slice 47): kept or deleted before signing; never printed marked. */
+mark.ohne-beleg { background: color-mix(in oklch, var(--warning) 28%, transparent); color: inherit; border-bottom: 1.5px dotted var(--warning-foreground); padding: 0 1px; border-radius: 2px; }
+.ohne-beleg-focus { outline: 2px solid var(--warning); outline-offset: 1px; }

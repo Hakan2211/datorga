@@ -94,6 +94,8 @@ import type { Letter } from '@/bindings/Letter'
 import type { LetterInput } from '@/bindings/LetterInput'
 import type { LetterMeta } from '@/bindings/LetterMeta'
 import type { LetterSummary } from '@/bindings/LetterSummary'
+import type { Material } from '@/bindings/Material'
+import type { RequestSection } from '@/bindings/RequestSection'
 import type { Practice } from '@/bindings/Practice'
 import type { PracticeAsset } from '@/bindings/PracticeAsset'
 import type { Recipient } from '@/bindings/Recipient'
@@ -225,6 +227,9 @@ export type DictationPiece = { dictation_id: string; report_id: string | null; s
 export type DictationDone = { dictation_id: string; report_id: string | null; error: string | null }
 /** "Entwurf erstellen" in the Werkstatt. */
 export type WorkshopChoice = { instruction: string | null; withExisting: boolean }
+/** "Mit KI schreiben" (`sections` null: every empty one) or "Neu schreiben" (`rewrite`: one section). */
+export type LetterChoice = { sections: string[] | null; instruction: string | null; rewrite: string | null }
+export type LetterResult = { written: string[]; sentences: number; unsupported: number; dropped: number; cancelled: boolean }
 /** What the therapist chose in the draft dialog (`sessionIds: null` = all sessions). */
 export type DraftChoice = {
   sections: string[]
@@ -243,6 +248,8 @@ export type DraftPreview = ExtractPreview & { skipped: string[]; untagged: numbe
 export type PriorInfo = { report_id: string; kind: ApplicationKind | null; seq: number | null; signed_at: string | null; sections: number }
 /** `since`: when the previous application was created (sessions after it are the default choice). */
 export type DraftSources = { facts: EpisodeFact[]; since: string | null; answers: number; prior: PriorInfo | null }
+/** The material rail of a letter: what is ticked, and how much there is. */
+export type LetterSources = { material: Material; facts: number; answers: number; prior: PriorInfo | null; deadline: string | null }
 /** The Gutachter-Check of step 4 (`stale`: the text changed since; `sections`: what a check would read now). */
 export type ReviewView = { review: ReportReview | null; stale: boolean; sections: number }
 /** One question of the Lotse "Fragen" step (slice 38). */
@@ -585,6 +592,22 @@ export const api = {
     invoke<Letter>('letter_sign', { id, signedBy, saveRecipient }),
   markLetterSent: (id: string, sentAt: string | null, via: SentVia | null) =>
     invoke<Letter>('letter_mark_sent', { id, sentAt, via }),
+  letterSources: (id: string) => invoke<LetterSources>('letter_sources', { id }),
+  setLetterMaterial: (id: string, material: Material) => invoke<Letter>('letter_material_set', { id, material }),
+  saveLetterRequest: (id: string, text: string) => invoke<Letter>('letter_request_save', { id, text }),
+  setLetterQuestions: (id: string, questions: string[]) => invoke<Letter>('letter_questions_set', { id, questions }),
+  /** The letter's sections from the request; `keepTemplate` false: empty template sections give way. */
+  setLetterSections: (id: string, sections: RequestSection[], keepTemplate: boolean) =>
+    invoke<Letter>('letter_sections_set', { id, sections, keepTemplate }),
+  letterQuestionsPreview: (id: string) => invoke<ExtractPreview>('letter_questions_preview', { id }),
+  /** `null` when cancelled. */
+  letterQuestionsRun: (id: string, digest: string, requestId: string) =>
+    invoke<Letter | null>('letter_questions_run', { id, digest, requestId }),
+  letterPreview: (id: string, choice: LetterChoice) => invoke<ExtractPreview>('letter_preview', { id, choice }),
+  letterRun: (id: string, choice: LetterChoice, digest: string, requestId: string) =>
+    invoke<LetterResult>('letter_run', { id, choice, digest, requestId }),
+  /** Applied AI text per section with its sources ("Woher kommt das?"). */
+  letterDrafts: (id: string) => invoke<SectionDraft[]>('letter_drafts', { id }),
   recipients: (query = '') => invoke<Recipient[]>('recipients_list', { query }),
   createRecipient: (input: RecipientInput) => invoke<Recipient>('recipient_create', { input }),
   updateRecipient: (id: string, input: RecipientInput) => invoke<Recipient>('recipient_update', { id, input }),
@@ -728,6 +751,8 @@ export const q = {
     queryOptions({ queryKey: ['reports', status ?? 'all'], queryFn: () => api.reports(status) }),
   report: (id: string) => queryOptions({ queryKey: ['report', id], queryFn: () => api.report(id) }),
   letter: (id: string) => queryOptions({ queryKey: ['letter', id], queryFn: () => api.letter(id) }),
+  letterSources: (id: string) => queryOptions({ queryKey: ['letter', id, 'sources'], queryFn: () => api.letterSources(id) }),
+  letterDrafts: (id: string) => queryOptions({ queryKey: ['letter', id, 'drafts'], queryFn: () => api.letterDrafts(id) }),
   letters: (patientId?: string) =>
     queryOptions({ queryKey: ['letters', patientId ?? 'all'], queryFn: () => api.letters(patientId) }),
   recipients: (query = '') => queryOptions({ queryKey: ['recipients', query], queryFn: () => api.recipients(query) }),

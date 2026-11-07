@@ -144,6 +144,103 @@ pub struct Letter {
     pub sent_via: Option<SentVia>,
     pub follow_up_on: Option<String>,
     pub follow_up_note: Option<String>,
+    /// The pasted request ("Anschreiben"), empty when there is none (slice 47).
+    #[serde(default)]
+    pub request_text: String,
+    /// Its questions, in its order and wording.
+    #[serde(default)]
+    pub questions: Vec<RequestQuestion>,
+    /// What "Mit KI schreiben" may use.
+    #[serde(default)]
+    pub material: Material,
+}
+
+/// A question of the request. Once taken over, it is a section of the letter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RequestQuestion {
+    pub text: String,
+    #[serde(default)]
+    pub section_key: Option<String>,
+}
+
+/// The material ticked in the rail. Everything is on until she turns it off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Material {
+    /// Applied facts of the Behandlungsfall's Sitzungsnotizen.
+    #[serde(default = "on")]
+    pub facts: bool,
+    /// Her answers to the Lotse questions.
+    #[serde(default = "on")]
+    pub answers: bool,
+    /// The last signed Bericht or letter of the Behandlungsfall.
+    #[serde(default = "on")]
+    pub prior: bool,
+}
+
+fn on() -> bool {
+    true
+}
+
+impl Default for Material {
+    fn default() -> Self {
+        Self { facts: true, answers: true, prior: true }
+    }
+}
+
+/// A section of the letter as she arranges it from the request: an existing request section
+/// (`key`) or a new one, with its heading.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RequestSection {
+    #[serde(default)]
+    pub key: Option<String>,
+    pub heading: String,
+    /// The request question it answers (index into `Letter::questions`).
+    #[serde(default)]
+    pub question: Option<usize>,
+}
+
+/// Key prefix of the sections that come from a request.
+pub const REQUEST_SECTION_PREFIX: &str = "frage-";
+
+/// The template as this letter has it: template sections without a row are left out (she
+/// replaced them by the request's questions), request sections (`heading` set) follow the first
+/// sections up to and including the Diagnosen, in their order.
+pub fn effective_template(mut template: Template, sections: &[crate::domain::ReportSection]) -> Template {
+    let mut extra: Vec<&crate::domain::ReportSection> = sections.iter().filter(|s| s.heading.is_some()).collect();
+    if extra.is_empty() {
+        return template;
+    }
+    extra.sort_by_key(|s| s.ord.unwrap_or(i64::MAX));
+    template.sections.retain(|d| sections.iter().any(|s| s.key == d.key));
+    let at = template
+        .sections
+        .iter()
+        .position(|d| d.field == FieldKind::Diagnoses)
+        .map(|i| i + 1)
+        .unwrap_or_else(|| usize::from(template.sections.first().is_some_and(|d| d.heading.trim().is_empty())));
+    let defs: Vec<crate::templates::SectionDef> = extra
+        .into_iter()
+        .map(|s| crate::templates::SectionDef {
+            key: s.key.clone(),
+            number: None,
+            heading: s.heading.clone().unwrap_or_default(),
+            field: FieldKind::Prose,
+            ai_allowed: true,
+            required: false,
+            optional: false,
+            dictation: false,
+            starter: None,
+            when: Default::default(),
+            hints: vec![],
+            asks: vec![],
+            prior: vec![],
+        })
+        .collect();
+    template.sections.splice(at..at, defs);
+    template
 }
 
 /// What the therapist edits on a draft letter.
@@ -528,6 +625,32 @@ pub fn checklist(letter: &Letter, report: &Report, template: &Template) -> Vec<C
             .map(|s| crate::pii::plain_text(&s.body)),
     );
     let open = texts.iter().find_map(|t| open_placeholder(t));
+    let unsupported: usize = report.sections.iter().map(|s| crate::compose::unsupported_count(&s.body)).sum();
+    if unsupported > 0 {
+        items.push(CheckItem {
+        key: "letter_unsupported".into(),
+        ok: false,
+        severity: "block".into(),
+        message: match unsupported {
+            1 => "1 Satz ohne Beleg: behalten oder löschen".into(),
+            n => format!("{n} Sätze ohne Beleg: behalten oder löschen"),
+        },
+        section_key: report.sections.iter().find(|s| crate::compose::unsupported_count(&s.body) > 0).map(|s| s.key.clone()),
+        });
+    }
+    if !letter.questions.is_empty() {
+        let body = |key: &str| report.sections.iter().find(|s| s.key == key).map(|s| crate::pii::plain_text(&s.body)).unwrap_or_default();
+        let open = letter.questions.iter().filter(|q| q.section_key.as_deref().is_none_or(|k| body(k).trim().is_empty())).count();
+        items.push(item(
+            "letter_questions",
+            open == 0,
+            match open {
+                0 => "Alle Fragen des Anschreibens beantwortet".into(),
+                1 => "1 Frage des Anschreibens noch offen".into(),
+                n => format!("{n} Fragen des Anschreibens noch offen"),
+            },
+        ));
+    }
     items.push(item(
         "letter_placeholder",
         open.is_none(),
