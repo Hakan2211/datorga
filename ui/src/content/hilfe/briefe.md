@@ -26,11 +26,11 @@ Betreff, Anrede und der erste Satz sind mit Name, Geburtsdatum und Behandlungsbe
 - Sätze, die kein Material stützt, sind **gelb markiert („ohne Beleg“)**. Behalten oder löschen Sie jeden davon; vorher lässt sich der Brief nicht unterschreiben.
 - **Fragen erkennen** liest die nummerierten Fragen des Anschreibens. **Als Abschnitte übernehmen** macht daraus Abschnitte in der Reihenfolge und mit dem Wortlaut des Amtes. Ein Häkchen zeigt, welche Frage schon beantwortet ist.
 - **Textbausteine** fügen Sie über die Werkzeugleiste oder mit `/` im Text ein. Platzhalter wie `{Nachname}` oder `{sie/er}` füllt Theralo aus der Akte. Eigene Bausteine legen Sie unter **Briefe → Textbausteine** an, oder Sie markieren Text im Brief und wählen **Als Textbaustein speichern**.
-- Eigene alte Briefe können Sie unter **Vorlagen → Ihr Schreibstil** als Stilbeispiel hochladen. Namen werden vorher geschwärzt; die KI übernimmt daraus nur den Stil, nie Inhalte. Theralo liest daraus Ihr **Stilprofil** (Satzlänge, Ich-Form, wie Sie die Person nennen, Fließtext oder Stichpunkte, übliche Länge je Abschnitt, wiederkehrende Wendungen); unter **Stilhinweise** ergänzen Sie eigene Hinweise, für eine Art oder für alle Schreiben. Bei Berichten bekommt jeder Abschnitt den passenden Teil Ihrer Beispiele.
+- Eigene alte Briefe können Sie unter **Vorlagen → Ihr Schreibstil** als Stilbeispiel hochladen (Seitenleiste **Vorlagen**, oder `Strg+K` → „Stilbeispiel hinzufügen“). Namen werden vorher geschwärzt; die KI übernimmt daraus nur den Stil, nie Inhalte. Theralo liest daraus Ihr **Stilprofil** (Satzlänge, Ich-Form, wie Sie die Person nennen, Fließtext oder Stichpunkte, übliche Länge je Abschnitt, wiederkehrende Wendungen); unter **Stilhinweise** ergänzen Sie eigene Hinweise, für eine Art oder für alle Schreiben. Bei Berichten bekommt jeder Abschnitt den passenden Teil Ihrer Beispiele.
 
 ## Eigene Vorlagen
 
-Unter **Vorlagen → Eigene Vorlagen** machen Sie aus Ihren eigenen Formularen und Briefen Vorlagen, die unter **Neuer Brief** und **Neuer Bericht** zur Wahl stehen.
+Unter **Vorlagen** (Seitenleiste, oder `Strg+K` → „Eigene Vorlage anlegen“) → **Eigene Vorlagen** machen Sie aus Ihren eigenen Formularen und Briefen Vorlagen, die unter **Neuer Brief** und **Neuer Bericht** zur Wahl stehen.
 
 1. **Aus Dokument**: ein Formular (etwa einen Fragebogen vom Amt) oder einen Ihrer Briefe wählen oder einfügen. Er wird auf diesem Computer gelesen; die Datei selbst wird nicht gespeichert.
 2. **Schwärzen** wie bei den Stilbeispielen: Namen, Daten und Nummern werden zu Platzhaltern.

@@ -358,7 +358,7 @@ export function RedactReview({
 }
 
 /** "Ihr Schreibstil" on the Vorlagen page: her exemplars per type, add, pause, edit, delete. */
-export function StyleExemplarsCard() {
+export function StyleExemplarsCard({ add = false }: { add?: boolean } = {}) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const list = useQuery(q.styleExemplars())
@@ -366,7 +366,10 @@ export function StyleExemplarsCard() {
   const profiles = useQuery(q.styleProfiles())
   const profile = (key: string) => profiles.data?.find((p) => p.template_key === key)
   const title = (key: string) => templates.data?.find((x) => x.key === key)?.title ?? key
-  const [adding, setAdding] = useState(false)
+  const [adding, setAdding] = useState(add)
+  useEffect(() => {
+    if (add) setAdding(true)
+  }, [add])
   const [notesFor, setNotesFor] = useState<string | null>(null)
   const [editing, setEditing] = useState<StyleExemplar | null>(null)
   const toggle = useMutation({

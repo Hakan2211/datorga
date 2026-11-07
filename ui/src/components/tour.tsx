@@ -22,6 +22,7 @@ export const TOUR_STEPS: Step[] = [
   { id: 'notiz', to: '/sessions', target: 'session-filters', fallback: 'nav-sessions', side: 'bottom' },
   { id: 'bericht', to: '/reports', target: 'nav-reports', side: 'right' },
   { id: 'briefe', to: '/briefe', target: 'nav-briefe', side: 'right' },
+  { id: 'vorlagen', to: '/templates', target: 'nav-templates', side: 'right' },
   { id: 'ki', to: '/settings/ki', target: 'llm-settings', side: 'bottom' },
 ]
 

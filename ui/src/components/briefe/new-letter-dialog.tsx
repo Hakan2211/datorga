@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -213,6 +213,9 @@ export function NewLetterForm({
             </button>
           ))}
         </div>
+        <Link to="/templates" search={{ neu: 'vorlage' }} className="text-xs text-muted-foreground hover:text-foreground hover:underline" data-testid="new-letter-own-template">
+          {t('briefe.ownTemplate')}
+        </Link>
       </section>
 
       <section className="space-y-2">

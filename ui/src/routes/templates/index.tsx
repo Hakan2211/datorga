@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -16,11 +16,21 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { api, errorMessage, q } from '@/lib/api'
 import { blankTemplate, isOwn, putDraft } from '@/lib/templates'
 
-export const Route = createFileRoute('/templates/')({ component: Templates })
+type Search = { neu?: 'vorlage' | 'stil' }
+
+export const Route = createFileRoute('/templates/')({
+  validateSearch: (s: Record<string, unknown>): Search => (s.neu === 'vorlage' || s.neu === 'stil' ? { neu: s.neu } : {}),
+  component: Templates,
+})
 
 function Templates() {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const { neu } = Route.useSearch()
+  // "?neu=…" (Strg+K, "Neuer Brief") opens a dialog once; drop it so it can open again.
+  useEffect(() => {
+    if (neu) void navigate({ to: '/templates', search: {}, replace: true })
+  }, [neu, navigate])
   const templates = useQuery(q.templates())
   const own = (templates.data ?? []).filter(isOwn)
   const builtin = (templates.data ?? []).filter((x) => !isOwn(x))
@@ -34,8 +44,8 @@ function Templates() {
     <>
       <PageHeader title={t('templates.title')} />
       <Page>
-        <OwnTemplatesCard own={own} />
-        <StyleExemplarsCard />
+        <OwnTemplatesCard own={own} build={neu === 'vorlage'} />
+        <StyleExemplarsCard add={neu === 'stil'} />
         <h2 className="text-sm font-medium text-muted-foreground">{t('templates.builtinTitle')}</h2>
         <div className="grid grid-cols-2 gap-4">
           {builtin.map((tpl) => (
@@ -76,10 +86,13 @@ function Templates() {
 }
 
 /** "Eigene Vorlagen": hers, from a form or letter (builder), blank, or adapted from a built-in one. */
-function OwnTemplatesCard({ own }: { own: Template[] }) {
+function OwnTemplatesCard({ own, build = false }: { own: Template[]; build?: boolean }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const [building, setBuilding] = useState(false)
+  const [building, setBuilding] = useState(build)
+  useEffect(() => {
+    if (build) setBuilding(true)
+  }, [build])
   const blank = () => void navigate({ to: '/templates/edit', search: { draft: putDraft(blankTemplate(t('templates.blankTitle'))) } })
   return (
     <SectionCard

@@ -5,7 +5,7 @@ import { useMatch, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { BookOpen, CalendarDays, CircleHelp, Compass, FileText, Mail, MailPlus, Mic, NotebookPen, Plus, Settings, Sparkles, Square, Sun, TextQuote, User, Users } from 'lucide-react'
+import { BookOpen, CalendarDays, CircleHelp, Compass, Feather, FilePlus2, FileStack, FileText, Mail, MailPlus, Mic, NotebookPen, Plus, Settings, Sparkles, Square, Sun, TextQuote, User, Users } from 'lucide-react'
 import { formatDate } from '@/components/bits'
 import {
   CommandDialog,
@@ -30,6 +30,7 @@ const pages = [
   { to: '/reports', label: 'nav.reports', icon: FileText },
   { to: '/briefe', label: 'nav.briefe', icon: Mail },
   { to: '/briefe/textbausteine', label: 'nav.textblocks', icon: TextQuote },
+  { to: '/templates', label: 'nav.templates', icon: FileStack },
   { to: '/assistant', label: 'nav.assistant', icon: Sparkles },
   { to: '/hilfe', label: 'nav.help', icon: CircleHelp },
 ] as const
@@ -163,6 +164,24 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                 }}
               >
                 <MailPlus /> {t('palette.newLetter')}
+              </CommandItem>
+              <CommandItem
+                value={`${t('palette.newTemplate')} Vorlage Formular`}
+                onSelect={() => {
+                  close()
+                  void navigate({ to: '/templates', search: { neu: 'vorlage' } })
+                }}
+              >
+                <FilePlus2 /> {t('palette.newTemplate')}
+              </CommandItem>
+              <CommandItem
+                value={`${t('palette.newExemplar')} Schreibstil Stilbeispiel`}
+                onSelect={() => {
+                  close()
+                  void navigate({ to: '/templates', search: { neu: 'stil' } })
+                }}
+              >
+                <Feather /> {t('palette.newExemplar')}
               </CommandItem>
               <CommandItem value={t('tour.start')} onSelect={() => (close(), tour.start())}>
                 <Compass /> {t('tour.start')}

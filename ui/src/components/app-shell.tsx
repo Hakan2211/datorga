@@ -2,24 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { Link, useCanGoBack, useMatch, useRouter } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import {
-  ArrowLeft,
-  CalendarDays,
-  CircleHelp,
-  FileText,
-  Lock,
-  LockOpen,
-  Mail,
-  Mic,
-  PanelLeftClose,
-  PanelLeftOpen,
-  PanelRightClose,
-  Search,
-  Settings,
-  Sparkles,
-  Sun,
-  Users,
-} from 'lucide-react'
+import { ArrowLeft, CalendarDays, CircleHelp, FileStack, FileText, Lock, LockOpen, Mail, Mic, PanelLeftClose, PanelLeftOpen, PanelRightClose, Search, Settings, Sparkles, Sun, Users } from 'lucide-react'
 import { api, q } from '@/lib/api'
 import { formatDuration } from '@/lib/capture'
 import { AssistantPanel } from '@/components/assistant'
@@ -46,6 +29,8 @@ const modules: { to?: string; label: string; icon: Icon; exact?: boolean }[] = [
   { to: '/sessions', label: 'nav.sessions', icon: Mic },
   { to: '/reports', label: 'nav.reports', icon: FileText },
   { to: '/briefe', label: 'nav.briefe', icon: Mail },
+  // Her own templates and her style (slices 49, 51, 52).
+  { to: '/templates', label: 'nav.templates', icon: FileStack },
   { to: '/assistant', label: 'nav.assistant', icon: Sparkles },
 ]
 

@@ -32,6 +32,8 @@ export const de = {
     sessions: 'Letzte Sitzungen',
     newSession: 'Neue Sitzung…',
     newLetter: 'Neuer Brief…',
+    newTemplate: 'Eigene Vorlage anlegen…',
+    newExemplar: 'Stilbeispiel hinzufügen…',
     newSessionFor: 'Neue Sitzung (jetzt) für',
     pickPatient: 'Patient:in suchen…',
     dictate: 'Zusammenfassung diktieren (diese Sitzung)',
@@ -208,6 +210,7 @@ export const de = {
     letter_state: { draft: 'Entwurf', signed: 'Fertig', sent: 'Versendet' },
   },
   briefe: {
+    ownTemplate: 'Eigenes Formular oder eigene Vorlage? Unter Vorlagen anlegen …',
     title: 'Briefe',
     subtitle: 'Bestätigungen, Befundberichte und andere Briefe mit Ihrem Briefkopf',
     new: 'Neuer Brief',
@@ -2100,6 +2103,10 @@ export const de = {
       briefe: {
         title: 'Briefe',
         body: 'Befundberichte an Rentenversicherung, Pflegekasse, Versorgungsamt und Ärzt:innen, Bescheinigungen und freie Briefe, mit Ihrem Briefkopf. Fügen Sie das Anschreiben ein oder scannen Sie es: die KI beantwortet seine Fragen Punkt für Punkt, Fristen erscheinen auf Heute.',
+      },
+      vorlagen: {
+        title: 'Vorlagen',
+        body: 'Machen Sie aus Ihren eigenen Formularen und Briefen Vorlagen, und laden Sie frühere Schreiben als Stilbeispiel hoch: die KI schreibt dann in Ihrem Stil. Namen werden vorher geschwärzt.',
       },
       ki: {
         title: 'KI-Anbieter',
