@@ -1812,7 +1812,7 @@ export const de = {
         chosen: 'Gewählt',
         custom: 'Gewählt ist ein eigenes Modell ({{model}}); dafür gibt es keine Schätzung.',
         footnote:
-          '* Schätzung bei 20 Sitzungen pro Woche und 2 Berichten im Monat, Preise von OpenRouter in US-Dollar (Stand 28.10.2026). Alle Modelle hier wurden mit Theralo getestet und speichern keine Daten.',
+          '* Schätzung bei 20 Sitzungen pro Woche und 2 Berichten im Monat, Preise von OpenRouter in US-Dollar (Stand 19.11.2026). Alle Modelle hier wurden mit Theralo getestet und speichern keine Daten.',
         spent: 'Abgerechnet diesen Monat: {{month}} ({{requests}} Anfragen) · insgesamt {{total}}',
       },
       modelPlaceholder: 'z. B. anthropic/claude-haiku-5.5',

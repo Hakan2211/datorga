@@ -1,7 +1,7 @@
 //! The cloud models thera recommends on OpenRouter, so the therapist picks a tier instead of a
 //! model id. Every entry was measured with `cargo run -p eval` (suite `de-therapy-v1`,
 //! 2026-10-28) and has a zero-retention endpoint; the app sends `zdr: true`, so a model without
-//! one would fail anyway. Prices are OpenRouter list prices of that day; what was actually billed
+//! one would fail anyway. Prices are OpenRouter list prices, checked 2026-11-19; what was actually billed
 //! comes from the audit log ([`crate::store::Store::llm_spend`]).
 //!
 //! Not listed on purpose: Mistral (user decision), MiniMax M3.1 Flash (invalid JSON, invented
@@ -102,8 +102,8 @@ const ENTRIES: &[Entry] = &[
         vendor: "DeepSeek",
         tier: None,
         quality: 3,
-        price_in: 0.30,
-        price_out: 1.20,
+        price_in: 0.15,
+        price_out: 0.60,
         // No "medium": OpenRouter rounds it up and a draft ran out of tokens thinking.
         efforts: &[Effort::Low, Effort::High],
         reasoning_share: 0.84,
