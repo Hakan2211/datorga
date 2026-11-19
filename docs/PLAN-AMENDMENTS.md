@@ -190,7 +190,17 @@ Eval 2026-10-28 (`de-therapy-v1`, OpenRouter, ZDR enforced, production reasoning
 
 After slice 19 (`extract-2026.2` / `draft-2026.3`, tag-filtered drafts, 2026-10-28): Gemini 3.8 Flash draft precision 93 %, recall 96 % (0.098 $); Claude Haiku 5.5 97 % / 96 % (0.023 $); local Qwen3 8B 83 % / 75 % (3 runs). Forbidden 0 for all three. Haiku is now the cheapest and the most precise of the measured models.
 
-Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.5 (not measured to save cost). The suite has only 3 Bericht episodes: precision differences of a few points are noise.
+Added 2026-11-19 (user request; mini suite, `draft-2026.8`, ZDR via Google Vertex, total spend 0.50 $):
+
+| Model | Facts found | Right section | Draft precision | Draft recall | Forbidden | Errors | Reasoning share | USD (mini suite) |
+|---|---|---|---|---|---|---|---|---|
+| Gemini 4 Hydrogen (1.50 / 7.50 $) | 97 % | 100 % | 97 % | 100 % | 0 | 0 | 82 % | 0.107 |
+| Gemini 4 Neon (3 / 15 $) | 97 % | 100 % | 97 % | 100 % | 0 | 0 | 81 % | 0.258 |
+| Gemini 4 Carbon (2 / 10 $) | 100 % | 100 % | 100 % | 82 % | 0 | 1 (OpenRouter "A Timeout Occurred" on `lebensgeschichte_modell`, again in a draft-only re-run) | 59 % | 0.079 + 0.053 |
+
+Hydrogen and Neon are listed (quality 5, no tier). Carbon is not offered: the same section failed twice.
+
+Not offered: Qwen3.8 Flash and Omni (no zero-retention endpoint), Claude Opus 5.5 (not measured to save cost), Gemini 4 Carbon (see above). The suite has only 3 Bericht episodes: precision differences of a few points are noise.
 
 ## 11. Calendar decisions (slice 22, 2026-10-28; made while building, reviewed by the user 2026-10-29)
 

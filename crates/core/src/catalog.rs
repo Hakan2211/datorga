@@ -6,7 +6,9 @@
 //!
 //! Not listed on purpose: Mistral (user decision), MiniMax M3.1 Flash (invalid JSON, invented
 //! content), GPT-6 Luna Pro (misses facts), Qwen3.8 27B (reasons so much it costs 4× Haiku),
-//! Qwen3.8 Flash/Omni (no zero-retention endpoint). Any model id still works under "Erweitert".
+//! Qwen3.8 Flash/Omni (no zero-retention endpoint), Gemini 4 Carbon (OpenRouter "A Timeout
+//! Occurred" on the same Bericht section in two runs, 2026-11-19). Any model id still works under
+//! "Erweitert".
 
 use serde::Serialize;
 use ts_rs::TS;
@@ -116,6 +118,31 @@ const ENTRIES: &[Entry] = &[
         price_out: 10.0,
         efforts: ALL,
         reasoning_share: 0.0,
+    },
+    // Measured 2026-11-19 on the mini suite (vt-panik-1, tp-depression-1, episode tp-depression)
+    // with `draft-2026.8`: facts 97 %, draft precision 97 %, recall 100 %, nothing forbidden.
+    Entry {
+        id: "google/gemini-4-hydrogen",
+        label: "Gemini 4 Hydrogen",
+        vendor: "Google",
+        tier: None,
+        quality: 5,
+        price_in: 1.5,
+        price_out: 7.5,
+        efforts: ALL,
+        reasoning_share: 0.82,
+    },
+    // Same mini suite and scores as Hydrogen, at twice the price.
+    Entry {
+        id: "google/gemini-4-neon",
+        label: "Gemini 4 Neon",
+        vendor: "Google",
+        tier: None,
+        quality: 5,
+        price_in: 3.0,
+        price_out: 15.0,
+        efforts: ALL,
+        reasoning_share: 0.81,
     },
     Entry {
         id: "anthropic/claude-sonnet-5.5",
